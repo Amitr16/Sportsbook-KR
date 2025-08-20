@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Theme Customizer - GoalServe Platform</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8fafc;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .customizer-container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Left Sidebar - Customization Panel */
+        .customization-panel {
+            width: 400px;
+            background: white;
+            border-right: 1px solid #e2e8f0;
+            overflow-y: auto;
+            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .panel-header {
+            padding: 20px;
+            border-bottom: 1px solid #e2e8f0;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .panel-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .panel-subtitle {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .back-link {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .back-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+            text-decoration: none;
+            color: white;
+        }
+
+        .customization-section {
+            padding: 20px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 2px;
+        }
+
+        /* Theme Templates */
+        .theme-templates {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .theme-template {
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .theme-template:hover {
+            border-color: #667eea;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.15);
+        }
+
+        .theme-template.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .theme-preview {
+            width: 100%;
+            height: 60px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .theme-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 5px;
+        }
+
+        .theme-description {
+            font-size: 12px;
+            color: #64748b;
+            line-height: 1.4;
+        }
+
+        /* Color Customization */
+        .color-group {
+            margin-bottom: 20px;
+        }
+
+        .color-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+
+        .color-input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .color-picker {
+            width: 50px;
+            height: 40px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .color-picker:hover {
+            border-color: #667eea;
+            transform: scale(1.05);
+        }
+
+        .color-input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: monospace;
+            transition: all 0.3s ease;
+        }
+
+        .color-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* Font Selection */
+        .font-select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .font-select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* Style Options */
+        .style-options {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .style-option {
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .style-option:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .style-option.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+        }
+
+        /* Logo Customization Styles */
+        .logo-presets {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .logo-preset {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 8px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .logo-preset:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .logo-preset.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+        }
+
+        .logo-preview {
+            font-size: 24px;
+            margin-bottom: 5px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .logo-preset span {
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .logo-upload-area {
+            text-align: center;
+            margin-bottom: 15px;
+        }
+
+        .upload-button {
+            display: inline-block;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-bottom: 8px;
+        }
+
+        .upload-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .upload-info {
+            color: #64748b;
+        }
+
+        .text-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .text-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* Action Buttons */
+        .action-buttons {
+            padding: 20px;
+            border-top: 1px solid #e2e8f0;
+            background: #f8fafc;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #374151;
+            border: 2px solid #e2e8f0;
+        }
+
+        .btn-secondary:hover {
+            border-color: #667eea;
+            color: #667eea;
+        }
+
+        /* Right Side - Live Preview */
+        .preview-panel {
+            flex: 1;
+            background: #f1f5f9;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .preview-header {
+            padding: 20px;
+            background: white;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .preview-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .preview-controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        .preview-device {
+            padding: 8px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .preview-device.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+        }
+
+        .preview-container {
+            flex: 1;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .preview-frame {
+            width: 100%;
+            max-width: 1200px;
+            height: 80vh;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .preview-frame.mobile {
+            max-width: 375px;
+            height: 667px;
+        }
+
+        .preview-frame.tablet {
+            max-width: 768px;
+            height: 1024px;
+        }
+
+        /* Mock Sportsbook Preview */
+        .mock-sportsbook {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            font-family: var(--preview-font, 'Inter, sans-serif');
+            color: var(--preview-text-color, #1f2937);
+            background: var(--preview-bg-color, #ffffff);
+        }
+
+        .mock-header {
+            padding: 20px;
+            background: var(--preview-primary-color, #1e40af);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .mock-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            font-size: 20px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .sportsbook-name {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .mock-nav {
+            display: flex;
+            gap: 20px;
+        }
+
+        .mock-nav-item {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .mock-content {
+            flex: 1;
+            padding: 30px;
+        }
+
+        .mock-welcome {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .mock-welcome h1 {
+            font-size: 36px;
+            margin-bottom: 10px;
+            color: var(--preview-primary-color, #1e40af);
+        }
+
+        .mock-welcome p {
+            font-size: 18px;
+            color: var(--preview-text-color, #6b7280);
+        }
+
+        .mock-sports {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .mock-sport-card {
+            padding: 20px;
+            background: var(--preview-bg-color, white);
+            border: 2px solid var(--preview-secondary-color, #3b82f6);
+            border-radius: 12px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .mock-sport-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        }
+
+        .mock-sport-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .mock-sport-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: var(--preview-primary-color, #1e40af);
+        }
+
+        .mock-sport-events {
+            font-size: 14px;
+            color: var(--preview-text-color, #6b7280);
+        }
+
+        .mock-cta {
+            text-align: center;
+        }
+
+        .mock-cta-button {
+            display: inline-block;
+            padding: 15px 30px;
+            background: var(--preview-accent-color, #f59e0b);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .mock-cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(245, 158, 11, 0.3);
+        }
+
+        /* Loading States */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 20px;
+            color: #64748b;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #e2e8f0;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .customizer-container {
+                flex-direction: column;
+            }
+            
+            .customization-panel {
+                width: 100%;
+                height: 50vh;
+            }
+            
+            .preview-panel {
+                height: 50vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="customizer-container">
+        <!-- Left Sidebar - Customization Panel -->
+        <div class="customization-panel">
+            <div class="panel-header">
+                <a href="/static/register-sportsbook.html" class="back-link">← Back</a>
+                <h1 class="panel-title">🎨 Theme Customizer</h1>
+                <p class="panel-subtitle">Customize your sportsbook's look and feel</p>
+            </div>
+
+            <!-- Theme Templates Section -->
+            <div class="customization-section">
+                <h2 class="section-title">📋 Theme Templates</h2>
+                <div class="theme-templates" id="themeTemplates">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        Loading templates...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Colors Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🎨 Colors</h2>
+                
+                <div class="color-group">
+                    <label class="color-label">Primary Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="primaryColor" value="#1e40af">
+                        <input type="text" class="color-input" id="primaryColorText" value="#1e40af">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Secondary Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="secondaryColor" value="#3b82f6">
+                        <input type="text" class="color-input" id="secondaryColorText" value="#3b82f6">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Accent Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="accentColor" value="#f59e0b">
+                        <input type="text" class="color-input" id="accentColorText" value="#f59e0b">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Background Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="backgroundColor" value="#ffffff">
+                        <input type="text" class="color-input" id="backgroundColorText" value="#ffffff">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Text Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="textColor" value="#1f2937">
+                        <input type="text" class="color-input" id="textColorText" value="#1f2937">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Typography Section -->
+            <div class="customization-section">
+                <h2 class="section-title">📝 Typography</h2>
+                <div class="color-group">
+                    <label class="color-label">Font Family</label>
+                    <select class="font-select" id="fontFamily">
+                        <option value="Inter, sans-serif">Inter</option>
+                        <option value="Roboto, sans-serif">Roboto</option>
+                        <option value="Poppins, sans-serif">Poppins</option>
+                        <option value="Montserrat, sans-serif">Montserrat</option>
+                        <option value="Source Sans Pro, sans-serif">Source Sans Pro</option>
+                        <option value="Open Sans, sans-serif">Open Sans</option>
+                        <option value="Lato, sans-serif">Lato</option>
+                        <option value="Nunito, sans-serif">Nunito</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Logo Customization Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🏆 Logo & Branding</h2>
+                
+                <!-- Preset Logos -->
+                <div class="color-group">
+                    <label class="color-label">Preset Logos</label>
+                    <div class="logo-presets">
+                        <div class="logo-preset active" data-logo="default">
+                            <div class="logo-preview">⚽</div>
+                            <span>Default</span>
+                        </div>
+                        <div class="logo-preset" data-logo="crown">
+                            <div class="logo-preview">👑</div>
+                            <span>Crown</span>
+                        </div>
+                        <div class="logo-preset" data-logo="trophy">
+                            <div class="logo-preview">🏆</div>
+                            <span>Trophy</span>
+                        </div>
+                        <div class="logo-preset" data-logo="star">
+                            <div class="logo-preview">⭐</div>
+                            <span>Star</span>
+                        </div>
+                        <div class="logo-preset" data-logo="diamond">
+                            <div class="logo-preview">💎</div>
+                            <span>Diamond</span>
+                        </div>
+                        <div class="logo-preset" data-logo="fire">
+                            <div class="logo-preview">🔥</div>
+                            <span>Fire</span>
+                        </div>
+                        <div class="logo-preset" data-logo="lightning">
+                            <div class="logo-preview">⚡</div>
+                            <span>Lightning</span>
+                        </div>
+                        <div class="logo-preset" data-logo="target">
+                            <div class="logo-preview">🎯</div>
+                            <span>Target</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Custom Logo Upload -->
+                <div class="color-group">
+                    <label class="color-label">Custom Logo Upload</label>
+                    <div class="logo-upload-area">
+                        <input type="file" id="logoUpload" accept="image/*" style="display: none;">
+                        <div class="upload-button" onclick="document.getElementById('logoUpload').click()">
+                            📁 Upload Your Logo
+                        </div>
+                        <div class="upload-info">
+                            <small>Recommended: 200x60px, PNG/JPG format</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logo Text -->
+                <div class="color-group">
+                    <label class="color-label">Sportsbook Name</label>
+                    <input type="text" id="sportsbookName" class="text-input" placeholder="Enter your sportsbook name" value="Your Sportsbook">
+                </div>
+            </div>
+
+            <!-- Layout Style Section -->
+            <div class="customization-section">
+                <h2 class="section-title">📐 Layout Style</h2>
+                <div class="style-options">
+                    <div class="style-option active" data-style="modern">Modern</div>
+                    <div class="style-option" data-style="minimal">Minimal</div>
+                    <div class="style-option" data-style="classic">Classic</div>
+                </div>
+            </div>
+
+            <!-- Button Style Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🔘 Button Style</h2>
+                <div class="style-options">
+                    <div class="style-option active" data-button="rounded">Rounded</div>
+                    <div class="style-option" data-button="sharp">Sharp</div>
+                    <div class="style-option" data-button="minimal">Minimal</div>
+                </div>
+            </div>
+
+            <!-- Card Style Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🃏 Card Style</h2>
+                <div class="style-options">
+                    <div class="style-option active" data-card="shadow">Shadow</div>
+                    <div class="style-option" data-card="border">Border</div>
+                    <div class="style-option" data-card="minimal">Minimal</div>
+                    <div class="style-option" data-card="glow">Glow</div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+                <button class="btn btn-secondary" onclick="resetToDefault()">Reset</button>
+                <button class="btn btn-primary" onclick="saveTheme()">Save Theme</button>
+            </div>
+        </div>
+
+        <!-- Right Side - Live Preview -->
+        <div class="preview-panel">
+            <div class="preview-header">
+                <h2 class="preview-title">Live Preview</h2>
+                <div class="preview-controls">
+                    <div class="preview-device active" data-device="desktop">🖥️ Desktop</div>
+                    <div class="preview-device" data-device="tablet">📱 Tablet</div>
+                    <div class="preview-device" data-device="mobile">📱 Mobile</div>
+                </div>
+            </div>
+            
+            <div class="preview-container">
+                <div class="preview-frame" id="previewFrame">
+                    <!-- Mock Sportsbook Preview -->
+                    <div class="mock-sportsbook">
+                        <div class="mock-header">
+                            <div class="mock-logo">
+                                <div class="logo-icon">🏆</div>
+                                <span class="sportsbook-name">Your Sportsbook</span>
+                            </div>
+                            <div class="mock-nav">
+                                <div class="mock-nav-item">Sports</div>
+                                <div class="mock-nav-item">Live</div>
+                                <div class="mock-nav-item">Casino</div>
+                            </div>
+                        </div>
+                        
+                        <div class="mock-content">
+                            <div class="mock-welcome">
+                                <h1>Welcome to Your Sportsbook</h1>
+                                <p>Experience the thrill of sports betting with the best odds</p>
+                            </div>
+                            
+                            <div class="mock-sports">
+                                <div class="mock-sport-card">
+                                    <div class="mock-sport-icon">⚽</div>
+                                    <div class="mock-sport-name">Football</div>
+                                    <div class="mock-sport-events">25 Live Events</div>
+                                </div>
+                                
+                                <div class="mock-sport-card">
+                                    <div class="mock-sport-icon">🏀</div>
+                                    <div class="mock-sport-name">Basketball</div>
+                                    <div class="mock-sport-events">18 Live Events</div>
+                                </div>
+                                
+                                <div class="mock-sport-card">
+                                    <div class="mock-sport-icon">🎾</div>
+                                    <div class="mock-sport-name">Tennis</div>
+                                    <div class="mock-sport-events">12 Live Events</div>
+                                </div>
+                            </div>
+                            
+                            <div class="mock-cta">
+                                <a href="#" class="mock-cta-button">Start Betting Now</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Theme customization state
+        let currentTheme = {
+            primaryColor: '#1e40af',
+            secondaryColor: '#3b82f6',
+            accentColor: '#f59e0b',
+            backgroundColor: '#ffffff',
+            textColor: '#1f2937',
+            fontFamily: 'Inter, sans-serif',
+            layoutStyle: 'modern',
+            buttonStyle: 'rounded',
+            cardStyle: 'shadow',
+            logoType: 'default',
+            logoUrl: '',
+            sportsbookName: 'Your Sportsbook'
+        };
+
+        // Initialize the customizer
+        document.addEventListener('DOMContentLoaded', function() {
+            loadThemeTemplates();
+            setupEventListeners();
+            updatePreview();
+        });
+
+        // Load theme templates from API
+        async function loadThemeTemplates() {
+            try {
+                const response = await fetch('/api/theme-templates');
+                const templates = await response.json();
+                
+                const container = document.getElementById('themeTemplates');
+                container.innerHTML = '';
+                
+                templates.forEach(template => {
+                    const templateElement = createTemplateElement(template);
+                    container.appendChild(templateElement);
+                });
+            } catch (error) {
+                console.error('Error loading templates:', error);
+                document.getElementById('themeTemplates').innerHTML = 
+                    '<div style="text-align: center; color: #ef4444;">Failed to load templates</div>';
+            }
+        }
+
+        // Create template element
+        function createTemplateElement(template) {
+            const div = document.createElement('div');
+            div.className = 'theme-template';
+            div.onclick = () => applyTemplate(template);
+            
+            div.innerHTML = `
+                <div class="theme-preview" style="background: linear-gradient(135deg, ${template.primary_color}, ${template.secondary_color})"></div>
+                <div class="theme-name">${template.display_name}</div>
+                <div class="theme-description">${template.description}</div>
+            `;
+            
+            return div;
+        }
+
+        // Apply template
+        function applyTemplate(template) {
+            currentTheme = {
+                primaryColor: template.primary_color,
+                secondaryColor: template.secondary_color,
+                accentColor: template.accent_color,
+                backgroundColor: template.background_color,
+                textColor: template.text_color,
+                fontFamily: template.font_family,
+                layoutStyle: template.layout_style,
+                buttonStyle: template.button_style,
+                cardStyle: template.card_style
+            };
+            
+            updateFormInputs();
+            updatePreview();
+            
+            // Update active template
+            document.querySelectorAll('.theme-template').forEach(t => t.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+        }
+
+        // Setup event listeners
+        function setupEventListeners() {
+            // Color inputs
+            const colorInputs = ['primaryColor', 'secondaryColor', 'accentColor', 'backgroundColor', 'textColor'];
+            colorInputs.forEach(colorId => {
+                const picker = document.getElementById(colorId);
+                const text = document.getElementById(colorId + 'Text');
+                
+                picker.addEventListener('input', (e) => {
+                    text.value = e.target.value;
+                    currentTheme[colorId] = e.target.value;
+                    updatePreview();
+                });
+                
+                text.addEventListener('input', (e) => {
+                    if (isValidColor(e.target.value)) {
+                        picker.value = e.target.value;
+                        currentTheme[colorId] = e.target.value;
+                        updatePreview();
+                    }
+                });
+            });
+
+            // Font family
+            document.getElementById('fontFamily').addEventListener('change', (e) => {
+                currentTheme.fontFamily = e.target.value;
+                updatePreview();
+            });
+
+            // Style options
+            document.querySelectorAll('.style-option').forEach(option => {
+                option.addEventListener('click', (e) => {
+                    const parent = e.target.parentElement;
+                    parent.querySelectorAll('.style-option').forEach(o => o.classList.remove('active'));
+                    e.target.classList.add('active');
+                    
+                    if (e.target.dataset.style) {
+                        currentTheme.layoutStyle = e.target.dataset.style;
+                    } else if (e.target.dataset.button) {
+                        currentTheme.buttonStyle = e.target.dataset.button;
+                    } else if (e.target.dataset.card) {
+                        currentTheme.cardStyle = e.target.dataset.card;
+                    }
+                    
+                    updatePreview();
+                });
+            });
+
+            // Preview device controls
+            document.querySelectorAll('.preview-device').forEach(device => {
+                device.addEventListener('click', (e) => {
+                    document.querySelectorAll('.preview-device').forEach(d => d.classList.remove('active'));
+                    e.target.classList.add('active');
+                    
+                    const frame = document.getElementById('previewFrame');
+                    frame.className = 'preview-frame ' + e.target.dataset.device;
+                });
+            });
+
+            // Logo preset selection
+            document.querySelectorAll('.logo-preset').forEach(preset => {
+                preset.addEventListener('click', (e) => {
+                    document.querySelectorAll('.logo-preset').forEach(p => p.classList.remove('active'));
+                    e.currentTarget.classList.add('active');
+                    
+                    currentTheme.logoType = e.currentTarget.dataset.logo;
+                    currentTheme.logoUrl = ''; // Clear custom logo when selecting preset
+                    updatePreview();
+                });
+            });
+
+            // Logo upload
+            document.getElementById('logoUpload').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        currentTheme.logoType = 'custom';
+                        currentTheme.logoUrl = e.target.result;
+                        
+                        // Deselect all preset logos
+                        document.querySelectorAll('.logo-preset').forEach(p => p.classList.remove('active'));
+                        
+                        updatePreview();
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            // Sportsbook name
+            document.getElementById('sportsbookName').addEventListener('input', (e) => {
+                currentTheme.sportsbookName = e.target.value;
+                updatePreview();
+            });
+        }
+
+        // Update form inputs
+        function updateFormInputs() {
+            document.getElementById('primaryColor').value = currentTheme.primaryColor;
+            document.getElementById('primaryColorText').value = currentTheme.primaryColor;
+            document.getElementById('secondaryColor').value = currentTheme.secondaryColor;
+            document.getElementById('secondaryColorText').value = currentTheme.secondaryColor;
+            document.getElementById('accentColor').value = currentTheme.accentColor;
+            document.getElementById('accentColorText').value = currentTheme.accentColor;
+            document.getElementById('backgroundColor').value = currentTheme.backgroundColor;
+            document.getElementById('backgroundColorText').value = currentTheme.backgroundColor;
+            document.getElementById('textColor').value = currentTheme.textColor;
+            document.getElementById('textColorText').value = currentTheme.textColor;
+            document.getElementById('fontFamily').value = currentTheme.fontFamily;
+        }
+
+        // Update live preview
+        function updatePreview() {
+            const preview = document.querySelector('.mock-sportsbook');
+            preview.style.setProperty('--preview-primary-color', currentTheme.primaryColor);
+            preview.style.setProperty('--preview-secondary-color', currentTheme.secondaryColor);
+            preview.style.setProperty('--preview-accent-color', currentTheme.accentColor);
+            preview.style.setProperty('--preview-bg-color', currentTheme.backgroundColor);
+            preview.style.setProperty('--preview-text-color', currentTheme.textColor);
+            preview.style.setProperty('--preview-font', currentTheme.fontFamily);
+            
+            // Update logo in preview
+            const logoElement = preview.querySelector('.logo-icon');
+            const sportsbookNameElement = preview.querySelector('.sportsbook-name');
+            
+            if (logoElement) {
+                if (currentTheme.logoType === 'custom' && currentTheme.logoUrl) {
+                    logoElement.style.backgroundImage = `url(${currentTheme.logoUrl})`;
+                    logoElement.style.backgroundSize = 'contain';
+                    logoElement.style.backgroundRepeat = 'no-repeat';
+                    logoElement.style.backgroundPosition = 'center';
+                    logoElement.textContent = '';
+                } else {
+                    // Use preset logo
+                    const logoMap = {
+                        'default': '⚽',
+                        'crown': '👑',
+                        'trophy': '🏆',
+                        'star': '⭐',
+                        'diamond': '💎',
+                        'fire': '🔥',
+                        'lightning': '⚡',
+                        'target': '🎯'
+                    };
+                    logoElement.style.backgroundImage = 'none';
+                    logoElement.textContent = logoMap[currentTheme.logoType] || '⚽';
+                }
+            }
+            
+            // Update sportsbook name
+            if (sportsbookNameElement) {
+                sportsbookNameElement.textContent = currentTheme.sportsbookName;
+            }
+        }
+
+        // Validate color
+        function isValidColor(color) {
+            return /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(color);
+        }
+
+        // Reset to default
+        function resetToDefault() {
+            currentTheme = {
+                primaryColor: '#1e40af',
+                secondaryColor: '#3b82f6',
+                accentColor: '#f59e0b',
+                backgroundColor: '#ffffff',
+                textColor: '#1f2937',
+                fontFamily: 'Inter, sans-serif',
+                layoutStyle: 'modern',
+                buttonStyle: 'rounded',
+                cardStyle: 'shadow',
+                logoType: 'default',
+                logoUrl: '',
+                sportsbookName: 'Your Sportsbook'
+            };
+            
+            updateFormInputs();
+            updatePreview();
+            
+            // Reset active states
+            document.querySelectorAll('.theme-template').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.style-option').forEach(o => o.classList.remove('active'));
+            document.querySelectorAll('.style-option[data-style="modern"], .style-option[data-button="rounded"], .style-option[data-card="shadow"]').forEach(o => o.classList.add('active'));
+            
+            // Reset logo presets
+            document.querySelectorAll('.logo-preset').forEach(p => p.classList.remove('active'));
+            document.querySelector('.logo-preset[data-logo="default"]').classList.add('active');
+            
+            // Reset sportsbook name input
+            document.getElementById('sportsbookName').value = 'Your Sportsbook';
+        }
+
+        // Save theme
+        async function saveTheme() {
+            try {
+                const response = await fetch('/api/save-theme', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(currentTheme)
+                });
+                
+                if (response.ok) {
+                    alert('Theme saved successfully! Your sportsbook will now use this theme.');
+                } else {
+                    alert('Failed to save theme. Please try again.');
+                }
+            } catch (error) {
+                console.error('Error saving theme:', error);
+                alert('Failed to save theme. Please try again.');
+            }
+        }
+    </script>
+</body>
+</html>
+

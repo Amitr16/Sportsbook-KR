@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - GoalServe</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #ffffff;
+            min-height: 100vh;
+        }
+        
+        .header {
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 1rem 2rem;
+        }
+        
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #4ade80;
+        }
+        
+        .user-section {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .logout-btn {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            color: white;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .logout-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        
+        .main-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .dashboard-title {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 2rem;
+            text-align: center;
+            color: #4ade80;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #4ade80;
+            transform: translateY(-2px);
+        }
+        
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #4ade80;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.7);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .actions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .action-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .action-card:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #4ade80;
+            transform: translateY(-2px);
+        }
+        
+        .action-icon {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+        
+        .action-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #ffffff;
+        }
+        
+        .action-description {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.6);
+            line-height: 1.4;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            color: #ef4444;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        /* Settlement Interface Styles */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .section-header h2 {
+            color: #4ade80;
+            font-size: 1.8rem;
+        }
+        
+        .back-btn {
+            background: linear-gradient(135deg, #6b7280, #4b5563);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            color: white;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .back-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3);
+        }
+        
+
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <span>⚽</span>
+                <span>GoalServe Admin</span>
+            </div>
+            <div class="user-section">
+                <span id="operatorName">Loading...</span>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <h1 class="dashboard-title">Admin Dashboard</h1>
+        
+        <div id="errorContainer" style="display: none;"></div>
+        
+        <div id="statsContainer" class="stats-grid">
+            <div class="loading">Loading statistics...</div>
+        </div>
+        
+        <div id="actionsContainer" class="actions-grid">
+            <div class="loading">Loading actions...</div>
+        </div>
+        
+
+    </main>
+
+    <script>
+        // Check authentication status
+        async function checkAuth() {
+            try {
+                const response = await fetch('/api/admin-check');
+                const data = await response.json();
+                
+                if (data.success && data.logged_in) {
+                    document.getElementById('operatorName').textContent = data.operator.sportsbook_name;
+                    loadDashboardData();
+                } else {
+                    // Redirect to login if not authenticated
+                    window.location.href = '/admin-login';
+                }
+            } catch (error) {
+                console.error('Auth check failed:', error);
+                showError('Authentication check failed. Please try again.');
+            }
+        }
+        
+        // Load dashboard data
+        async function loadDashboardData() {
+            try {
+                // Load stats
+                const statsResponse = await fetch('/api/admin/stats');
+                if (statsResponse.ok) {
+                    const stats = await statsResponse.json();
+                    displayStats(stats);
+                }
+                
+                // Load actions
+                displayActions();
+                
+            } catch (error) {
+                console.error('Failed to load dashboard data:', error);
+                showError('Failed to load dashboard data. Please refresh the page.');
+            }
+        }
+        
+        // Display statistics
+        function displayStats(stats) {
+            const container = document.getElementById('statsContainer');
+            
+            const statsHtml = `
+                <div class="stat-card">
+                    <div class="stat-number">${stats.total_users || 0}</div>
+                    <div class="stat-label">Total Users</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${stats.total_bets || 0}</div>
+                    <div class="stat-label">Total Bets</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">$${stats.total_revenue || 0}</div>
+                    <div class="stat-label">Total Revenue</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${stats.active_events || 0}</div>
+                    <div class="stat-label">Active Events</div>
+                </div>
+            `;
+            
+            container.innerHTML = statsHtml;
+        }
+        
+        // Display action cards
+        function displayActions() {
+            const container = document.getElementById('actionsContainer');
+            
+            const actionsHtml = `
+                <div class="action-card" onclick="navigateTo('users')">
+                    <div class="action-icon">👥</div>
+                    <div class="action-title">User Management</div>
+                    <div class="action-description">View and manage user accounts, balances, and betting history</div>
+                </div>
+                <div class="action-card" onclick="navigateTo('events')">
+                    <div class="action-icon">⚽</div>
+                    <div class="action-title">Event Management</div>
+                    <div class="action-description">Manage betting events, odds, and event status</div>
+                </div>
+                <div class="action-card" onclick="navigateTo('bets')">
+                    <div class="action-icon">🎯</div>
+                    <div class="action-title">Bet Management</div>
+                    <div class="action-description">Monitor active bets, settle results, and manage payouts</div>
+                </div>
+
+                <div class="action-card" onclick="navigateTo('reports')">
+                    <div class="action-icon">📊</div>
+                    <div class="action-title">Reports & Analytics</div>
+                    <div class="action-description">Generate financial reports and view betting analytics</div>
+                </div>
+            `;
+            
+            container.innerHTML = actionsHtml;
+        }
+        
+        // Navigate to different sections
+        function navigateTo(section) {
+            if (section === 'dashboard') {
+                // Show dashboard
+                document.getElementById('statsContainer').style.display = 'grid';
+                document.getElementById('actionsContainer').style.display = 'grid';
+                document.getElementById('settlementContainer').style.display = 'none';
+            } else {
+                // For now, just show a message - implement actual navigation later
+                alert(`${section} section - Coming soon!`);
+            }
+        }
+        
+
+        
+        // Logout function
+        function logout() {
+            fetch('/api/admin/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            }).then(() => {
+                window.location.href = '/admin-login';
+            }).catch(() => {
+                window.location.href = '/admin-login';
+            });
+        }
+        
+        // Show error message
+        function showError(message) {
+            const container = document.getElementById('errorContainer');
+            container.innerHTML = `<div class="error">${message}</div>`;
+            container.style.display = 'block';
+        }
+        
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAuth();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,2151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Theme Customizer - GoalServe Platform</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8fafc;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .customizer-container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Left Sidebar - Customization Panel */
+        .customization-panel {
+            width: 400px;
+            background: white;
+            border-right: 1px solid #e2e8f0;
+            overflow-y: auto;
+            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .panel-header {
+            padding: 20px;
+            border-bottom: 1px solid #e2e8f0;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .panel-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .panel-subtitle {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .back-link {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .back-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+            text-decoration: none;
+            color: white;
+        }
+
+        .customization-section {
+            padding: 20px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 2px;
+        }
+
+        /* Theme Templates */
+        .theme-templates {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .theme-template {
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .theme-template:hover {
+            border-color: #667eea;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.15);
+        }
+
+        .theme-template.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .theme-preview {
+            width: 100%;
+            height: 60px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .theme-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 5px;
+        }
+
+        .theme-description {
+            font-size: 12px;
+            color: #64748b;
+            line-height: 1.4;
+        }
+
+        /* Color Customization */
+        .color-group {
+            margin-bottom: 20px;
+        }
+
+        .color-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+
+        .color-input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .color-picker {
+            width: 50px;
+            height: 40px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .color-picker:hover {
+            border-color: #667eea;
+            transform: scale(1.05);
+        }
+
+        .color-input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: monospace;
+            transition: all 0.3s ease;
+        }
+
+        .color-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* Font Selection */
+        .font-select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .font-select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* Style Options */
+        .style-options {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .style-option {
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .style-option:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .style-option.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+        }
+
+        /* Logo Customization Styles */
+        .logo-presets {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .logo-preset {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 8px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .logo-preset:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .logo-preset.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+        }
+
+        .logo-preview {
+            font-size: 24px;
+            margin-bottom: 5px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .logo-preset span {
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .logo-upload-area {
+            text-align: center;
+            margin-bottom: 15px;
+        }
+
+        .upload-button {
+            display: inline-block;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-bottom: 8px;
+        }
+
+        .upload-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .upload-info {
+            color: #64748b;
+        }
+
+        .text-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .text-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        /* Action Buttons */
+        .action-buttons {
+            padding: 20px;
+            border-top: 1px solid #e2e8f0;
+            background: #f8fafc;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--preview-bg-color, white);
+            color: #374151;
+            border: 2px solid #e2e8f0;
+        }
+
+        .btn-secondary:hover {
+            border-color: #667eea;
+            color: #667eea;
+        }
+
+        /* Right Side - Live Preview */
+        .preview-panel {
+            flex: 1;
+            background: #f1f5f9;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .preview-header {
+            padding: 20px;
+            background: white;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .preview-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .preview-controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        .preview-device {
+            padding: 8px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .preview-device.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+        }
+
+        .preview-container {
+            flex: 1;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .preview-frame {
+            width: 100%;
+            max-width: 1200px;
+            height: 80vh;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .preview-frame.mobile {
+            max-width: 375px;
+            height: 667px;
+        }
+
+        .preview-frame.tablet {
+            max-width: 768px;
+            height: 1024px;
+        }
+
+        /* Mock Sportsbook Preview - Real Betting Page Layout */
+        
+        .mock-sportsbook {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            font-family: var(--preview-font, 'Inter, sans-serif');
+            color: var(--preview-text-color, #ffffff) !important;
+            background: var(--preview-bg-color, #1A1A1A) !important;
+        }
+        
+        /* Ensure CSS variables are inherited by all child elements */
+        .mock-sportsbook * {
+            color: inherit;
+        }
+        
+        /* Force CSS variables to override any hardcoded values */
+        .mock-sportsbook,
+        .mock-sportsbook .mock-header,
+        .mock-sportsbook .mock-sidebar,
+        .mock-sportsbook .mock-content-area {
+            background: var(--preview-bg-color, #1A1A1A) !important;
+        }
+        
+        .mock-sportsbook,
+        .mock-sportsbook .mock-header,
+        .mock-sportsbook .mock-sidebar,
+        .mock-sportsbook .mock-content-area,
+        .mock-sportsbook .mock-breadcrumb,
+        .mock-sportsbook .mock-table-header,
+        .mock-sportsbook .mock-event-row {
+            color: var(--preview-text-color, #ffffff) !important;
+        }
+
+        /* Top Welcome Banner */
+        .mock-welcome-banner {
+            background: var(--preview-accent-color, #F59E0B);
+            color: white;
+            text-align: center;
+            padding: 8px 0;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .mock-header {
+            padding: 16px 24px;
+            background: var(--preview-primary-color, #22C55E);
+            color: white;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        .mock-header-content {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .mock-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            font-size: 18px;
+            background: var(--preview-primary-color, #22C55E);
+            color: white;
+        }
+
+        .sportsbook-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--preview-primary-color, #22C55E);
+        }
+
+        .mock-search-container {
+            flex: 1;
+            max-width: 400px;
+            position: relative;
+        }
+
+        .mock-search-input {
+            width: 100%;
+            padding: 12px 16px 12px 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 25px;
+            color: var(--preview-text-color, white);
+            font-size: 14px;
+            outline: none;
+        }
+
+        .mock-search-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .mock-search-icon {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .mock-user-section {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .mock-balance {
+            background: var(--preview-accent-color, #F59E0B);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            color: white;
+        }
+
+        .mock-user-menu {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 8px 16px;
+            color: var(--preview-text-color, white);
+            cursor: pointer;
+        }
+
+        .mock-main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .mock-sidebar {
+            width: 280px;
+            background: var(--preview-bg-color, #1A1A1A);
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .mock-sidebar-section {
+            margin-bottom: 24px;
+        }
+
+        .mock-sidebar-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--preview-text-color, rgba(255, 255, 255, 0.7));
+            margin-bottom: 12px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .mock-sport-item, .mock-filter-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: var(--preview-text-color, white);
+        }
+
+        .mock-sport-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .mock-filter-item:hover {
+            background: var(--preview-accent-color, rgba(245, 158, 11, 0.1));
+        }
+
+        .mock-sport-item.active {
+            background: var(--preview-primary-color, #22C55E);
+            color: white;
+        }
+
+        .mock-sport-info, .mock-filter-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .mock-sport-icon, .mock-filter-icon {
+            font-size: 16px;
+        }
+
+        .mock-event-count {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .mock-sport-item.active .mock-event-count {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .mock-content-area {
+            flex: 1;
+            padding: 24px;
+            background: var(--preview-bg-color, #2A2A2A);
+            overflow-y: auto;
+        }
+
+        .mock-breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: var(--preview-text-color, rgba(255, 255, 255, 0.7));
+        }
+
+        .mock-breadcrumb-separator {
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .mock-content-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .mock-view-options {
+            display: flex;
+            gap: 8px;
+        }
+
+        .mock-view-btn {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: var(--preview-text-color, white);
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .mock-view-btn.active {
+            background: var(--preview-primary-color, #22C55E);
+            color: white;
+        }
+
+        .mock-live-status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .mock-status-indicator {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: var(--preview-text-color, white);
+        }
+
+        .mock-status-indicator.connected {
+            background: rgba(34, 197, 94, 0.2);
+            border-color: var(--preview-primary-color, #22C55E);
+            color: var(--preview-primary-color, #22C55E);
+        }
+
+        .mock-refresh-btn {
+            padding: 6px 12px;
+            background: var(--preview-primary-color, #22C55E);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .mock-events-container {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .mock-table-header {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            gap: 16px;
+            padding: 16px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--preview-text-color, rgba(255, 255, 255, 0.8));
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .mock-event-row {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            gap: 16px;
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            color: var(--preview-text-color, white);
+        }
+
+        .mock-event-row:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .mock-event-row.live-match {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 4px solid #ef4444;
+        }
+
+        .mock-event-time {
+            font-size: 14px;
+        }
+
+        .mock-event-status {
+            display: block;
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
+        .mock-odds-section {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .mock-event-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .mock-event-teams {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .mock-event-league {
+            font-size: 12px;
+            color: var(--preview-text-color, rgba(255, 255, 255, 0.6));
+        }
+
+        .mock-odds-btn {
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: var(--preview-text-color, white);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+
+        .mock-odds-btn:hover {
+            background: var(--preview-secondary-color, #3b82f6);
+            color: white;
+            transform: translateY(-1px);
+        }
+
+        /* Layout Style Classes */
+        .layout-modern .mock-sportsbook {
+            --layout-spacing: 24px;
+            --layout-radius: 12px;
+        }
+
+        .layout-classic .mock-sportsbook {
+            --layout-spacing: 16px;
+            --layout-radius: 4px;
+        }
+
+        .layout-compact .mock-sportsbook {
+            --layout-spacing: 12px;
+            --layout-radius: 6px;
+        }
+
+        .layout-wide .mock-sportsbook {
+            --layout-spacing: 32px;
+            --layout-radius: 16px;
+        }
+
+        .layout-minimal .mock-sportsbook {
+            --layout-spacing: 8px;
+            --layout-radius: 2px;
+        }
+
+        /* Button Style Classes */
+        .btn-rounded {
+            border-radius: 25px !important;
+        }
+
+        .btn-sharp {
+            border-radius: 0 !important;
+        }
+
+        .btn-minimal {
+            border-radius: 4px !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        }
+
+        /* Card Style Classes */
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+        }
+
+        .card-border {
+            border: 2px solid rgba(255, 255, 255, 0.1) !important;
+            box-shadow: none !important;
+        }
+
+        .card-minimal {
+            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+            box-shadow: none !important;
+        }
+
+        .card-glow {
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.3) !important;
+        }
+
+        .mock-nav-item {
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .mock-nav-item:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .mock-content {
+            flex: 1;
+            padding: 40px 30px;
+            background: var(--preview-bg-color, #f8fafc);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .mock-welcome {
+            text-align: center;
+            margin-bottom: 40px;
+            max-width: 600px;
+        }
+
+        .mock-welcome h1 {
+            font-size: 32px;
+            margin-bottom: 12px;
+            color: var(--preview-primary-color, #4f46e5);
+            font-weight: 700;
+        }
+
+        .mock-welcome p {
+            font-size: 16px;
+            color: #64748b;
+            line-height: 1.6;
+        }
+
+        .mock-sports {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-bottom: 40px;
+            max-width: 800px;
+            width: 100%;
+        }
+
+        .mock-sport-card {
+            padding: 24px;
+            background: var(--preview-bg-color, white);
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            text-align: center;
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .mock-sport-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+            border-color: var(--preview-primary-color, #4f46e5);
+        }
+
+        .mock-sport-icon {
+            font-size: 40px;
+            margin-bottom: 16px;
+        }
+
+        .mock-sport-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--preview-text-color, #1e293b);
+        }
+
+        .mock-sport-events {
+            font-size: 14px;
+            color: #64748b;
+        }
+
+        .mock-cta {
+            text-align: center;
+        }
+
+        .mock-cta-button {
+            display: inline-block;
+            padding: 14px 32px;
+            background: var(--preview-accent-color, #f59e0b);
+            color: var(--preview-text-color, white);
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 14px rgba(245, 158, 11, 0.3);
+        }
+
+        .mock-cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(245, 158, 11, 0.4);
+            text-decoration: none;
+            color: var(--preview-text-color, white);
+        }
+
+        /* Loading States */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 20px;
+            color: #64748b;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #e2e8f0;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .customizer-container {
+                flex-direction: column;
+            }
+            
+            .customization-panel {
+                width: 100%;
+                height: 50vh;
+            }
+            
+            .preview-panel {
+                height: 50vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="customizer-container">
+        <!-- Left Sidebar - Customization Panel -->
+        <div class="customization-panel">
+            <div class="panel-header">
+                <a href="/static/register-sportsbook.html" class="back-link">← Back</a>
+                <h1 class="panel-title">🎨 Theme Customizer</h1>
+                <p class="panel-subtitle">Customize your sportsbook's look and feel</p>
+            </div>
+
+            <!-- Theme Templates Section -->
+            <div class="customization-section">
+                <h2 class="section-title">📋 Theme Templates</h2>
+                <div class="theme-templates" id="themeTemplates">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        Loading templates...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Colors Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🎨 Colors</h2>
+                
+                <div class="color-group">
+                    <label class="color-label">Primary Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="primaryColor" value="#1e40af">
+                        <input type="text" class="color-input" id="primaryColorText" value="#1e40af">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Secondary Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="secondaryColor" value="#3b82f6">
+                        <input type="text" class="color-input" id="secondaryColorText" value="#3b82f6">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Accent Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="accentColor" value="#f59e0b">
+                        <input type="text" class="color-input" id="accentColorText" value="#f59e0b">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Background Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="backgroundColor" value="#ffffff">
+                        <input type="text" class="color-input" id="backgroundColorText" value="#ffffff">
+                    </div>
+                </div>
+
+                <div class="color-group">
+                    <label class="color-label">Text Color</label>
+                    <div class="color-input-group">
+                        <input type="color" class="color-picker" id="textColor" value="#1f2937">
+                        <input type="text" class="color-input" id="textColorText" value="#1f2937">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Typography Section -->
+            <div class="customization-section">
+                <h2 class="section-title">📝 Typography</h2>
+                <div class="color-group">
+                    <label class="color-label">Font Family</label>
+                    <select class="font-select" id="fontFamily">
+                        <option value="Inter, sans-serif">Inter</option>
+                        <option value="Roboto, sans-serif">Roboto</option>
+                        <option value="Poppins, sans-serif">Poppins</option>
+                        <option value="Montserrat, sans-serif">Montserrat</option>
+                        <option value="Source Sans Pro, sans-serif">Source Sans Pro</option>
+                        <option value="Open Sans, sans-serif">Open Sans</option>
+                        <option value="Lato, sans-serif">Lato</option>
+                        <option value="Nunito, sans-serif">Nunito</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Logo Customization Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🏆 Logo & Branding</h2>
+                
+                <!-- Preset Logos -->
+                <div class="color-group">
+                    <label class="color-label">Preset Logos</label>
+                    <div class="logo-presets">
+                        <div class="logo-preset active" data-logo="default">
+                            <div class="logo-preview">⚽</div>
+                            <span>Default</span>
+                        </div>
+                        <div class="logo-preset" data-logo="crown">
+                            <div class="logo-preview">👑</div>
+                            <span>Crown</span>
+                        </div>
+                        <div class="logo-preset" data-logo="trophy">
+                            <div class="logo-preview">🏆</div>
+                            <span>Trophy</span>
+                        </div>
+                        <div class="logo-preset" data-logo="star">
+                            <div class="logo-preview">⭐</div>
+                            <span>Star</span>
+                        </div>
+                        <div class="logo-preset" data-logo="diamond">
+                            <div class="logo-preview">💎</div>
+                            <span>Diamond</span>
+                        </div>
+                        <div class="logo-preset" data-logo="fire">
+                            <div class="logo-preview">🔥</div>
+                            <span>Fire</span>
+                        </div>
+                        <div class="logo-preset" data-logo="lightning">
+                            <div class="logo-preview">⚡</div>
+                            <span>Lightning</span>
+                        </div>
+                        <div class="logo-preset" data-logo="target">
+                            <div class="logo-preview">🎯</div>
+                            <span>Target</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Custom Logo Upload -->
+                <div class="color-group">
+                    <label class="color-label">Custom Logo Upload</label>
+                    <div class="logo-upload-area">
+                        <input type="file" id="logoUpload" accept="image/*" style="display: none;">
+                        <div class="upload-button" onclick="document.getElementById('logoUpload').click()">
+                            📁 Upload Your Logo
+                        </div>
+                        <div class="upload-info">
+                            <small>Recommended: 200x60px, PNG/JPG format</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logo Text -->
+                <div class="color-group">
+                    <label class="color-label">Sportsbook Name</label>
+                    <input type="text" id="sportsbookName" class="text-input" placeholder="Enter your sportsbook name" value="Your Sportsbook">
+                </div>
+            </div>
+
+            <!-- Layout Style Section -->
+            <div class="customization-section">
+                <h2 class="section-title">📐 Layout Style</h2>
+                <div class="style-options">
+                    <div class="style-option active" data-style="modern">Modern</div>
+                    <div class="style-option" data-style="classic">Classic</div>
+                    <div class="style-option" data-style="compact">Compact</div>
+                    <div class="style-option" data-style="wide">Wide</div>
+                    <div class="style-option" data-style="minimal">Minimal</div>
+                </div>
+            </div>
+
+            <!-- Button Style Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🔘 Button Style</h2>
+                <div class="style-options">
+                    <div class="style-option active" data-button="rounded">Rounded</div>
+                    <div class="style-option" data-button="sharp">Sharp</div>
+                    <div class="style-option" data-button="minimal">Minimal</div>
+                </div>
+            </div>
+
+            <!-- Card Style Section -->
+            <div class="customization-section">
+                <h2 class="section-title">🃏 Card Style</h2>
+                <div class="style-options">
+                    <div class="style-option active" data-card="shadow">Shadow</div>
+                    <div class="style-option" data-card="border">Border</div>
+                    <div class="style-option" data-card="minimal">Minimal</div>
+                    <div class="style-option" data-card="glow">Glow</div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+                <button class="btn btn-secondary" onclick="resetToDefault()">Reset</button>
+                <button class="btn btn-primary" onclick="saveTheme()">Save Theme</button>
+            </div>
+        </div>
+
+        <!-- Right Side - Live Preview -->
+        <div class="preview-panel">
+            <div class="preview-header">
+                <h2 class="preview-title">Live Preview</h2>
+                <div class="preview-controls">
+                    <div class="preview-device active" data-device="desktop">🖥️ Desktop</div>
+                    <div class="preview-device" data-device="tablet">📱 Tablet</div>
+                    <div class="preview-device" data-device="mobile">📱 Mobile</div>
+                </div>
+            </div>
+            
+            <div class="preview-container">
+                <div class="preview-frame" id="previewFrame">
+                    <!-- Real Betting Page Preview -->
+                    <div class="mock-sportsbook">
+                        <!-- Welcome Banner -->
+                        <div class="mock-welcome-banner">
+                            Welcome to megabook
+                        </div>
+                        
+                        <!-- Header -->
+                        <header class="mock-header">
+                            <div class="mock-header-content">
+                                <div class="mock-logo">
+                                    <span class="logo-icon">⚽</span>
+                                    <span class="sportsbook-name">megabook</span>
+                                </div>
+                                <div class="mock-search-container">
+                                    <div class="mock-search-icon">🔍</div>
+                                    <input type="text" class="mock-search-input" placeholder="Search teams, leagues, or events..." readonly>
+                                </div>
+                                <div class="mock-user-section">
+                                    <div class="mock-balance">$1,250.00</div>
+                                    <div class="mock-user-menu">John Doe ▼</div>
+                                </div>
+                            </div>
+                        </header>
+
+                        <!-- Main Container -->
+                        <div class="mock-main-container">
+                            <!-- Sidebar -->
+                            <aside class="mock-sidebar">
+                                <!-- Sports Section -->
+                                <div class="mock-sidebar-section">
+                                    <h3 class="mock-sidebar-title">SPORTS</h3>
+                                    <div class="mock-sport-item active">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">⚽</span>
+                                            <span>Baseball</span>
+                                        </div>
+                                        <span class="mock-event-count">58</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🏀</span>
+                                            <span>Basketball</span>
+                                        </div>
+                                        <span class="mock-event-count">30</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🥊</span>
+                                            <span>Boxing</span>
+                                        </div>
+                                        <span class="mock-event-count">7</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🏏</span>
+                                            <span>Cricket</span>
+                                        </div>
+                                        <span class="mock-event-count">10</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🎯</span>
+                                            <span>Darts</span>
+                                        </div>
+                                        <span class="mock-event-count">20</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🎮</span>
+                                            <span>Esports</span>
+                                        </div>
+                                        <span class="mock-event-count">57</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🏈</span>
+                                            <span>American Football</span>
+                                        </div>
+                                        <span class="mock-event-count">18</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">⚽</span>
+                                            <span>Futsal</span>
+                                        </div>
+                                        <span class="mock-event-count">2</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🤾</span>
+                                            <span>Handball</span>
+                                        </div>
+                                        <span class="mock-event-count">9</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🏒</span>
+                                            <span>Hockey</span>
+                                        </div>
+                                        <span class="mock-event-count">7</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🥊</span>
+                                            <span>MMA</span>
+                                        </div>
+                                        <span class="mock-event-count">12</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🏉</span>
+                                            <span>Rugby</span>
+                                        </div>
+                                        <span class="mock-event-count">13</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">🏉</span>
+                                            <span>Rugby League</span>
+                                        </div>
+                                        <span class="mock-event-count">12</span>
+                                    </div>
+                                    <div class="mock-sport-item">
+                                        <div class="mock-sport-info">
+                                            <span class="mock-sport-icon">⚽</span>
+                                            <span>Soccer</span>
+                                        </div>
+                                        <span class="mock-event-count">1009</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Quick Filters -->
+                                <div class="mock-sidebar-section">
+                                    <h3 class="mock-sidebar-title">QUICK FILTERS</h3>
+                                    <div class="mock-filter-item">
+                                        <div class="mock-filter-info">
+                                            <span class="mock-filter-icon">🔴</span>
+                                            <span>Live Now</span>
+                                        </div>
+                                        <span class="mock-event-count">8</span>
+                                    </div>
+                                    <div class="mock-filter-item">
+                                        <div class="mock-filter-info">
+                                            <span class="mock-filter-icon">📅</span>
+                                            <span>Today</span>
+                                        </div>
+                                        <span class="mock-event-count">15</span>
+                                    </div>
+                                </div>
+                            </aside>
+
+                            <!-- Content Area -->
+                            <main class="mock-content-area">
+                                <div class="mock-breadcrumb">
+                                    <span>Home</span>
+                                    <span class="mock-breadcrumb-separator">></span>
+                                    <span>Baseball</span>
+                                    <span class="mock-breadcrumb-separator">></span>
+                                    <span>All Events</span>
+                                </div>
+                                
+                                <div class="mock-content-header">
+                                    <div class="mock-view-options">
+                                        <button class="mock-view-btn active">📋 List View</button>
+                                        <button class="mock-view-btn">🎫 Coupon View</button>
+                                    </div>
+                                    <div class="mock-live-status">
+                                        <span class="mock-status-indicator connected">🟢 Connected</span>
+                                        <!-- Refresh button hidden for UI purposes -->
+                <!-- <button class="mock-refresh-btn">🔄 Refresh Live Odds</button> -->
+                                    </div>
+                                </div>
+
+                                <!-- Events Table -->
+                                <div class="mock-events-container">
+                                    <div class="mock-table-header">
+                                        <div>Match Result</div>
+                                        <div>Correct Score</div>
+                                        <div>Odd/Even (Including OT)</div>
+                                    </div>
+                                    
+                                    <div class="mock-event-row">
+                                        <div class="mock-event-time">
+                                            <div>Aug 16, 05:00 PM</div>
+                                            <span class="mock-event-status">Not Started</span>
+                                        </div>
+                                        <div class="mock-event-info">
+                                            <div class="mock-event-teams">Lotte Giants vs Samsung Lions</div>
+                                            <div class="mock-event-league">South Korea: KBO</div>
+                                        </div>
+                                        <div class="mock-odds-section">
+                                            <button class="mock-odds-btn">1.86</button>
+                                            <button class="mock-odds-btn">1.45</button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mock-event-row">
+                                        <div class="mock-event-time">
+                                            <div>Aug 16, 06:00 PM</div>
+                                            <span class="mock-event-status">Not Started</span>
+                                        </div>
+                                        <div class="mock-event-info">
+                                            <div class="mock-event-teams">Northern Superchargers vs Birmingham Phoenix</div>
+                                            <div class="mock-event-league">England: The Hundred</div>
+                                        </div>
+                                        <div class="mock-odds-section">
+                                            <button class="mock-odds-btn">2.10</button>
+                                            <button class="mock-odds-btn">1.90</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </main>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Theme customization state
+        let currentTheme = {
+            primaryColor: '#22C55E',
+            secondaryColor: '#3b82f6',
+            accentColor: '#22C55E',
+            backgroundColor: '#1A1A1A',
+            textColor: '#FFFFFF',
+            fontFamily: 'Inter, sans-serif',
+            layoutStyle: 'modern',
+            buttonStyle: 'rounded',
+            cardStyle: 'shadow',
+            logoType: 'default',
+            logoUrl: '',
+            sportsbookName: 'Your Sportsbook'
+        };
+
+        // Initialize the customizer
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Load saved theme first
+            await loadSavedTheme();
+            
+            // Load theme templates
+            await loadThemeTemplates();
+            
+            // Set up event listeners
+            setupEventListeners();
+            
+            // Initialize preview
+            updatePreview();
+        });
+
+        // Load saved theme from database
+        async function loadSavedTheme() {
+            try {
+                // Get the current subdomain from the URL path
+                const pathParts = window.location.pathname.split('/');
+                const subdomain = pathParts[1]; // Get subdomain from /subdomain/admin/theme-customizer
+                
+                // Construct the API endpoint relative to the current domain
+                const apiEndpoint = `/${subdomain}/api/load-theme`;
+                
+                console.log('Loading saved theme from:', apiEndpoint);
+                
+                const response = await fetch(apiEndpoint);
+                if (response.ok) {
+                    const savedTheme = await response.json();
+                    console.log('Loaded saved theme:', savedTheme);
+                    
+                    // Only update if the saved theme has valid colors (not white)
+                    if (savedTheme.primaryColor && savedTheme.primaryColor !== '#ffffff') {
+                        currentTheme.primaryColor = savedTheme.primaryColor;
+                    }
+                    if (savedTheme.secondaryColor && savedTheme.secondaryColor !== '#ffffff') {
+                        currentTheme.secondaryColor = savedTheme.secondaryColor;
+                    }
+                    if (savedTheme.accentColor && savedTheme.accentColor !== '#ffffff') {
+                        currentTheme.accentColor = savedTheme.accentColor;
+                    }
+                    if (savedTheme.backgroundColor && savedTheme.backgroundColor !== '#ffffff') {
+                        currentTheme.backgroundColor = savedTheme.backgroundColor;
+                    }
+                    if (savedTheme.textColor && savedTheme.textColor !== '#ffffff') {
+                        currentTheme.textColor = savedTheme.textColor;
+                    }
+                    if (savedTheme.fontFamily) {
+                        currentTheme.fontFamily = savedTheme.fontFamily;
+                    }
+                    if (savedTheme.layoutStyle) {
+                        currentTheme.layoutStyle = savedTheme.layoutStyle;
+                    }
+                    if (savedTheme.buttonStyle) {
+                        currentTheme.buttonStyle = savedTheme.buttonStyle;
+                    }
+                    if (savedTheme.cardStyle) {
+                        currentTheme.cardStyle = savedTheme.cardStyle;
+                    }
+                    if (savedTheme.logoType) {
+                        currentTheme.logoType = savedTheme.logoType;
+                    }
+                    if (savedTheme.logoUrl) {
+                        currentTheme.logoUrl = savedTheme.logoUrl;
+                    }
+                    if (savedTheme.sportsbookName) {
+                        currentTheme.sportsbookName = savedTheme.sportsbookName;
+                    }
+                    
+                    // Update form inputs with saved values
+                    updateFormInputs();
+            
+            console.log('Current theme updated with saved values:', currentTheme);
+            
+            // Debug: Check what the form inputs actually show
+            console.log('Form input values after update:');
+            console.log('Background color picker:', document.getElementById('backgroundColor').value);
+            console.log('Background color text:', document.getElementById('backgroundColorText').value);
+                } else {
+                    console.log('No saved theme found, using defaults');
+                }
+            } catch (error) {
+                console.error('Error loading saved theme:', error);
+                console.log('Using default theme values');
+            }
+        }
+
+        // Load theme templates from API
+        async function loadThemeTemplates() {
+            try {
+                const response = await fetch('/api/theme-templates');
+                const templates = await response.json();
+                
+                const container = document.getElementById('themeTemplates');
+                container.innerHTML = '';
+                
+                templates.forEach(template => {
+                    const templateElement = createTemplateElement(template);
+                    container.appendChild(templateElement);
+                });
+            } catch (error) {
+                console.error('Error loading templates:', error);
+                document.getElementById('themeTemplates').innerHTML = 
+                    '<div style="text-align: center; color: #ef4444;">Failed to load templates</div>';
+            }
+        }
+
+        // Create template element
+        function createTemplateElement(template) {
+            const div = document.createElement('div');
+            div.className = 'theme-template';
+            div.onclick = () => applyTemplate(template);
+            
+            div.innerHTML = `
+                <div class="theme-preview" style="background: linear-gradient(135deg, ${template.primary_color}, ${template.secondary_color})"></div>
+                <div class="theme-name">${template.display_name}</div>
+                <div class="theme-description">${template.description}</div>
+            `;
+            
+            return div;
+        }
+
+        // Apply template
+        function applyTemplate(template) {
+            console.log('Applying template:', template);
+            
+            // Only update if the template has valid colors
+            if (template.primary_color && template.primary_color !== '#ffffff') {
+                currentTheme.primaryColor = template.primary_color;
+            }
+            if (template.secondary_color && template.secondary_color !== '#ffffff') {
+                currentTheme.secondaryColor = template.secondary_color;
+            }
+            if (template.accent_color && template.accent_color !== '#ffffff') {
+                currentTheme.accentColor = template.accent_color;
+            }
+            if (template.background_color && template.background_color !== '#ffffff') {
+                currentTheme.backgroundColor = template.background_color;
+            }
+            if (template.text_color && template.text_color !== '#ffffff') {
+                currentTheme.textColor = template.text_color;
+            }
+            if (template.font_family) {
+                currentTheme.fontFamily = template.font_family;
+            }
+            if (template.layout_style) {
+                currentTheme.layoutStyle = template.layout_style;
+            }
+            if (template.button_style) {
+                currentTheme.buttonStyle = template.button_style;
+            }
+            if (template.card_style) {
+                currentTheme.cardStyle = template.card_style;
+            }
+            
+            console.log('Updated current theme:', currentTheme);
+            updateFormInputs();
+            updatePreview();
+            
+            // Update active template
+            document.querySelectorAll('.theme-template').forEach(t => t.classList.remove('active'));
+            // Find the clicked template element and mark it as active
+            event.target.closest('.theme-template').classList.add('active');
+        }
+
+        // Setup event listeners
+        function setupEventListeners() {
+            // Color inputs
+            const colorInputs = ['primaryColor', 'secondaryColor', 'accentColor', 'backgroundColor', 'textColor'];
+            colorInputs.forEach(colorId => {
+                const picker = document.getElementById(colorId);
+                const text = document.getElementById(colorId + 'Text');
+                
+                picker.addEventListener('input', (e) => {
+                    console.log(`Color picker changed for ${colorId}:`, e.target.value);
+                    text.value = e.target.value;
+                    currentTheme[colorId] = e.target.value;
+                    console.log(`Updated currentTheme.${colorId} to:`, currentTheme[colorId]);
+                    updatePreview();
+                });
+                
+                text.addEventListener('input', (e) => {
+                    console.log(`Color text input changed for ${colorId}:`, e.target.value);
+                    if (isValidColor(e.target.value)) {
+                        picker.value = e.target.value;
+                        currentTheme[colorId] = e.target.value;
+                        updatePreview();
+                    } else {
+                        console.log(`Invalid color format for ${colorId}:`, e.target.value);
+                    }
+                });
+            });
+
+            // Font family
+            document.getElementById('fontFamily').addEventListener('change', (e) => {
+                currentTheme.fontFamily = e.target.value;
+                updatePreview();
+            });
+
+            // Style options
+            document.querySelectorAll('.style-option').forEach(option => {
+                option.addEventListener('click', (e) => {
+                    const parent = e.target.parentElement;
+                    parent.querySelectorAll('.style-option').forEach(o => o.classList.remove('active'));
+                    e.target.classList.add('active');
+                    
+                    if (e.target.dataset.style) {
+                        currentTheme.layoutStyle = e.target.dataset.style;
+                    } else if (e.target.dataset.button) {
+                        currentTheme.buttonStyle = e.target.dataset.button;
+                    } else if (e.target.dataset.card) {
+                        currentTheme.cardStyle = e.target.dataset.card;
+                    }
+                    
+                    updatePreview();
+                });
+            });
+
+            // Preview device controls
+            document.querySelectorAll('.preview-device').forEach(device => {
+                device.addEventListener('click', (e) => {
+                    document.querySelectorAll('.preview-device').forEach(d => d.classList.remove('active'));
+                    e.target.classList.add('active');
+                    
+                    const frame = document.getElementById('previewFrame');
+                    frame.className = 'preview-frame ' + e.target.dataset.device;
+                });
+            });
+
+            // Logo preset selection
+            document.querySelectorAll('.logo-preset').forEach(preset => {
+                preset.addEventListener('click', (e) => {
+                    document.querySelectorAll('.logo-preset').forEach(p => p.classList.remove('active'));
+                    e.currentTarget.classList.add('active');
+                    
+                    currentTheme.logoType = e.currentTarget.dataset.logo;
+                    currentTheme.logoUrl = ''; // Clear custom logo when selecting preset
+                    updatePreview();
+                });
+            });
+
+            // Logo upload
+            document.getElementById('logoUpload').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        currentTheme.logoType = 'custom';
+                        currentTheme.logoUrl = e.target.result;
+                        
+                        // Deselect all preset logos
+                        document.querySelectorAll('.logo-preset').forEach(p => p.classList.remove('active'));
+                        
+                        updatePreview();
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            // Sportsbook name
+            document.getElementById('sportsbookName').addEventListener('input', (e) => {
+                currentTheme.sportsbookName = e.target.value;
+                updatePreview();
+            });
+        }
+
+        // Update form inputs
+        function updateFormInputs() {
+            console.log('Updating form inputs with theme:', currentTheme);
+            
+            document.getElementById('primaryColor').value = currentTheme.primaryColor;
+            document.getElementById('primaryColorText').value = currentTheme.primaryColor;
+            document.getElementById('secondaryColor').value = currentTheme.secondaryColor;
+            document.getElementById('secondaryColorText').value = currentTheme.secondaryColor;
+            document.getElementById('accentColor').value = currentTheme.accentColor;
+            document.getElementById('accentColorText').value = currentTheme.accentColor;
+            document.getElementById('backgroundColor').value = currentTheme.backgroundColor;
+            document.getElementById('backgroundColorText').value = currentTheme.backgroundColor;
+            document.getElementById('textColor').value = currentTheme.textColor;
+            document.getElementById('textColorText').value = currentTheme.textColor;
+            document.getElementById('fontFamily').value = currentTheme.fontFamily;
+            
+            // Update sportsbook name input
+            document.getElementById('sportsbookName').value = currentTheme.sportsbookName;
+            
+            // Update logo presets
+            document.querySelectorAll('.logo-preset').forEach(p => p.classList.remove('active'));
+            const activeLogo = document.querySelector(`.logo-preset[data-logo="${currentTheme.logoType}"]`);
+            if (activeLogo) {
+                activeLogo.classList.add('active');
+            }
+            
+            // Update style options
+            document.querySelectorAll('.style-option').forEach(o => o.classList.remove('active'));
+            
+            // Update layout style
+            const activeLayout = document.querySelector(`.style-option[data-style="${currentTheme.layoutStyle}"]`);
+            if (activeLayout) {
+                activeLayout.classList.add('active');
+            }
+            
+            // Update button style
+            const activeButton = document.querySelector(`.style-option[data-button="${currentTheme.buttonStyle}"]`);
+            if (activeButton) {
+                activeButton.classList.add('active');
+            }
+            
+            // Update card style
+            const activeCard = document.querySelector(`.style-option[data-card="${currentTheme.cardStyle}"]`);
+            if (activeCard) {
+                activeCard.classList.add('active');
+            }
+            
+            console.log('Form inputs updated. Background color picker now shows:', document.getElementById('backgroundColor').value);
+        }
+
+        // Apply layout style to preview
+        function applyLayoutStyle(layoutStyle) {
+            const preview = document.querySelector('.mock-sportsbook');
+            if (!preview) return;
+            
+            // Remove all layout classes
+            preview.classList.remove('layout-modern', 'layout-classic', 'layout-compact', 'layout-wide', 'layout-minimal');
+            
+            // Add the selected layout class
+            preview.classList.add(`layout-${layoutStyle}`);
+            
+            // Apply spacing and radius only to layout elements, NOT odds buttons
+            const viewButtons = preview.querySelectorAll('.mock-view-btn, .mock-refresh-btn');
+            const cards = preview.querySelectorAll('.mock-sport-card');
+            const sections = preview.querySelectorAll('.mock-sidebar-section, .mock-content-area');
+            
+            let spacing, radius;
+            switch(layoutStyle) {
+                case 'modern':
+                    spacing = '16px';
+                    radius = '8px';
+                    break;
+                case 'classic':
+                    spacing = '12px';
+                    radius = '4px';
+                    break;
+                case 'compact':
+                    spacing = '8px';
+                    radius = '6px';
+                    break;
+                case 'wide':
+                    spacing = '20px';
+                    radius = '12px';
+                    break;
+                case 'minimal':
+                    spacing = '6px';
+                    radius = '2px';
+                    break;
+                default:
+                    spacing = '16px';
+                    radius = '8px';
+            }
+            
+            // Apply to view buttons only (not odds buttons)
+            viewButtons.forEach(btn => {
+                btn.style.padding = `${parseInt(spacing)/2}px ${spacing}px`;
+                btn.style.borderRadius = radius;
+                btn.style.margin = `0 ${parseInt(spacing)/4}px`;
+            });
+            
+            // Apply to cards (but keep odds buttons untouched)
+            cards.forEach(card => {
+                card.style.padding = spacing;
+                card.style.borderRadius = radius;
+                card.style.margin = `0 0 ${parseInt(spacing)/2}px 0`;
+            });
+            
+            // Apply to sections
+            sections.forEach(section => {
+                section.style.padding = spacing;
+                section.style.margin = `0 0 ${parseInt(spacing)}px 0`;
+            });
+            
+            // Reset odds buttons to their original appearance
+            const oddsButtons = preview.querySelectorAll('.mock-odds-btn');
+            oddsButtons.forEach(btn => {
+                btn.style.padding = '8px 12px';
+                btn.style.borderRadius = '6px';
+                btn.style.margin = '2px';
+                btn.style.fontSize = '14px';
+            });
+            
+            console.log(`Applied layout style: ${layoutStyle} - spacing: ${spacing}, radius: ${radius}`);
+        }
+
+        // Apply button style to preview
+        function applyButtonStyle(buttonStyle) {
+            // Only apply to view buttons and refresh button, NOT odds buttons
+            const buttons = document.querySelectorAll('.mock-sportsbook .mock-view-btn, .mock-sportsbook .mock-refresh-btn');
+            
+            buttons.forEach(button => {
+                // Remove all button style classes
+                button.classList.remove('btn-rounded', 'btn-sharp', 'btn-minimal');
+                
+                // Add the selected button style class
+                button.classList.add(`btn-${buttonStyle}`);
+                
+                // Apply styles directly for immediate effect
+                switch(buttonStyle) {
+                    case 'rounded':
+                        button.style.borderRadius = '25px';
+                        button.style.border = 'none';
+                        break;
+                    case 'sharp':
+                        button.style.borderRadius = '0';
+                        button.style.border = 'none';
+                        break;
+                    case 'minimal':
+                        button.style.borderRadius = '4px';
+                        button.style.border = '1px solid rgba(255, 255, 255, 0.2)';
+                        break;
+                }
+            });
+            
+            console.log(`Applied button style: ${buttonStyle}`);
+        }
+
+        // Apply card style to preview
+        function applyCardStyle(cardStyle) {
+            const cards = document.querySelectorAll('.mock-sportsbook .mock-sport-card, .mock-sportsbook .mock-event-row');
+            
+            cards.forEach(card => {
+                // Remove all card style classes
+                card.classList.remove('card-shadow', 'card-border', 'card-minimal', 'card-glow');
+                
+                // Add the selected card style class
+                card.classList.add(`card-${cardStyle}`);
+                
+                // Apply styles directly for immediate effect
+                switch(cardStyle) {
+                    case 'shadow':
+                        card.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)';
+                        card.style.border = 'none';
+                        break;
+                    case 'border':
+                        card.style.boxShadow = 'none';
+                        card.style.border = '2px solid rgba(255, 255, 255, 0.1)';
+                        break;
+                    case 'minimal':
+                        card.style.boxShadow = 'none';
+                        card.style.border = '1px solid rgba(255, 255, 255, 0.05)';
+                        break;
+                    case 'glow':
+                        card.style.boxShadow = '0 0 20px rgba(34, 197, 94, 0.3)';
+                        card.style.border = 'none';
+                        break;
+                }
+            });
+            
+            console.log(`Applied card style: ${cardStyle}`);
+        }
+
+        // Apply font family to preview
+        function applyFontFamily(fontFamily) {
+            const preview = document.querySelector('.mock-sportsbook');
+            if (!preview) return;
+            
+            // Apply font family to the entire preview
+            preview.style.fontFamily = fontFamily;
+            
+            console.log(`Applied font family: ${fontFamily}`);
+        }
+
+        // Update live preview
+        function updatePreview() {
+            console.log('Updating preview with theme:', currentTheme);
+            
+            // Get the preview element
+            const preview = document.querySelector('.mock-sportsbook');
+            
+            // Set CSS variables on document root for global access
+            const cssVars = {
+                '--preview-primary-color': currentTheme.primaryColor,
+                '--preview-secondary-color': currentTheme.secondaryColor,
+                '--preview-accent-color': currentTheme.accentColor,
+                '--preview-bg-color': currentTheme.backgroundColor,
+                '--preview-text-color': currentTheme.textColor,
+                '--preview-font': currentTheme.fontFamily
+            };
+            
+            // Set on document root for global access
+            Object.entries(cssVars).forEach(([key, value]) => {
+                document.documentElement.style.setProperty(key, value);
+            });
+            
+            // Also set directly on the preview element for immediate effect
+            Object.entries(cssVars).forEach(([key, value]) => {
+                preview.style.setProperty(key, value);
+            });
+            
+            console.log('CSS variables set on document root and preview element:', cssVars);
+            
+            // Force a repaint to ensure changes are visible
+            preview.style.display = 'none';
+            preview.offsetHeight; // Force reflow
+            preview.style.display = 'flex';
+            
+            // Debug: Check what CSS variables are actually applied
+            console.log('Computed styles after update:');
+            console.log('Background color:', getComputedStyle(preview).backgroundColor);
+            console.log('Color:', getComputedStyle(preview).color);
+            console.log('CSS variables on preview element:');
+            console.log('--preview-bg-color:', preview.style.getPropertyValue('--preview-bg-color'));
+            console.log('--preview-text-color:', preview.style.getPropertyValue('--preview-text-color'));
+            
+            // Test: Set a simple background color directly to see if it works
+            console.log('Setting test background color directly...');
+            preview.style.backgroundColor = currentTheme.backgroundColor;
+            console.log('Direct background color set to:', preview.style.backgroundColor);
+            
+            // Also set background color on preview frame and other elements
+            const previewFrame = document.querySelector('.preview-frame');
+            if (previewFrame) {
+                previewFrame.style.backgroundColor = currentTheme.backgroundColor;
+                console.log('Preview frame background set to:', currentTheme.backgroundColor);
+            }
+            
+            // Set background on all elements that should use it (only the mock sportsbook preview elements)
+            document.querySelectorAll('.mock-content, .mock-sport-card').forEach(el => {
+                el.style.backgroundColor = currentTheme.backgroundColor;
+            });
+            console.log('Mock sportsbook background elements updated to:', currentTheme.backgroundColor);
+            
+            // Update logo in preview
+            const logoElement = preview.querySelector('.logo-icon');
+            const sportsbookNameElement = preview.querySelector('.sportsbook-name');
+            
+            if (logoElement) {
+                if (currentTheme.logoType === 'custom' && currentTheme.logoUrl) {
+                    logoElement.style.backgroundImage = `url(${currentTheme.logoUrl})`;
+                    logoElement.style.backgroundSize = 'contain';
+                    logoElement.style.backgroundRepeat = 'no-repeat';
+                    logoElement.style.backgroundPosition = 'center';
+                    logoElement.textContent = '';
+                } else {
+                    // Use preset logo
+                    const logoMap = {
+                        'default': '⚽',
+                        'crown': '👑',
+                        'trophy': '🏆',
+                        'star': '⭐',
+                        'diamond': '💎',
+                        'fire': '🔥',
+                        'lightning': '⚡',
+                        'target': '🎯'
+                    };
+                    logoElement.style.backgroundImage = 'none';
+                    logoElement.textContent = logoMap[currentTheme.logoType] || '⚽';
+                }
+            }
+            
+            // Update sportsbook name
+            if (sportsbookNameElement) {
+                sportsbookNameElement.textContent = currentTheme.sportsbookName;
+            }
+            
+            // Apply layout style
+            applyLayoutStyle(currentTheme.layoutStyle);
+            
+            // Apply button style
+            applyButtonStyle(currentTheme.buttonStyle);
+            
+            // Apply card style
+            applyCardStyle(currentTheme.cardStyle);
+            
+            // Apply font family
+            applyFontFamily(currentTheme.fontFamily);
+            
+            // Debug: Add a test element to show current CSS variables
+            let testElement = preview.querySelector('.css-vars-test');
+            if (!testElement) {
+                testElement = document.createElement('div');
+                testElement.className = 'css-vars-test';
+                testElement.style.cssText = `
+                    position: fixed;
+                    top: 10px;
+                    right: 10px;
+                    background: rgba(0,0,0,0.8);
+                    color: white;
+                    padding: 10px;
+                    border-radius: 5px;
+                    font-size: 12px;
+                    z-index: 1000;
+                    font-family: monospace;
+                `;
+                preview.appendChild(testElement);
+            }
+            
+            testElement.innerHTML = `
+                <div>BG: ${currentTheme.backgroundColor}</div>
+                <div>Text: ${currentTheme.textColor}</div>
+                <div>Primary: ${currentTheme.primaryColor}</div>
+                <div>CSS Var BG: ${getComputedStyle(preview).getPropertyValue('--preview-bg-color')}</div>
+                <div>CSS Var Text: ${getComputedStyle(preview).getPropertyValue('--preview-text-color')}</div>
+            `;
+        }
+
+        // Validate color
+        function isValidColor(color) {
+            return /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(color);
+        }
+
+        // Reset to default
+        function resetToDefault() {
+            currentTheme = {
+                primaryColor: '#22C55E',
+                secondaryColor: '#3b82f6',
+                accentColor: '#22C55E',
+                backgroundColor: '#1A1A1A',
+                textColor: '#FFFFFF',
+                fontFamily: 'Inter, sans-serif',
+                layoutStyle: 'modern',
+                buttonStyle: 'rounded',
+                cardStyle: 'shadow',
+                logoType: 'default',
+                logoUrl: '',
+                sportsbookName: 'Your Sportsbook'
+            };
+            
+            updateFormInputs();
+            updatePreview();
+            
+            // Reset active states
+            document.querySelectorAll('.theme-template').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.style-option').forEach(o => o.classList.remove('active'));
+            document.querySelectorAll('.style-option[data-style="modern"], .style-option[data-button="rounded"], .style-option[data-card="shadow"]').forEach(o => o.classList.add('active'));
+            
+            // Reset logo presets
+            document.querySelectorAll('.logo-preset').forEach(p => p.classList.remove('active'));
+            document.querySelector('.logo-preset[data-logo="default"]').classList.add('active');
+            
+            // Reset sportsbook name input
+            document.getElementById('sportsbookName').value = 'Your Sportsbook';
+        }
+
+        // Save theme
+        async function saveTheme() {
+            try {
+                // Get the current subdomain from the URL path
+                const pathParts = window.location.pathname.split('/');
+                const subdomain = pathParts[1]; // Get subdomain from /subdomain/admin/theme-customizer
+                
+                // Construct the API endpoint relative to the current domain
+                const apiEndpoint = `/${subdomain}/api/save-theme`;
+                
+                console.log('Saving theme to:', apiEndpoint);
+                
+                const response = await fetch(apiEndpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(currentTheme)
+                });
+                
+                if (response.ok) {
+                    alert('Theme saved successfully! Your sportsbook will now use this theme.');
+                } else {
+                    const errorData = await response.json();
+                    console.error('Server error:', errorData);
+                    alert(`Failed to save theme: ${errorData.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error saving theme:', error);
+                alert('Failed to save theme. Please try again.');
+            }
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - GoalServe Sportsbook</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-container {
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #4ade80, #22c55e);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        .logo-text {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4ade80;
+        }
+
+        .login-title {
+            text-align: center;
+            font-size: 28px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #ffffff;
+        }
+
+        .login-subtitle {
+            text-align: center;
+            color: #94a3b8;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            font-weight: 600;
+            color: #e2e8f0;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 15px 20px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            font-size: 16px;
+            background: rgba(255, 255, 255, 0.05);
+            color: #ffffff;
+            transition: all 0.3s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #4ade80;
+            box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .form-input::placeholder {
+            color: #64748b;
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #4ade80, #22c55e);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+        }
+
+        .login-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(74, 222, 128, 0.3);
+        }
+
+        .login-btn:active {
+            transform: translateY(0);
+        }
+
+        .login-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alert {
+            padding: 15px 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .alert-error {
+            background: rgba(239, 68, 68, 0.1);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .register-link {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .register-link a {
+            color: #4ade80;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .register-link a:hover {
+            color: #22c55e;
+        }
+
+        @media (max-width: 768px) {
+            .login-container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+
+            .login-title {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <div class="logo-icon">⚽</div>
+            <div class="logo-text">GoalServe</div>
+        </div>
+        
+        <h1 class="login-title">Admin Login</h1>
+        <p class="login-subtitle">Access your sportsbook admin panel</p>
+
+        <div id="alert" class="alert"></div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="login" class="form-label">Username</label>
+                <input 
+                    type="text" 
+                    id="login" 
+                    name="login" 
+                    class="form-input" 
+                    placeholder="Enter your admin username"
+                    required
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="password" class="form-label">Password</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    name="password" 
+                    class="form-input" 
+                    placeholder="Enter your password"
+                    required
+                >
+            </div>
+
+            <button type="submit" class="login-btn" id="loginBtn">
+                <span id="btnText">Sign In</span>
+                <span id="btnLoading" class="loading" style="display: none;"></span>
+            </button>
+        </form>
+
+        <div class="register-link">
+            <p>Don't have a sportsbook yet? <a href="/register-sportsbook.html">Launch Your Sportsbook</a></p>
+        </div>
+    </div>
+
+    <script>
+        // Get subdomain from URL path
+        function getSubdomainFromPath() {
+            const path = window.location.pathname;
+            const match = path.match(/\/admin\/([^\/]+)/);
+            return match ? match[1] : null;
+        }
+
+        // Check if already logged in
+        async function checkAuth() {
+            try {
+                const response = await fetch('/api/admin-check');
+                const result = await response.json();
+                
+                if (result.success && result.logged_in) {
+                    // Already logged in, redirect to admin panel
+                    const subdomain = getSubdomainFromPath() || result.operator.subdomain;
+                    window.location.href = `/admin/${subdomain}/dashboard`;
+                }
+            } catch (error) {
+                console.log('Auth check failed:', error);
+            }
+        }
+
+        // Check auth on page load
+        checkAuth();
+
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const loginBtn = document.getElementById('loginBtn');
+            const btnText = document.getElementById('btnText');
+            const btnLoading = document.getElementById('btnLoading');
+            const alert = document.getElementById('alert');
+            
+            // Show loading state
+            loginBtn.disabled = true;
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline-block';
+            alert.style.display = 'none';
+            
+            // Get form data
+            const formData = new FormData(this);
+            const data = {
+                login: formData.get('login'),
+                password: formData.get('password'),
+                subdomain: getSubdomainFromPath()
+            };
+            
+            try {
+                const response = await fetch('/api/admin-login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
+                    // Success - redirect to admin dashboard
+                    const subdomain = data.subdomain || result.operator.subdomain;
+                    window.location.href = `/admin/${subdomain}/dashboard`;
+                } else {
+                    // Error
+                    alert.className = 'alert alert-error';
+                    alert.textContent = result.error || 'Login failed. Please try again.';
+                    alert.style.display = 'block';
+                }
+                
+            } catch (error) {
+                console.error('Login error:', error);
+                alert.className = 'alert alert-error';
+                alert.textContent = 'Network error. Please check your connection and try again.';
+                alert.style.display = 'block';
+            }
+            
+            // Reset button state
+            loginBtn.disabled = false;
+            btnText.style.display = 'inline';
+            btnLoading.style.display = 'none';
+        });
+    </script>
+</body>
+</html>
+

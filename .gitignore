@@ -1,0 +1,103 @@
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+src/database/*.db
+src/database/*.sqlite
+src/database/*.sqlite3
+src/database/*.db-shm
+src/database/*.db-wal
+
+# Environment files
+.env
+.env.*
+env_template.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Flask
+flask_session/
+instance/
+.webassets-cache
+
+# Logs
+*.log
+app.log
+logs/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Data files (keep structure, exclude actual data)
+goalserve_data/*.csv
+goalserve_data/*.json
+goalserve_data/*.db
+Sports Pre Match/*/*.json
+
+# Test files
+test_*.py
+debug_*.py
+
+# Backup files
+*_backup_*
+*.backup
+*.bak
+
+# Cache
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local configuration
+config.local.py
+settings.local.py

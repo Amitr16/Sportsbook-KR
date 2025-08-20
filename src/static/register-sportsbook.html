@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Launch Your Sportsbook - GoalServe Platform</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 600px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2, #f093fb, #f5576c);
+            background-size: 300% 100%;
+            animation: gradient 3s ease infinite;
+        }
+
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .customization-link {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+            color: white;
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(245, 87, 108, 0.3);
+        }
+
+        .customization-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(245, 87, 108, 0.4);
+            text-decoration: none;
+            color: white;
+        }
+
+        .customization-link::before {
+            content: '🎨 ';
+            margin-right: 5px;
+        }
+
+        .logo {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        .logo-text {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .title {
+            font-size: 32px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 15px 20px;
+            border: 2px solid #e1e5e9;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .form-input::placeholder {
+            color: #aaa;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .features {
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 1px solid #e1e5e9;
+        }
+
+        .features-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .feature-item {
+            text-align: center;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            transition: transform 0.3s ease;
+        }
+
+        .feature-item:hover {
+            transform: translateY(-5px);
+        }
+
+        .feature-icon {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 15px;
+            color: white;
+            font-size: 20px;
+        }
+
+        .feature-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .feature-desc {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        .alert {
+            padding: 15px 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+
+            .title {
+                font-size: 28px;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">⚽</div>
+                <div class="logo-text">GoalServe</div>
+            </div>
+            <h1 class="title">Launch Your Sportsbook</h1>
+            <p class="subtitle">
+                Start your own sports betting operation with our comprehensive platform. 
+                Get your custom sportsbook website and admin panel in minutes.
+            </p>
+        </div>
+
+        <div id="alert" class="alert"></div>
+
+        <form id="registrationForm">
+            <div class="form-group">
+                <label for="sportsbookName" class="form-label">Sportsbook Name *</label>
+                <input 
+                    type="text" 
+                    id="sportsbookName" 
+                    name="sportsbookName" 
+                    class="form-input" 
+                    placeholder="Enter your sportsbook name (e.g., Elite Sports Betting)"
+                    required
+                    maxlength="100"
+                    oninput="updateURLPreview()"
+                >
+                
+                <!-- URL Preview -->
+                <div class="url-preview" id="urlPreview" style="display: none; margin-top: 15px; padding: 15px; background: rgba(102, 126, 234, 0.1); border-radius: 10px; border-left: 4px solid #667eea;">
+                    <h4 style="margin: 0 0 10px 0; color: #667eea; font-size: 16px;">🔗 Your URLs will be:</h4>
+                    <p style="margin: 5px 0; font-size: 14px;"><strong>🏢 Admin Panel:</strong> <span id="adminURL" style="color: #667eea; font-family: monospace;">http://localhost:5000/[subdomain]/admin</span></p>
+                    <p style="margin: 5px 0; font-size: 14px;"><strong>👥 Client App:</strong> <span id="clientURL" style="color: #667eea; font-family: monospace;">http://localhost:5000/[subdomain]</span></p>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="login" class="form-label">Admin Login Username *</label>
+                <input 
+                    type="text" 
+                    id="login" 
+                    name="login" 
+                    class="form-input" 
+                    placeholder="Choose your admin username"
+                    required
+                    pattern="[a-zA-Z0-9_]{3,50}"
+                    title="Username must be 3-50 characters, letters, numbers, and underscores only"
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="password" class="form-label">Admin Password *</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    name="password" 
+                    class="form-input" 
+                    placeholder="Create a secure password"
+                    required
+                    minlength="8"
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="email" class="form-label">Email Address</label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    name="email" 
+                    class="form-input" 
+                    placeholder="your@email.com (optional)"
+                >
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">
+                <span id="btnText">Launch My Sportsbook</span>
+                <span id="btnLoading" class="loading" style="display: none;"></span>
+            </button>
+        </form>
+
+        <div class="features">
+            <h3 class="features-title">What You Get</h3>
+            <div class="features-grid">
+                <div class="feature-item">
+                    <div class="feature-icon">🌐</div>
+                    <div class="feature-title">Custom Website</div>
+                    <div class="feature-desc">Your own branded betting website at /sportsbook/yourname</div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">⚙️</div>
+                    <div class="feature-title">Admin Panel</div>
+                    <div class="feature-desc">Complete admin dashboard at /admin/yourname</div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">📊</div>
+                    <div class="feature-title">Analytics</div>
+                    <div class="feature-desc">Real-time betting analytics and user management</div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">🔒</div>
+                    <div class="feature-title">Secure</div>
+                    <div class="feature-desc">Bank-level security with isolated user data</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function updateURLPreview() {
+            const sportsbookName = document.getElementById('sportsbookName').value.trim();
+            const urlPreview = document.getElementById('urlPreview');
+            
+            if (sportsbookName) {
+                // Generate subdomain preview (simplified version)
+                const subdomain = sportsbookName.toLowerCase()
+                    .replace(/[^a-z0-9\s]/g, '')
+                    .replace(/\s+/g, '')
+                    .substring(0, 15);
+                
+                document.getElementById('adminURL').textContent = `http://localhost:5000/${subdomain}/admin`;
+                document.getElementById('clientURL').textContent = `http://localhost:5000/${subdomain}`;
+                urlPreview.style.display = 'block';
+            } else {
+                urlPreview.style.display = 'none';
+            }
+        }
+
+        document.getElementById('registrationForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const btnText = document.getElementById('btnText');
+            const btnLoading = document.getElementById('btnLoading');
+            const alert = document.getElementById('alert');
+            
+            // Show loading state
+            submitBtn.disabled = true;
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline-block';
+            alert.style.display = 'none';
+            
+            // Get form data
+            const formData = new FormData(this);
+            const data = {
+                sportsbook_name: formData.get('sportsbookName'),
+                login: formData.get('login'),
+                password: formData.get('password'),
+                email: formData.get('email') || null
+            };
+            
+            try {
+                const response = await fetch('/api/register-sportsbook', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
+                    // Success
+                    alert.className = 'alert alert-success';
+                    alert.innerHTML = `
+                        <strong>Success!</strong> Your sportsbook "${result.sportsbook_name}" has been created!<br><br>
+                        <strong>Next Steps:</strong><br>
+                        • <a href="/${result.subdomain}/admin" style="color: #155724; text-decoration: underline;">Access your admin panel</a><br>
+                        • <a href="/${result.subdomain}/admin/theme-customizer" style="color: #155724; text-decoration: underline;">Customize your sportsbook theme</a><br>
+                        • <a href="/${result.subdomain}" style="color: #155724; text-decoration: underline;">View your sportsbook</a>
+                    `;
+                    alert.style.display = 'block';
+                    
+                    // Reset form
+                    this.reset();
+                    
+                    // Redirect after 5 seconds to give time to read the links
+                    setTimeout(() => {
+                        window.location.href = `/${result.subdomain}/admin`;
+                    }, 5000);
+                    
+                } else {
+                    // Error
+                    alert.className = 'alert alert-error';
+                    alert.textContent = result.error || 'Registration failed. Please try again.';
+                    alert.style.display = 'block';
+                }
+                
+            } catch (error) {
+                console.error('Registration error:', error);
+                alert.className = 'alert alert-error';
+                alert.textContent = 'Network error. Please check your connection and try again.';
+                alert.style.display = 'block';
+            }
+            
+            // Reset button state
+            submitBtn.disabled = false;
+            btnText.style.display = 'inline';
+            btnLoading.style.display = 'none';
+        });
+
+        // Real-time validation
+        document.getElementById('login').addEventListener('input', function() {
+            const value = this.value;
+            const isValid = /^[a-zA-Z0-9_]{3,50}$/.test(value);
+            
+            if (value && !isValid) {
+                this.style.borderColor = '#dc3545';
+            } else {
+                this.style.borderColor = '#e1e5e9';
+            }
+        });
+
+        document.getElementById('password').addEventListener('input', function() {
+            const value = this.value;
+            const isValid = value.length >= 8;
+            
+            if (value && !isValid) {
+                this.style.borderColor = '#dc3545';
+            } else {
+                this.style.borderColor = '#e1e5e9';
+            }
+        });
+    </script>
+</body>
+</html>
+

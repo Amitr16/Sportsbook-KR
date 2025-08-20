@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login • Sports Betting</title>
+  <style>
+    body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b1020; color:#e5e7eb; }
+    .center { min-height:100vh; display:grid; place-items:center; }
+    .card { width:100%; max-width:380px; background:linear-gradient(135deg,#1a1a2e,#16213e); border:1px solid rgba(255,255,255,.12); border-radius:16px; padding:24px; box-shadow:0 20px 60px rgba(0,0,0,.35); }
+    h1 { margin:0 0 12px; font-size:22px; text-align:center; }
+    .muted { color:#9ca3af; font-size:13px; text-align:center; margin-bottom:20px; }
+    .group { margin-bottom:14px; }
+    label { display:block; margin:0 0 6px; font-size:13px; color:#cbd5e1; }
+    input { width:100%; box-sizing:border-box; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.04); color:#fff; }
+    button { width:100%; padding:11px; border:none; border-radius:10px; background:#22c55e; color:#081226; font-weight:600; cursor:pointer; transition:.15s; }
+    button:hover { transform:translateY(-1px); box-shadow:0 10px 30px rgba(34,197,94,.35); }
+    .toggle { margin-top:10px; text-align:center; font-size:13px; color:#9ca3af; }
+    .toggle a { color:#4ade80; text-decoration:none; }
+    .toggle a:hover { text-decoration:underline; }
+    .error { color:#f87171; font-size:13px; margin-top:6px; min-height:18px; }
+    .divider { display:flex; align-items:center; gap:12px; color:#9ca3af; font-size:12px; margin:12px 0; }
+    .divider::before, .divider::after { content:""; flex:1; height:1px; background:rgba(255,255,255,.12); }
+    .google-btn { display:flex; align-items:center; gap:10px; width:100%; padding:11px 14px; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#fff; color:#111827; font-weight:600; cursor:pointer; text-decoration:none; justify-content:center; }
+    .google-btn:hover { box-shadow:0 10px 30px rgba(255,255,255,.25); }
+    .google-icon { width:18px; height:18px; display:inline-block; }
+  </style>
+</head>
+<body>
+  <div class="center">
+    <div class="card">
+      <h1 id="title">Login</h1>
+      <p class="muted" id="subtitle">Access your account to start betting</p>
+      <form id="authForm" data-mode="login">
+        <div class="group">
+          <label for="username">Username or Email</label>
+          <input id="username" type="text" autocomplete="username" required />
+        </div>
+        <div class="group" id="emailGroup" style="display:none;">
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="email" />
+        </div>
+        <div class="group">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required />
+        </div>
+        <div class="group" id="confirmPasswordGroup" style="display:none;">
+          <label for="confirmPassword">Confirm Password</label>
+          <input id="confirmPassword" type="password" autocomplete="new-password" />
+        </div>
+        <div class="error" id="error"></div>
+        <button id="submitBtn" type="submit">Login</button>
+        <div class="divider">or</div>
+        <a class="google-btn" id="googleBtn" href="/api/auth/google/login">
+          <svg class="google-icon" viewBox="0 0 533.5 544.3" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="#EA4335" d="M533.5 278.4c0-18.6-1.6-37-4.7-54.8H272v103.8h147.3c-6.4 34.7-25.9 64.1-55 83.8v69.7h88.9c52 47.9 80.3 118.6 80.3 197.5 0 21.7-2.1 42.9-6 63.4h-1.1V278.4z"/><path fill="#34A853" d="M272 544.3c73.8 0 135.6-24.4 180.7-66.2l-88.9-69.7c-24.7 16.5-56.2 26.3-91.8 26.3-70.6 0-130.4-47.6-151.9-111.4H28.2v69.9C73 500.2 166.6 544.3 272 544.3z"/><path fill="#4A90E2" d="M120.1 323.3c-5.3-15.7-8.2-32.4-8.2-49.6 0-17.2 2.9-33.9 8.2-49.6v-69.9H28.2C10.2 177.1 0 214 0 256s10.2 78.9 28.2 112.4l91.9-69.1z"/><path fill="#FBBC05" d="M272 141.9c40.1 0 76.1 13.8 104.5 40.9l78.4-78.4C407.6 44.1 345.8 19.9 272 19.9 166.6 19.9 73 63.8 28.2 143.8l91.9 69.1C141.6 189.5 201.4 141.9 272 141.9z"/></svg>
+          Continue with Google
+        </a>
+      </form>
+      <div class="toggle">
+        <span id="toggleText">Don't have an account?</span>
+        <a href="#" id="toggleLink">Register here</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = '';
+
+    function setMode(mode) {
+      const isLogin = mode === 'login';
+      document.getElementById('title').textContent = isLogin ? 'Login' : 'Register';
+      document.getElementById('subtitle').textContent = isLogin ? 'Access your account to start betting' : 'Create your account to start betting';
+      document.getElementById('emailGroup').style.display = isLogin ? 'none' : 'block';
+      document.getElementById('confirmPasswordGroup').style.display = isLogin ? 'none' : 'block';
+      document.getElementById('submitBtn').textContent = isLogin ? 'Login' : 'Create Account';
+      document.getElementById('toggleText').textContent = isLogin ? "Don't have an account?" : 'Already have an account?';
+      document.getElementById('toggleLink').textContent = isLogin ? 'Register here' : 'Login here';
+      document.getElementById('authForm').setAttribute('data-mode', mode);
+      document.getElementById('error').textContent = '';
+    }
+
+    document.getElementById('toggleLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      const currentMode = document.getElementById('authForm').getAttribute('data-mode') || 'login';
+      setMode(currentMode === 'login' ? 'register' : 'login');
+    });
+
+    document.getElementById('authForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const mode = e.currentTarget.getAttribute('data-mode') || 'login';
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const email = document.getElementById('email').value.trim();
+      const confirmPassword = document.getElementById('confirmPassword').value;
+      const errorEl = document.getElementById('error');
+      errorEl.textContent = '';
+
+      try {
+        let response;
+        if (mode === 'login') {
+          response = await fetch(`${API_BASE}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+          });
+        } else {
+          if (!email) { errorEl.textContent = 'Email is required'; return; }
+          if (password !== confirmPassword) { errorEl.textContent = 'Passwords do not match'; return; }
+          response = await fetch(`${API_BASE}/api/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, email, password })
+          });
+        }
+
+        const data = await response.json();
+        if (!response.ok) { errorEl.textContent = data.error || data.message || 'Authentication failed'; return; }
+
+        if (mode === 'register') { alert('Registration successful! You can now login.'); setMode('login'); return; }
+
+        // Login success
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user || {}));
+        window.location.href = '/';
+      } catch (err) {
+        errorEl.textContent = 'Request failed. Please try again.';
+      }
+    });
+
+    // If already logged in, redirect to app
+    (function init() {
+      const token = localStorage.getItem('token');
+      if (token) { window.location.href = '/'; return; }
+      setMode('login');
+    })();
+  </script>
+</body>
+</html>
+
+
