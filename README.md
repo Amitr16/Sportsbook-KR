@@ -1,220 +1,312 @@
-# GoalServe Sports Betting Platform - FINAL COMPLETE VERSION
+# 🏆 Kryzel Sports Betting Platform
 
-## 🎯 **Complete Feature Set**
+A comprehensive, multi-tenant sports betting platform built with Flask, featuring automated revenue management, real-time odds, and complete admin controls.
 
-This is the final complete version of the GoalServe sports betting platform with all requested features implemented and tested.
+## 🌟 Features
 
-## ✅ **New Features Implemented**
+### 🎯 Core Platform
+- **Multi-tenant Architecture** - Each operator gets their own branded subdomain
+- **Real-time Sports Odds** - Live odds from multiple sports (Soccer, Basketball, Tennis, etc.)
+- **Automated Bet Settlement** - AI-powered match result detection and bet processing
+- **Revenue Management** - Automated daily revenue calculations and wallet updates
+- **Admin Dashboards** - Comprehensive operator and superadmin interfaces
 
-### **1. Max Liability & Max Possible Gain Analysis**
-- **Replaced "Odds Count"** with financial risk/reward columns
-- **Max Liability**: Worst-case scenario (maximum loss) for the platform
-- **Max Possible Gain**: Best-case scenario (maximum profit) for the platform
-- **Real-time calculations** based on actual user betting patterns
+### 💰 Revenue System
+- **Daily Revenue Calculator** - Automated daily profit/loss calculations
+- **Operator Wallet Management** - Automatic wallet updates with surplus handling
+- **Revenue Distribution** - Smart profit sharing between bookmaker and community
+- **Negative Revenue Protection** - Safe handling of loss days with wallet caps
 
-### **2. Event Disable/Enable Functionality**
-- **Admin Control**: Enable/disable betting events in real-time
-- **Database Persistence**: Changes saved to `disabled_events` table
-- **User Filtering**: Disabled events hidden from user betting interface
-- **Visual Indicators**: Status badges and button states update instantly
+### 🎨 Branding & Customization
+- **Custom Themes** - Each operator can customize their platform appearance
+- **White-label Solution** - Complete branding control for operators
+- **Responsive Design** - Mobile-first, modern UI/UX
 
-### **3. Enhanced Admin Dashboard**
-- **Financial Overview**: Total liability and gain across all events
-- **Event Management**: Filter by sport, market, search events
-- **User Management**: View user statistics and control access
-- **Risk Assessment**: Color-coded financial metrics
+### 🔒 Security & Authentication
+- **Multi-level Authentication** - User, Admin, and Superadmin access levels
+- **Session Management** - Secure session handling with Redis
+- **CORS Protection** - Configurable cross-origin resource sharing
+- **Environment-based Configuration** - Secure secret management
 
-## 🚀 **Quick Start**
+## 🚀 Quick Start
 
-### **1. Start User Betting App:**
+### Prerequisites
+- Python 3.8+
+- PostgreSQL 12+
+- Redis (optional, for session management)
+- Node.js 16+ (for frontend deployment)
+
+### 1. Clone the Repository
 ```bash
-cd GoalServe-FINAL-COMPLETE
-python3 app.py
+git clone https://github.com/Amitr16/Sportsbook-KR.git
+cd Sportsbook-KR
 ```
-- **URL**: http://localhost:5000
-- **Features**: Sports betting, user registration, event filtering
 
-### **2. Start Admin Dashboard:**
+### 2. Install Dependencies
 ```bash
-python3 admin_app.py
-```
-- **URL**: http://localhost:8080
-- **Features**: Event management, financial analysis, user control
-
-## 📊 **Admin Dashboard Features**
-
-### **Betting Events Management:**
-- **Total Events**: Count of all available betting events
-- **Active Events**: Count of currently enabled events
-- **Max Liability**: Total platform risk exposure
-- **Max Possible Gain**: Total platform profit potential
-
-### **Event Controls:**
-- **Disable/Enable**: Toggle event availability for users
-- **Filter by Sport**: Baseball, Basketball, Soccer, etc.
-- **Filter by Market**: Match Winner, Over/Under, etc.
-- **Search Events**: Find specific events by name
-
-### **Financial Metrics:**
-- **Per-Event Analysis**: Individual liability and gain calculations
-- **Color Coding**: Red for liability (risk), Green for gain (profit)
-- **Real-time Updates**: Calculations based on current betting patterns
-
-## 🗄️ **Database Schema**
-
-### **New Table: `disabled_events`**
-```sql
-CREATE TABLE disabled_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_key TEXT UNIQUE,
-    sport TEXT,
-    event_name TEXT,
-    market TEXT,
-    is_disabled BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### **Existing Tables:**
-- `users`: User accounts and balances
-- `bets`: Betting history and calculations
-- `sessions`: User authentication
-
-## 🔧 **Technical Implementation**
-
-### **Financial Calculations:**
-```python
-def calculate_event_financials(event_id, sport_name):
-    # Get all pending bets for this event
-    # Group bets by selection (outcome)
-    # Calculate platform profit/loss for each possible outcome
-    # Return max liability (worst case) and max possible gain (best case)
-```
-
-### **Event Filtering:**
-```python
-def filter_disabled_events(events, sport_name):
-    # Query disabled_events table
-    # Remove disabled events/markets from user-facing data
-    # Return filtered events list
-```
-
-### **Toggle API:**
-```python
-@app.route('/api/betting-events/<event_key>/toggle', methods=['POST'])
-def toggle_event_status(event_key):
-    # Check if event is currently disabled
-    # Add/remove from disabled_events table
-    # Return updated status
-```
-
-## 📁 **Project Structure**
-
-```
-GoalServe-FINAL-COMPLETE/
-├── app.py                          # Main user betting application
-├── admin_app.py                    # Admin dashboard with financial analysis
-├── src/
-│   ├── routes/
-│   │   ├── auth.py                 # User authentication
-│   │   ├── betting.py              # Betting functionality
-│   │   └── json_sports.py          # Sports data API (with event filtering)
-│   ├── models/
-│   │   └── betting.py              # Database models
-│   ├── static/
-│   │   ├── index.html              # User betting interface
-│   │   └── login.html              # User login page
-│   └── database/
-│       └── app.db                  # SQLite database (with disabled_events table)
-├── Sports Pre Match/               # JSON sports data files
-└── README.md                       # This documentation
-```
-
-## 🧪 **Testing Results**
-
-### **Admin Dashboard:**
-- ✅ Max Liability/Gain columns display correctly
-- ✅ Event disable/enable functionality working
-- ✅ Real-time status updates and calculations
-- ✅ Database persistence verified
-
-### **User App Integration:**
-- ✅ Disabled events filtered from betting interface
-- ✅ Sports API respects disabled_events table
-- ✅ No disabled events visible to users
-
-### **Database:**
-- ✅ disabled_events table created and functional
-- ✅ Event toggle operations persist correctly
-- ✅ Financial calculations use real betting data
-
-## 💰 **Financial Analysis Examples**
-
-### **Max Liability Calculation:**
-For "Manchester vs Liverpool - Match Winner":
-- Users bet $1000 on Manchester, $500 on Draw, $200 on Liverpool
-- **If Manchester wins**: Platform pays $2000, collected $1700 → **Loss $300**
-- **If Draw wins**: Platform pays $1500, collected $1700 → Profit $200
-- **If Liverpool wins**: Platform pays $800, collected $1700 → Profit $900
-
-**Result**: Max Liability = $300 (worst case scenario)
-
-### **Max Possible Gain Calculation:**
-**Result**: Max Possible Gain = $900 (best case scenario)
-
-## 🎉 **Complete Feature List**
-
-### **User Features:**
-- ✅ Sports betting across 8+ sports
-- ✅ User registration and authentication
-- ✅ Real-time odds and event data
-- ✅ Betting history and balance management
-- ✅ Responsive design for mobile/desktop
-
-### **Admin Features:**
-- ✅ **NEW**: Max Liability and Max Possible Gain analysis
-- ✅ **NEW**: Event disable/enable functionality
-- ✅ **NEW**: Financial risk assessment dashboard
-- ✅ User management and statistics
-- ✅ Betting event oversight
-- ✅ Real-time platform monitoring
-
-### **Technical Features:**
-- ✅ **NEW**: disabled_events database table
-- ✅ **NEW**: Event filtering in sports API
-- ✅ **NEW**: Financial calculation engine
-- ✅ SQLite database with full schema
-- ✅ RESTful API architecture
-- ✅ JSON-based sports data system
-
-## 🔒 **Security & Production Notes**
-
-- Change default secret keys before production deployment
-- Configure proper database backups
-- Set up SSL/HTTPS for production
-- Review and adjust CORS settings
-- Implement rate limiting for API endpoints
-
-## 📞 **Support**
-
-This is the complete, fully-functional GoalServe sports betting platform with all requested features implemented and tested. The system is ready for production deployment with proper security configurations.
-
-**All features working and verified!** 🎯
-
-
-
-## PostgreSQL (shim) quick start
-
-1. Install deps:
-```
 pip install -r requirements.txt
 ```
 
-2. Set your DSN in environment or `.env`:
-```
-PG_DSN=postgresql://USER:PASS@HOST:5432/DBNAME
+### 3. Environment Setup
+```bash
+# Copy environment template
+cp env.example env.local
+
+# Edit environment variables
+nano env.local
 ```
 
-3. Run the app as usual. All legacy `sqlite3` usages are routed through `src/sqlite3_shim` to PostgreSQL via `psycopg`.
+Required environment variables:
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/kryzel_sportsbook
+SECRET_KEY=your-secret-key-here
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+```
 
-> Note: SQLite-only calls like `PRAGMA table_info(...)` were switched to `information_schema.columns`.
+### 4. Database Setup
+```bash
+# Run database migrations
+python setup_database.py
+
+# Or for local development
+python setup_local_db.py
+```
+
+### 5. Start the Application
+```bash
+# Development mode
+python run.py
+
+# Or using the local runner
+python run_local.py
+```
+
+The application will be available at `http://localhost:5000`
+
+## 📁 Project Structure
+
+```
+kryzel-sportsbook/
+├── src/                          # Main application code
+│   ├── routes/                   # Flask route handlers
+│   │   ├── auth.py              # Authentication routes
+│   │   ├── betting.py           # Betting functionality
+│   │   ├── rich_admin_interface.py  # Admin dashboard
+│   │   └── ...
+│   ├── static/                   # Frontend assets
+│   │   ├── index.html           # Main betting interface
+│   │   ├── admin-dashboard.html # Admin panel
+│   │   └── register-sportsbook.html
+│   ├── models/                   # Database models
+│   ├── services/                 # Business logic services
+│   └── main.py                   # Flask application entry point
+├── frontend/                     # Cloudflare Pages frontend
+├── daily_revenue_calculator.py   # Daily revenue automation
+├── update_operator_wallets.py    # Wallet management automation
+├── requirements.txt              # Python dependencies
+└── README.md                     # This file
+```
+
+## 🔧 Configuration
+
+### Database Configuration
+The platform supports both SQLite (development) and PostgreSQL (production):
+
+```python
+# SQLite (default for development)
+DATABASE_URL = "sqlite:///local_app.db"
+
+# PostgreSQL (production)
+DATABASE_URL = "postgresql://user:password@host:port/database"
+```
+
+### Multi-tenant Setup
+Each operator gets their own subdomain:
+- `megabook.yourdomain.com` - Operator subdomain
+- `admin.yourdomain.com` - Admin interface
+- `superadmin.yourdomain.com` - Superadmin interface
+
+## 💼 Revenue Management
+
+### Daily Revenue Calculator
+Automated daily revenue calculations with smart distribution:
+
+```bash
+# Run daily revenue calculations
+python daily_revenue_calculator.py
+
+# Or use the batch script
+run_daily_revenue.bat  # Windows
+./run_daily_revenue.ps1  # PowerShell
+```
+
+### Operator Wallet Updates
+Process revenue distributions and update operator wallets:
+
+```bash
+# Update operator wallets
+python update_operator_wallets.py
+
+# Or use the batch script
+run_wallet_updates.bat  # Windows
+./run_wallet_updates.ps1  # PowerShell
+```
+
+### Revenue Distribution Logic
+- **Profit Days**: 90% to bookmaker, 10% to Kryzel, 30% to community
+- **Loss Days**: 95% to bookmaker, 0% to Kryzel, 35% to community
+- **Wallet Protection**: Bookmaker capital capped at $10,000, surplus goes to revenue wallet
+
+## 🚀 Deployment
+
+### Frontend (Cloudflare Pages)
+```bash
+cd frontend
+npm install
+npm run build
+wrangler pages deploy
+```
+
+### Backend (Fly.io)
+```bash
+# Deploy to Fly.io
+fly deploy
+
+# Or use the deployment script
+./deploy.sh
+```
+
+### Docker Deployment
+```bash
+# Build and run with Docker Compose
+docker-compose up -d
+```
+
+## 📊 Admin Features
+
+### Operator Dashboard
+- Real-time betting statistics
+- Manual bet settlement
+- Revenue tracking
+- User management
+- Theme customization
+
+### Superadmin Dashboard
+- Multi-operator management
+- Global bet settlement
+- System-wide analytics
+- Operator wallet management
+- Revenue distribution oversight
+
+## 🔌 API Endpoints
+
+### Authentication
+- `POST /auth/login` - User login
+- `POST /auth/register` - User registration
+- `POST /auth/logout` - User logout
+
+### Betting
+- `GET /api/sports` - Get available sports
+- `GET /api/odds/{sport}` - Get odds for sport
+- `POST /api/place-bet` - Place a bet
+- `GET /api/bets` - Get user bets
+
+### Admin
+- `GET /admin/dashboard` - Admin dashboard
+- `POST /admin/settle-bet` - Manual bet settlement
+- `GET /admin/revenue` - Revenue analytics
+
+## 🛠️ Development
+
+### Local Development
+```bash
+# Start development server
+python run_local.py
+
+# Run with live reload
+python -m flask run --debug
+```
+
+### Testing
+```bash
+# Run tests
+python -m pytest tests/
+
+# Test specific functionality
+python test_local.py
+```
+
+### Database Migrations
+```bash
+# Create new migration
+python create_postgres_schema.py
+
+# Apply migrations
+python migrate_to_fly.py
+```
+
+## 📈 Monitoring & Analytics
+
+### Revenue Tracking
+- Daily profit/loss calculations
+- Operator performance metrics
+- Community share distributions
+- Historical revenue data
+
+### Betting Analytics
+- Real-time betting volume
+- Popular sports and markets
+- User betting patterns
+- Settlement accuracy metrics
+
+## 🔒 Security Features
+
+- **Environment Variables** - All secrets stored in environment variables
+- **CORS Protection** - Configurable cross-origin policies
+- **Session Security** - Secure session management
+- **Input Validation** - Comprehensive input sanitization
+- **SQL Injection Protection** - Parameterized queries
+
+## 📚 Documentation
+
+- [Deployment Guide](DEPLOYMENT_GUIDE.md)
+- [Database Setup](DATABASE_SETUP_README.md)
+- [Frontend Deployment](FRONTEND_DEPLOYMENT_GUIDE.md)
+- [PostgreSQL Migration](POSTGRESQL_MIGRATION_GUIDE.md)
+- [Local Development](LOCAL_DEVELOPMENT.md)
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## 📄 License
+
+This project is proprietary software. All rights reserved.
+
+## 🆘 Support
+
+For support and questions:
+- Create an issue in the GitHub repository
+- Check the documentation in the `/docs` folder
+- Review the deployment guides for setup help
+
+## 🎯 Roadmap
+
+- [ ] Mobile app development
+- [ ] Advanced analytics dashboard
+- [ ] Multi-language support
+- [ ] Advanced betting markets
+- [ ] Real-time notifications
+- [ ] API rate limiting
+- [ ] Advanced security features
+
+---
+
+**Built with ❤️ by the Kryzel Team**
+
+*Empowering sports betting operators with cutting-edge technology and automated revenue management.*
