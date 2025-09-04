@@ -49,9 +49,13 @@ def get_sport_events(sport_name):
         logger.info(f"=== EVENTS API CALLED (OPTIMIZED) ===")
         logger.info(f"Sport: {sport_name}, Date: {date_filter}, Limit: {limit}")
         
-        # Use optimized event fetching with caching
-        events = goalserve_client.get_sport_events(sport_name, date_filter, limit)
-        logger.info(f"Optimized events returned: {len(events) if events else 0}")
+        # Use LiveOddsCacheService instead of goalserve_client for consistent data
+        from src.live_odds_cache_service import get_live_odds_cache_service
+        cache_service = get_live_odds_cache_service()
+        
+        # Get events from cache service (which reads from JSON files directly)
+        events = cache_service.get_sport_events(sport_name, date_filter, limit)
+        logger.info(f"Cache service events returned: {len(events) if events else 0}")
         
         logger.info(f"=== RETURNING {len(events)} CACHED EVENTS ===")
         return jsonify(events)
@@ -87,6 +91,37 @@ def clear_cache():
             'message': str(e)
         }), 500
 
+@sports_bp.route('/sports/clear-live-odds-cache', methods=['POST'])
+def clear_live_odds_cache():
+    """
+    Clear and reinitialize the live odds cache with current filtering
+    """
+    try:
+        logger.info("=== LIVE ODDS CACHE CLEAR API CALLED ===")
+        
+        from src.live_odds_cache_service import get_live_odds_cache_service
+        cache_service = get_live_odds_cache_service()
+        
+        # Clear and reinitialize the cache
+        cache_service.reinitialize_cache()
+        
+        # Get cache stats after clearing
+        cache_stats = cache_service.get_cache_stats()
+        
+        logger.info(f"Live odds cache cleared and reinitialized successfully. Stats: {cache_stats}")
+        return jsonify({
+            'status': 'success',
+            'message': 'Live odds cache cleared and reinitialized successfully',
+            'cache_stats': cache_stats
+        })
+        
+    except Exception as e:
+        logger.error(f"Error clearing live odds cache: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 
 
 @sports_bp.route('/sports/health', methods=['GET'])
@@ -117,9 +152,13 @@ def get_sport_data(sport_name):
         logger.info(f"=== SPORT DATA API CALLED ===")
         logger.info(f"Sport: {sport_name}, Date: {date_filter}, Limit: {limit}")
         
-        # Use optimized event fetching with caching
-        events = goalserve_client.get_sport_events(sport_name, date_filter, limit)
-        logger.info(f"Optimized events returned: {len(events) if events else 0}")
+        # Use LiveOddsCacheService instead of goalserve_client for consistent data
+        from src.live_odds_cache_service import get_live_odds_cache_service
+        cache_service = get_live_odds_cache_service()
+        
+        # Get events from cache service (which reads from JSON files directly)
+        events = cache_service.get_sport_events(sport_name, date_filter, limit)
+        logger.info(f"Cache service events returned: {len(events) if events else 0}")
         
         logger.info(f"=== RETURNING {len(events)} EVENTS ===")
         return jsonify(events)

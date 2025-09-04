@@ -18,6 +18,38 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def robust_goalserve_parse(response_text, content_type=""):
+    """
+    Robust parsing for Goalserve responses that might be JSON or XML
+    Handles cases where ?json=1 returns XML anyway
+    """
+    try:
+        # Try JSON first if content type suggests it
+        if "json" in content_type.lower() or response_text.strip().startswith("{"):
+            return json.loads(response_text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # Fallback to XML parsing
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(response_text)
+        
+        # Convert XML to dict-like structure for compatibility
+        def xml_to_dict(element):
+            result = {}
+            for child in element:
+                if len(child) == 0:
+                    result[child.tag] = child.text or ""
+                else:
+                    result[child.tag] = xml_to_dict(child)
+            return result
+        
+        return xml_to_dict(root)
+    except ET.ParseError:
+        logger.warning("Failed to parse Goalserve response as either JSON or XML")
+        return None
+
 class OptimizedGoalServeClient:
     def __init__(self):
         self.base_url = "http://www.goalserve.com/getfeed"
@@ -269,7 +301,7 @@ class OptimizedGoalServeClient:
                 if text.startswith('\ufeff'):
                     text = text[1:]  # Remove BOM
                 
-                data = json.loads(text)
+                data = robust_goalserve_parse(text, content_type)
                 logger.info("Parsed JSON response successfully")
                 
                 # Cache the result
@@ -525,7 +557,7 @@ class OptimizedGoalServeClient:
                                     category_matches = category['match']
                                     self._process_matches(category_matches, category_name, matches)
             
-            logger.info(f"Total matches extracted: {len(matches)}")
+            logger.debug(f"Total matches extracted: {len(matches)}")
             
         except Exception as e:
             logger.error(f"Error extracting matches: {e}")

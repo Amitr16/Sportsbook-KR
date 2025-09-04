@@ -4,7 +4,8 @@ Sportsbook registration API endpoints
 
 from flask import Blueprint, request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
-import sqlite3
+from src import sqlite3_shim as sqlite3
+from src.auth.session_utils import clear_operator_session
 import re
 from datetime import datetime
 import json
@@ -292,7 +293,7 @@ def admin_login():
 @sportsbook_bp.route('/admin-logout', methods=['POST'])
 def admin_logout():
     """Logout endpoint for sportsbook operators"""
-    session.clear()
+    clear_operator_session()
     return jsonify({
         'success': True,
         'message': 'Logged out successfully'

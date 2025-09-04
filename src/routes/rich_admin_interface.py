@@ -3,7 +3,7 @@ Rich Admin Interface - Extracted from original admin_app.py with tenant filterin
 """
 
 from flask import Blueprint, request, session, redirect, render_template_string, jsonify
-import sqlite3
+from src import sqlite3_shim as sqlite3
 import json
 from datetime import datetime, timedelta
 import os
@@ -18,6 +18,63 @@ def get_db_connection():
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def update_operator_revenue(operator_id, conn):
+    """Update the total_revenue field for an operator based on actual bet settlements"""
+    try:
+        # Calculate current total revenue from actual bet settlements
+        revenue_query = """
+        SELECT 
+            SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_net_payouts
+        FROM bets b
+        JOIN users u ON b.user_id = u.id
+        WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = ?
+        """
+        
+        result = conn.execute(revenue_query, (operator_id,)).fetchone()
+        total_stakes_lost = float(result['total_stakes_lost'] or 0)
+        total_net_payouts = float(result['total_net_payouts'] or 0)
+        total_revenue = total_stakes_lost - total_net_payouts
+        
+        # Update the operator's total_revenue field
+        conn.execute("""
+            UPDATE sportsbook_operators 
+            SET total_revenue = ? 
+            WHERE id = ?
+        """, (total_revenue, operator_id))
+        
+        print(f"✅ Updated operator {operator_id} total_revenue to: {total_revenue}")
+        
+    except Exception as e:
+        print(f"❌ Error updating operator revenue: {e}")
+
+def get_default_user_balance(operator_id):
+    """Get the default balance for new users under this operator"""
+    try:
+        conn = get_db_connection()
+        
+        # Get operator settings
+        operator_row = conn.execute(
+            "SELECT settings FROM sportsbook_operators WHERE id = ?",
+            (operator_id,)
+        ).fetchone()
+        
+        conn.close()
+        
+        if operator_row and operator_row['settings']:
+            import json
+            settings = json.loads(operator_row['settings'])
+            default_balance = settings.get('default_user_balance')
+            if default_balance is not None:
+                return float(default_balance)
+        
+        # Fall back to default $1000 if no setting found
+        return 1000.0
+        
+    except Exception as e:
+        print(f"⚠️ Warning: Could not get default user balance for operator {operator_id}: {e}")
+        return 1000.0
 
 def calculate_event_financials(event_id, market_id, sport_name, operator_id):
     """Calculate max liability and max possible gain for a specific event+market combination for a specific operator"""
@@ -85,7 +142,7 @@ def calculate_total_revenue(operator_id):
         query = """
         SELECT 
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
-            SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as total_payouts_won
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_payouts_won
         FROM bets b
         JOIN users u ON b.user_id = u.id
         WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = ?
@@ -204,7 +261,7 @@ def get_tenant_betting_events(subdomain):
             bet_events_query = """
                 SELECT DISTINCT b.match_id, b.sport_name, b.market, COUNT(*) as bet_count,
                        SUM(CASE WHEN b.status = 'pending' THEN b.stake ELSE 0 END) as total_liability,
-                       SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as total_revenue
+                       SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_revenue
                 FROM bets b 
                 JOIN users u ON b.user_id = u.id 
                 WHERE u.sportsbook_operator_id = ? AND b.status IN ('pending', 'won', 'lost')
@@ -676,7 +733,7 @@ def get_tenant_stats(subdomain):
         
         # Get total revenue (from won bets)
         revenue_result = conn.execute("""
-            SELECT COALESCE(SUM(b.potential_return - b.stake), 0) as revenue
+            SELECT COALESCE(SUM(b.actual_return - b.stake), 0) as revenue
             FROM bets b 
             JOIN users u ON b.user_id = u.id 
             WHERE u.sportsbook_operator_id = ? AND b.status = 'won'
@@ -823,6 +880,124 @@ def toggle_user_status(subdomain, user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@rich_admin_bp.route('/<subdomain>/admin/api/users/reset', methods=['POST'])
+def reset_all_users(subdomain):
+    """Reset all users for a tenant: cancel pending bets and reset balances"""
+    operator = get_operator_from_session()
+    if not operator:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    try:
+        data = request.get_json()
+        new_balance = float(data.get('new_balance', 0))
+        
+        if new_balance < 0:
+            return jsonify({'error': 'Balance amount must be 0 or greater'}), 400
+        
+        conn = get_db_connection()
+        
+        # First, get all pending bets to cancel them
+        pending_bets = conn.execute(
+            "SELECT b.id, b.user_id, b.stake, b.match_name FROM bets b WHERE b.user_id IN (SELECT id FROM users WHERE sportsbook_operator_id = ?) AND b.status = 'pending'",
+            (operator['id'],)
+        ).fetchall()
+        
+        bets_cancelled = len(pending_bets)
+        
+        if pending_bets:
+            # Update all pending bets to voided status and refund stakes
+            for bet in pending_bets:
+                # Update bet status to voided (cancelled)
+                conn.execute(
+                    "UPDATE bets SET status = 'voided', settled_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (bet['id'],)
+                )
+                
+                # Create refund transaction for this bet
+                conn.execute(
+                    "INSERT INTO transactions (user_id, bet_id, amount, transaction_type, description, balance_before, balance_after, created_at) VALUES (?, ?, ?, 'refund', ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (bet['user_id'], bet['id'], bet['stake'], f'Bet cancelled - {bet["match_name"]} (Admin Reset)', bet['stake'], bet['stake'] * 2)
+                )
+        
+        # Reset all user balances for this operator
+        users_reset = conn.execute(
+            "UPDATE users SET balance = ? WHERE sportsbook_operator_id = ?",
+            (new_balance, operator['id'])
+        ).rowcount
+        
+        # Store the reset amount in operator settings for future new users
+        try:
+            # Get current operator settings
+            operator_row = conn.execute(
+                "SELECT settings FROM sportsbook_operators WHERE id = ?",
+                (operator['id'],)
+            ).fetchone()
+            
+            # Parse existing settings or create new ones
+            if operator_row and operator_row['settings']:
+                import json
+                settings = json.loads(operator_row['settings'])
+            else:
+                settings = {}
+            
+            # Update the default user balance setting
+            settings['default_user_balance'] = new_balance
+            
+            # Save updated settings back to database
+            conn.execute(
+                "UPDATE sportsbook_operators SET settings = ? WHERE id = ?",
+                (json.dumps(settings), operator['id'])
+            )
+            
+            print(f"💾 Updated operator {operator['id']} settings: default_user_balance = {new_balance}")
+            
+        except Exception as settings_error:
+            print(f"⚠️ Warning: Could not update operator settings: {settings_error}")
+        
+        # Clear session cache for all affected users to force fresh data fetch
+        try:
+            from flask import session
+            # Force session to refresh user data on next request
+            if 'user_data' in session:
+                del session['user_data']
+                print(f"🗑️ Cleared session cache for current admin user")
+        except Exception as cache_error:
+            print(f"⚠️ Warning: Could not clear session cache: {cache_error}")
+        
+        # Also trigger WebSocket balance updates for all affected users
+        try:
+            from src.websocket_service import broadcast_balance_update
+            if 'broadcast_balance_update' in globals():
+                # Get all user IDs for this operator
+                user_ids = [row['id'] for row in conn.execute(
+                    "SELECT id FROM users WHERE sportsbook_operator_id = ?", 
+                    (operator['id'],)
+                ).fetchall()]
+                
+                # Broadcast balance update to all affected users
+                for user_id in user_ids:
+                    broadcast_balance_update(user_id, new_balance)
+                print(f"📡 WebSocket balance updates sent to {len(user_ids)} users")
+        except Exception as ws_error:
+            print(f"⚠️ Warning: Could not send WebSocket updates: {ws_error}")
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Reset completed for operator {operator['id']}: {bets_cancelled} bets cancelled, {users_reset} users reset")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully reset {users_reset} users and cancelled {bets_cancelled} pending bets',
+            'bets_cancelled': bets_cancelled,
+            'users_reset': users_reset,
+            'new_balance': new_balance
+        })
+        
+    except Exception as e:
+        print(f"❌ Error resetting users: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @rich_admin_bp.route('/<subdomain>/admin/api/betting-events/<event_key>/toggle', methods=['POST'])
 def toggle_event_status(subdomain, event_key):
     """Toggle event active status (tenant-filtered)"""
@@ -911,7 +1086,7 @@ def get_reports_overview(subdomain):
         SELECT 
             COUNT(*) as total_bets,
             SUM(b.stake) as total_stakes,
-            SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as total_payouts,
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_payouts,
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_revenue_from_losses,
             COUNT(CASE WHEN b.status = 'pending' THEN 1 END) as pending_bets,
             COUNT(CASE WHEN b.status = 'won' THEN 1 END) as won_bets,
@@ -930,10 +1105,10 @@ def get_reports_overview(subdomain):
             COUNT(*) as daily_bets,
             SUM(b.stake) as daily_stakes,
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-            SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as daily_revenue
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as daily_revenue
         FROM bets b
         JOIN users u ON b.user_id = u.id
-        WHERE u.sportsbook_operator_id = ? AND b.created_at >= date('now', '-30 days')
+        WHERE u.sportsbook_operator_id = ? AND b.created_at >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY DATE(b.created_at)
         ORDER BY bet_date DESC
         """
@@ -947,7 +1122,7 @@ def get_reports_overview(subdomain):
             COUNT(*) as bets_count,
             SUM(b.stake) as total_stakes,
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-            SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as sport_revenue
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as sport_revenue
         FROM bets b
         JOIN users u ON b.user_id = u.id
         WHERE u.sportsbook_operator_id = ?
@@ -1024,7 +1199,7 @@ def generate_custom_report(subdomain):
                 COUNT(*) as total_bets,
                 SUM(b.stake) as total_stakes,
                 SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as revenue
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
             FROM bets b
             JOIN users u ON b.user_id = u.id
             WHERE {base_where}
@@ -1039,9 +1214,9 @@ def generate_custom_report(subdomain):
                 u.email,
                 COUNT(b.id) as total_bets,
                 SUM(b.stake) as total_staked,
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as payout,
-                SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as user_profit,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as payout,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END) - 
+                SUM(b.stake) as user_profit,
                 u.created_at as joined_date
             FROM users u
             LEFT JOIN bets b ON u.id = b.user_id
@@ -1076,7 +1251,7 @@ def generate_custom_report(subdomain):
                 COUNT(CASE WHEN b.status = 'won' THEN 1 END) as won_bets,
                 COUNT(CASE WHEN b.status = 'lost' THEN 1 END) as lost_bets,
                 SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as sport_revenue,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as sport_revenue,
                 (COUNT(CASE WHEN b.status = 'won' THEN 1 END) * 100.0 / COUNT(*)) as win_rate
             FROM bets b
             JOIN users u ON b.user_id = u.id
@@ -1177,7 +1352,7 @@ def export_custom_report(subdomain):
                 COUNT(*) as total_bets,
                 SUM(b.stake) as total_stakes,
                 SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as revenue
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
             FROM bets b
             JOIN users u ON b.user_id = u.id
             WHERE {base_where}
@@ -1193,9 +1368,9 @@ def export_custom_report(subdomain):
                 u.email,
                 COUNT(b.id) as total_bets,
                 SUM(b.stake) as total_staked,
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as payout,
-                SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as user_profit,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as payout,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END) - 
+                SUM(b.stake) as user_profit,
                 u.created_at as joined_date
             FROM users u
             LEFT JOIN bets b ON u.id = b.user_id
@@ -1435,6 +1610,9 @@ def manual_settle_bets(subdomain):
                 lost_count += 1
             
             settled_count += 1
+        
+        # Update operator's total_revenue after settlement
+        update_operator_revenue(operator_id, conn)
         
         conn.commit()
         conn.close()
@@ -1901,6 +2079,17 @@ RICH_ADMIN_TEMPLATE = '''
             
             <div class="controls">
                 <button onclick="loadUsers()">🔄 Refresh Users</button>
+                
+                <div class="reset-users-controls" style="display: inline-block; margin-left: 20px;">
+                    <input type="number" id="reset-balance-amount" placeholder="Enter balance amount" 
+                           style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 150px;">
+                    <button onclick="resetAllUsers()" style="background: #dc2626; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
+                        🔄 Reset Users
+                    </button>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                        ⚠️ This will cancel all pending bets (refund stakes), reset all user balances, and set default balance for new users
+                    </div>
+                </div>
             </div>
             
             <div class="table-container">
@@ -2272,6 +2461,56 @@ RICH_ADMIN_TEMPLATE = '''
                 
             } catch (error) {
                 alert('Error toggling user status: ' + error.message);
+            }
+        }
+        
+        async function resetAllUsers() {
+            const resetAmount = document.getElementById('reset-balance-amount').value;
+            
+            if (!resetAmount || resetAmount < 0) {
+                alert('Please enter a valid balance amount (must be 0 or greater)');
+                return;
+            }
+            
+            if (!confirm(`⚠️ WARNING: This will:\n\n1. Cancel ALL pending bets (refund stakes)\n2. Reset ALL user balances to $${resetAmount}\n3. Set default balance for NEW users to $${resetAmount}\n4. This action cannot be undone!\n\nAre you sure you want to continue?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/${SUBDOMAIN}/admin/api/users/reset`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        new_balance: parseFloat(resetAmount)
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`✅ Successfully reset all users!\n\n- ${data.bets_cancelled} pending bets cancelled (refunded)\n- ${data.users_reset} user balances reset to $${resetAmount}\n- New users will now get $${resetAmount} by default`);
+                    loadUsers(); // Reload the users table
+                    
+                    // Force refresh balance for current user if they're logged in
+                    if (typeof refreshUserBalance === 'function') {
+                        console.log('🔄 Forcing balance refresh after admin reset...');
+                        refreshUserBalance();
+                    }
+                    
+                    // Also trigger a page refresh to ensure all users see updated balances
+                    setTimeout(() => {
+                        if (confirm('🔄 Balance has been reset. Refresh the page to see updated balances?')) {
+                            window.location.reload();
+                        }
+                    }, 2000);
+                } else {
+                    alert('❌ Error: ' + data.error);
+                }
+                
+            } catch (error) {
+                alert('❌ Error resetting users: ' + error.message);
             }
         }
         

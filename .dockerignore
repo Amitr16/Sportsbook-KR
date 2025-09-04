@@ -1,0 +1,48 @@
+# --- Keep Docker context tiny ---
+
+# VCS
+.git
+.gitignore
+
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtualenvs
+venv/
+.venv/
+env/
+ENV/
+
+# Node
+node_modules/
+
+# Local data & secrets
+.env
+.env.*
+!.env.example
+env.local
+
+# Builds & metadata
+dist/
+build/
+*.egg-info/
+
+# Logs & runtime
+*.log
+flask_session/
+instance/
+data/
+*.sqlite
+*.db
+
+# OS cruft
+.DS_Store
+
+# Project-specific large dirs (tweak as needed)
+uploads/
+.cache/

@@ -4,7 +4,7 @@ Provides endpoints for theme templates, saving/loading customizations
 """
 
 from flask import Blueprint, request, jsonify, session
-import sqlite3
+from src import sqlite3_shim as sqlite3
 import os
 from datetime import datetime
 
@@ -83,7 +83,7 @@ def save_theme():
             
             # First, let's check what columns exist in sportsbook_operators table
             print("🔍 Checking sportsbook_operators table structure...")
-            cursor.execute("PRAGMA table_info(sportsbook_operators)")
+            cursor.execute("""SELECT column_name FROM information_schema.columns WHERE table_name = %s ORDER BY ordinal_position""", ("\1",))
             columns = cursor.fetchall()
             print(f"🔍 Available columns: {[col[1] for col in columns]}")
             
@@ -104,7 +104,7 @@ def save_theme():
         print("🔍 Creating sportsbook_themes table if it doesn't exist...")
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sportsbook_themes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 sportsbook_operator_id INTEGER NOT NULL,
                 primary_color TEXT DEFAULT '#1e40af',
                 secondary_color TEXT DEFAULT '#3b82f6',
@@ -115,8 +115,10 @@ def save_theme():
                 layout_style TEXT DEFAULT 'modern',
                 button_style TEXT DEFAULT 'rounded',
                 card_style TEXT DEFAULT 'shadow',
-                custom_css TEXT,
+                logo_type TEXT DEFAULT 'default',
                 logo_url TEXT,
+                sportsbook_name TEXT DEFAULT 'Your Sportsbook',
+                custom_css TEXT,
                 banner_image_url TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -144,6 +146,11 @@ def save_theme():
                     layout_style = ?,
                     button_style = ?,
                     card_style = ?,
+                    logo_type = ?,
+                    logo_url = ?,
+                    sportsbook_name = ?,
+                    custom_css = ?,
+                    banner_image_url = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE sportsbook_operator_id = ?
             ''', (
@@ -156,6 +163,11 @@ def save_theme():
                 theme_data.get('layoutStyle', 'modern'),
                 theme_data.get('buttonStyle', 'rounded'),
                 theme_data.get('cardStyle', 'shadow'),
+                theme_data.get('logoType', 'default'),
+                theme_data.get('logoUrl'),
+                theme_data.get('sportsbookName', 'Your Sportsbook'),
+                theme_data.get('customCss'),
+                theme_data.get('bannerImageUrl'),
                 operator_id
             ))
         else:
@@ -313,8 +325,8 @@ def save_theme_for_operator(subdomain):
                 INSERT INTO sportsbook_themes 
                 (sportsbook_operator_id, primary_color, secondary_color, accent_color, 
                  background_color, text_color, font_family, layout_style, button_style, 
-                 card_style, custom_css, logo_url, banner_image_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 card_style, logo_type, logo_url, sportsbook_name, custom_css, banner_image_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 operator_id,
                 theme_data.get('primaryColor', '#1e40af'),
@@ -326,8 +338,10 @@ def save_theme_for_operator(subdomain):
                 theme_data.get('layoutStyle', 'modern'),
                 theme_data.get('buttonStyle', 'rounded'),
                 theme_data.get('cardStyle', 'shadow'),
-                theme_data.get('customCss'),
+                theme_data.get('logoType', 'default'),
                 theme_data.get('logoUrl'),
+                theme_data.get('sportsbookName', 'Your Sportsbook'),
+                theme_data.get('customCss'),
                 theme_data.get('bannerImageUrl')
             ))
         
@@ -339,6 +353,11 @@ def save_theme_for_operator(subdomain):
     except Exception as e:
         print(f"Error saving theme: {e}")
         return jsonify({'error': 'Failed to save theme'}), 500
+
+@theme_bp.route('/theme-css', methods=['GET'])
+def theme_css_root():
+    """Fallback route for theme-css without subdomain"""
+    return jsonify({"error": "subdomain required"}), 400
 
 @theme_bp.route('/theme-css/<subdomain>', methods=['GET'])
 def get_theme_css(subdomain):

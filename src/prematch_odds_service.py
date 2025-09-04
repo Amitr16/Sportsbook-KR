@@ -4,7 +4,7 @@ import os
 import time
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 import threading
 from pathlib import Path
 
@@ -22,6 +22,12 @@ class PrematchOddsService:
         self.base_folder = Path(base_folder)
         self.running = False
         self.fetch_thread = None
+        
+        # Callback system for immediate cache and UI updates
+        self.on_odds_updated_callbacks: List[Callable] = []
+        self.on_sport_odds_updated_callbacks: List[Callable] = []
+        
+
         
         # Sports configuration with their category codes
         self.sports_config = {
@@ -141,6 +147,42 @@ class PrematchOddsService:
         # Ensure base folder exists
         self._ensure_folder_structure()
     
+    def add_odds_updated_callback(self, callback: Callable[[str, Dict], None]):
+        """Add a callback that will be triggered when any sport's odds are updated"""
+        self.on_odds_updated_callbacks.append(callback)
+        logger.info(f"✅ Added odds updated callback: {callback.__name__ if hasattr(callback, '__name__') else 'anonymous'}")
+    
+    def add_sport_odds_updated_callback(self, callback: Callable[[str, Dict], None]):
+        """Add a callback that will be triggered when a specific sport's odds are updated"""
+        self.on_sport_odds_updated_callbacks.append(callback)
+        logger.info(f"✅ Added sport-specific odds updated callback: {callback.__name__ if hasattr(callback, '__name__') else 'anonymous'}")
+    
+    def _trigger_odds_updated_callbacks(self, sport_name: str, odds_data: Dict):
+        """Trigger all registered callbacks when odds are updated"""
+        try:
+            logger.info(f"🎯 Triggering odds updated callbacks for {sport_name}")
+            
+            # Trigger general odds updated callbacks
+            for callback in self.on_odds_updated_callbacks:
+                try:
+                    callback(sport_name, odds_data)
+                    logger.info(f"✅ Triggered general callback for {sport_name}")
+                except Exception as e:
+                    logger.error(f"❌ Error in general odds updated callback: {e}")
+            
+            # Trigger sport-specific callbacks
+            for callback in self.on_sport_odds_updated_callbacks:
+                try:
+                    callback(sport_name, odds_data)
+                    logger.info(f"✅ Triggered sport-specific callback for {sport_name}")
+                except Exception as e:
+                    logger.error(f"❌ Error in sport-specific odds updated callback: {e}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error triggering odds updated callbacks: {e}")
+    
+
+    
     def _ensure_folder_structure(self):
         """Ensure the base folder and sport subfolders exist"""
         try:
@@ -174,221 +216,257 @@ class PrematchOddsService:
         """Build the odds URL for a specific sport"""
         category = self.sports_config[sport_name]['category']
         
-        # Cricket uses simpler URL without bm=16 and date parameters
+        # Cricket uses soccer endpoint with cricket category (no bookmaker parameter)
         if sport_name == 'cricket':
             url = (f"{self.base_url}/{self.access_token}/getodds/soccer?"
                    f"cat={category}&json=1")
         else:
             # All other sports use the same URL structure with different categories
-            url = (f"{self.base_url}/{self.access_token}/getodds/soccer?"
+            url = (f"{self.base_url}/{self.access_token}/getodds/{sport_name}?"
                    f"cat={category}&json=1&bm=16&"
                    f"date_start={date_start}&date_end={date_end}")
         
         return url
     
     def _fetch_odds(self, sport_name: str, url: str) -> Optional[Dict]:
-        """Fetch odds with single attempt - no retry logic"""
-        try:
-            logger.info(f"🔄 Fetching {sport_name} odds (single attempt)")
-            
-            response = self.session.get(url, timeout=self.timeout)
-            
-            # Handle different HTTP status codes
-            if response.status_code == 200:
-                try:
-                    # Handle UTF-8 BOM if present
-                    text = response.text
-                    if text.startswith('\ufeff'):
-                        text = text[1:]  # Remove BOM
-                    data = json.loads(text)
-                    
-                    # Check if the response contains an error
-                    if isinstance(data, dict):
-                        if 'status' in data and data['status'] != '200':
-                            logger.warning(f"⚠️ API Error for {sport_name}: {data.get('status')} - {data.get('message', 'Unknown error')}")
-                            return data
-                        
-                        if 'message' in data and any(error_keyword in data['message'].lower() for error_keyword in ['error', 'failed', 'timeout', 'too many requests', 'rate limit']):
-                            logger.warning(f"⚠️ API Error for {sport_name}: {data['message']}")
-                            return data
-                    
-                    logger.info(f"✅ Successfully fetched {sport_name} odds")
-                    return data
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ JSON decode error for {sport_name}: {e}")
-                    return None
-            
-            elif response.status_code == 429:  # Too Many Requests
-                logger.warning(f"⚠️ Rate limit (429) for {sport_name}")
-                return {'status': '429', 'message': 'Too Many Requests'}
-            
-            elif response.status_code == 500:  # Server Error
-                logger.warning(f"⚠️ Server error (500) for {sport_name}")
-                return {'status': '500', 'message': 'Server Error'}
-            
-            else:
-                logger.warning(f"⚠️ HTTP {response.status_code} for {sport_name}")
-                return {'status': str(response.status_code), 'message': f'HTTP {response.status_code}'}
-                
-        except requests.exceptions.Timeout:
-            logger.warning(f"⏰ Timeout for {sport_name}")
-            return None
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Request error for {sport_name}: {e}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ Unexpected error for {sport_name}: {e}")
-            return None
+        """Fetch odds with retry logic for rate limit errors"""
+        max_retries = 3
+        base_delay = 10  # Start with 10 second delay
         
-        logger.error(f"❌ Failed to fetch {sport_name} odds")
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    delay = base_delay * (2 ** (attempt - 1))  # Exponential backoff: 10s, 20s, 40s
+                    logger.info(f"🔄 Retry attempt {attempt + 1}/{max_retries} for {sport_name} after {delay}s delay")
+                    time.sleep(delay)
+                else:
+                    logger.info(f"🔄 Fetching {sport_name} odds (attempt {attempt + 1}/{max_retries})")
+                
+                response = self.session.get(url, timeout=self.timeout)
+                
+                # Handle different HTTP status codes
+                if response.status_code == 200:
+                    try:
+                        # Handle UTF-8 BOM if present
+                        text = response.text
+                        if text.startswith('\ufeff'):
+                            text = text[1:]  # Remove BOM
+                        data = json.loads(text)
+                        
+                        # Check if the response contains an error
+                        if isinstance(data, dict):
+                            if 'status' in data and data['status'] != '200':
+                                logger.warning(f"⚠️ API Error for {sport_name}: {data.get('status')} - {data.get('message', 'Unknown error')}")
+                                return data
+                            
+                            if 'message' in data and any(error_keyword in data['message'].lower() for error_keyword in ['error', 'failed', 'timeout', 'too many requests', 'rate limit']):
+                                logger.warning(f"⚠️ API Error for {sport_name}: {data['message']}")
+                                return data
+                        
+                        logger.info(f"✅ Successfully fetched {sport_name} odds")
+                        return data
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ JSON decode error for {sport_name}: {e}")
+                        return None
+                
+                elif response.status_code == 429:  # Too Many Requests
+                    logger.warning(f"⚠️ Rate limit (429) for {sport_name} - attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        continue  # Retry with exponential backoff
+                    else:
+                        return {'status': '429', 'message': 'Too Many Requests - max retries exceeded'}
+                
+                elif response.status_code == 500:  # Server Error
+                    logger.warning(f"⚠️ Server error (500) for {sport_name}")
+                    return {'status': '500', 'message': 'Server Error'}
+                
+                else:
+                    logger.warning(f"⚠️ HTTP {response.status_code} for {sport_name}")
+                    return {'status': str(response.status_code), 'message': f'HTTP {response.status_code}'}
+                    
+            except requests.exceptions.Timeout:
+                logger.warning(f"⏰ Timeout for {sport_name} - attempt {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    continue  # Retry with exponential backoff
+                else:
+                    return None
+                
+            except requests.exceptions.RequestException as e:
+                logger.error(f"❌ Request error for {sport_name}: {e}")
+                return None
+                
+            except Exception as e:
+                logger.error(f"❌ Unexpected error for {sport_name}: {e}")
+                return None
+        
+        logger.error(f"❌ Failed to fetch {sport_name} odds after {max_retries} attempts")
         return None
     
     def _save_odds_to_file(self, sport_name: str, odds_data: Dict) -> bool:
         """Save odds data to JSON file (overwrites existing file)"""
         try:
             
-            # IMMEDIATE BLOCK: Check for the exact empty response pattern from raw API
-            # Raw API response structure: {"scores": {"sport": "tennis", "ts": "0", "categories": []}}
-            if (isinstance(odds_data, dict) and 
-                'scores' in odds_data and 
-                isinstance(odds_data['scores'], dict)):
+                        # Skip complex structure validation for cricket (different data structure)
+            if sport_name == 'cricket':
+                logger.info(f"🏏 Skipping complex structure validation for cricket - different data structure")
                 
-                scores_data = odds_data['scores']
-                
-                # Check for ts=0 (indicates no data available)
-                if 'ts' in scores_data:
-                    ts_value = scores_data['ts']
-                    # Check for both string "0" and integer 0, and also handle None/empty cases
-                    if (ts_value == "0" or ts_value == 0 or ts_value == "" or ts_value is None):
-                        logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid timestamp detected: {ts_value}")
-                        logger.info(f"📊 Blocked response: {sport_name} has invalid timestamp")
+                # But still check for basic API errors (rate limits, server errors, etc.)
+                if isinstance(odds_data, dict):
+                    # Check for common error indicators
+                    if 'status' in odds_data and odds_data['status'] != '200':
+                        logger.warning(f"⚠️ Skipping save for cricket - Error status: {odds_data.get('status')} - {odds_data.get('message', 'Unknown error')}")
                         return False
-                
-                # Check for empty categories array
-                if ('categories' in scores_data and 
-                    (not scores_data['categories'] or 
-                     (isinstance(scores_data['categories'], list) and 
-                      len(scores_data['categories']) == 0))):
                     
-                    logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Empty categories array detected")
-                    logger.info(f"📊 Blocked response structure: {sport_name} has 0 categories")
-                    return False
-                
-                # ADDITIONAL CHECK: If we have both ts=0 AND empty categories, this is definitely invalid
-                if ('ts' in scores_data and 
-                    (scores_data['ts'] == "0" or scores_data['ts'] == 0) and
-                    'categories' in scores_data and 
-                    (not scores_data['categories'] or 
-                     (isinstance(scores_data['categories'], list) and 
-                      len(scores_data['categories']) == 0))):
-                    
-                    logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid response: ts=0 AND empty categories")
-                    logger.info(f"📊 Blocked invalid response: {sport_name} has no data")
-                    return False
-            
-            # Also check for the wrapped structure (in case it's already wrapped)
-            if (isinstance(odds_data, dict) and 
-                'odds_data' in odds_data and 
-                isinstance(odds_data['odds_data'], dict) and
-                'scores' in odds_data['odds_data'] and
-                isinstance(odds_data['odds_data']['scores'], dict)):
-                
-                scores_data = odds_data['odds_data']['scores']
-                
-                # Check for ts=0 (indicates no data available)
-                if 'ts' in scores_data:
-                    ts_value = scores_data['ts']
-                    # Check for both string "0" and integer 0, and also handle None/empty cases
-                    if (ts_value == "0" or ts_value == 0 or ts_value == "" or ts_value is None):
-                        logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid timestamp detected: {ts_value}")
-                        logger.info(f"📊 Blocked response: {sport_name} has invalid timestamp")
+                    # Check for error messages
+                    if 'message' in odds_data and any(error_keyword in odds_data['message'].lower() for error_keyword in ['error', 'failed', 'timeout', 'too many requests', 'rate limit']):
+                        logger.warning(f"⚠️ Skipping save for cricket - Error message: {odds_data['message']}")
                         return False
-                
-                # Check for empty categories array
-                if ('categories' in scores_data and 
-                    (not scores_data['categories'] or 
-                     (isinstance(scores_data['categories'], list) and 
-                      len(scores_data['categories']) == 0))):
                     
-                    logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Empty categories array detected")
-                    logger.info(f"📊 Blocked response structure: {sport_name} has 0 categories")
-                    return False
-            
-            # Check if odds_data contains an error
-            if isinstance(odds_data, dict):
-                # Check for common error indicators
-                if 'status' in odds_data and odds_data['status'] != '200':
-                    logger.warning(f"⚠️ Skipping save for {sport_name} - Error status: {odds_data.get('status')} - {odds_data.get('message', 'Unknown error')}")
-                    return False
-                
-                # Check for error messages
-                if 'message' in odds_data and any(error_keyword in odds_data['message'].lower() for error_keyword in ['error', 'failed', 'timeout', 'too many requests', 'rate limit']):
-                    logger.warning(f"⚠️ Skipping save for {sport_name} - Error message: {odds_data['message']}")
-                    return False
-                
-                # Check if odds_data is empty or contains no actual odds
-                if not odds_data or (len(odds_data) == 1 and 'status' in odds_data):
-                    logger.warning(f"⚠️ Skipping save for {sport_name} - No valid odds data")
-                    return False
-                
-                # CRITICAL CHECK: Look for the specific empty response pattern you mentioned
-                # Example: {"odds_data": {"scores": {"sport": "soccer", "ts": "0", "categories": []}}}
-                if 'odds_data' in odds_data:
-                    odds_content = odds_data['odds_data']
-                    if isinstance(odds_content, dict):
-                        # Check if it's the scores structure with empty categories
-                        if 'scores' in odds_content:
-                            scores_data = odds_content['scores']
-                            if isinstance(scores_data, dict) and 'categories' in scores_data:
-                                categories = scores_data['categories']
-                                if not categories or (isinstance(categories, list) and len(categories) == 0):
-                                    logger.warning(f"🚫 BLOCKING SAVE for {sport_name} - API returned empty categories array (no events/odds)")
-                                    logger.info(f"📊 Empty response structure: {sport_name} has 0 categories")
-                                    return False
-                        
-                        # Check if odds_data is essentially empty (no meaningful content)
-                        if not odds_content or (len(odds_content) == 1 and 'scores' in odds_content):
-                            logger.warning(f"⚠️ Skipping save for {sport_name} - No meaningful odds content in response")
+                    # Check if odds_data is essentially empty (no meaningful content)
+                    if not odds_data or (len(odds_data) == 1 and 'status' in odds_data):
+                        logger.warning(f"⚠️ Skipping save for cricket - No valid odds data")
+                        return False
+            else:
+                # IMMEDIATE BLOCK: Check for the exact empty response pattern from raw API
+                # Raw API response structure: {"scores": {"sport": "tennis", "ts": "0", "categories": []}}
+                if (isinstance(odds_data, dict) and 
+                    'scores' in odds_data and 
+                    isinstance(odds_data['scores'], dict)):
+                    
+                    scores_data = odds_data['scores']
+                    
+                    # Check for ts=0 (indicates no data available)
+                    if 'ts' in scores_data:
+                        ts_value = scores_data['ts']
+                        # Check for both string "0" and integer 0, and also handle None/empty cases
+                        if (ts_value == "0" or ts_value == 0 or ts_value == "" or ts_value is None):
+                            logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid timestamp detected: {ts_value}")
+                            logger.info(f"📊 Blocked response: {sport_name} has invalid timestamp")
                             return False
+                    
+                    # Check for empty categories array
+                    if ('categories' in scores_data and 
+                        (not scores_data['categories'] or 
+                         (isinstance(scores_data['categories'], list) and 
+                          len(scores_data['categories']) == 0))):
                         
-                        # Additional check: look for any actual betting markets with odds
-                        has_actual_odds = False
-                        for key, value in odds_content.items():
-                            if key == 'scores' and isinstance(value, dict):
-                                # Check if scores has actual categories with events
-                                if 'categories' in value and value['categories']:
-                                    for category in value['categories']:
-                                        if isinstance(category, dict) and 'events' in category:
-                                            events = category['events']
-                                            if events and len(events) > 0:
-                                                # Check if any event has actual odds
-                                                for event in events:
-                                                    if isinstance(event, dict) and 'odds' in event:
-                                                        odds = event['odds']
-                                                        if odds and isinstance(odds, dict) and len(odds) > 0:
-                                                            has_actual_odds = True
-                                                            break
-                                                if has_actual_odds:
+                        logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Empty categories array detected")
+                        logger.info(f"📊 Blocked response structure: {sport_name} has 0 categories")
+                        return False
+                    
+                    # ADDITIONAL CHECK: If we have both ts=0 AND empty categories, this is definitely invalid
+                    if ('ts' in scores_data and 
+                        (scores_data['ts'] == "0" or scores_data['ts'] == 0) and
+                        'categories' in scores_data and 
+                        (not scores_data['categories'] or 
+                         (isinstance(scores_data['categories'], list) and 
+                          len(scores_data['categories']) == 0))):
+                        
+                        logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid response: ts=0 AND empty categories")
+                        logger.info(f"📊 Blocked invalid response: {sport_name} has no data")
+                        return False
+                
+                # Also check for the wrapped structure (in case it's already wrapped)
+                if (isinstance(odds_data, dict) and 
+                    'odds_data' in odds_data and 
+                    isinstance(odds_data['odds_data'], dict) and
+                    'scores' in odds_data['odds_data'] and
+                    isinstance(odds_data['odds_data']['scores'], dict)):
+                    
+                    scores_data = odds_data['odds_data']['scores']
+                    
+                    # Check for ts=0 (indicates no data available)
+                    if 'ts' in scores_data:
+                        ts_value = scores_data['ts']
+                        # Check for both string "0" and integer 0, and also handle None/empty cases
+                        if (ts_value == "0" or ts_value == 0 or ts_value == "" or ts_value is None):
+                            logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid timestamp detected: {ts_value}")
+                            logger.info(f"📊 Blocked response: {sport_name} has invalid timestamp")
+                            return False
+                    
+                    # Check for empty categories array
+                    if ('categories' in scores_data and 
+                        (not scores_data['categories'] or 
+                         (isinstance(scores_data['categories'], list) and 
+                          len(scores_data['categories']) == 0))):
+                        
+                        logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Empty categories array detected")
+                        logger.info(f"📊 Blocked response structure: {sport_name} has 0 categories")
+                        return False
+                
+                # Check if odds_data contains an error
+                if isinstance(odds_data, dict):
+                    # Check for common error indicators
+                    if 'status' in odds_data and odds_data['status'] != '200':
+                        logger.warning(f"⚠️ Skipping save for {sport_name} - Error status: {odds_data.get('status')} - {odds_data.get('message', 'Unknown error')}")
+                        return False
+                    
+                    # Check for error messages
+                    if 'message' in odds_data and any(error_keyword in odds_data['message'].lower() for error_keyword in ['error', 'failed', 'timeout', 'too many requests', 'rate limit']):
+                        logger.warning(f"⚠️ Skipping save for {sport_name} - Error message: {odds_data['message']}")
+                        return False
+                    
+                    # Check if odds_data is empty or contains no actual odds
+                    if not odds_data or (len(odds_data) == 1 and 'status' in odds_data):
+                        logger.warning(f"⚠️ Skipping save for {sport_name} - No valid odds data")
+                        return False
+                    
+                    # CRITICAL CHECK: Look for the specific empty response pattern you mentioned
+                    # Example: {"odds_data": {"scores": {"sport": "soccer", "ts": "0", "categories": []}}}
+                    if 'odds_data' in odds_data:
+                        odds_content = odds_data['odds_data']
+                        if isinstance(odds_content, dict):
+                            # Check if it's the scores structure with empty categories
+                            if 'scores' in odds_content:
+                                scores_data = odds_content['scores']
+                                if isinstance(scores_data, dict) and 'categories' in scores_data:
+                                    categories = scores_data['categories']
+                                    if not categories or (isinstance(categories, list) and len(categories) == 0):
+                                        logger.warning(f"🚫 BLOCKING SAVE for {sport_name} - API returned empty categories array (no events/odds)")
+                                        logger.info(f"📊 Blocked response structure: {sport_name} has 0 categories")
+                                        return False
+                            
+                            # Check if odds_data is essentially empty (no meaningful content)
+                            if not odds_content or (len(odds_content) == 1 and 'scores' in odds_content):
+                                logger.warning(f"⚠️ Skipping save for {sport_name} - No meaningful odds content in response")
+                                return False
+                            
+                            # Additional check: look for any actual betting markets with odds
+                            has_actual_odds = False
+                            for key, value in odds_content.items():
+                                if key == 'scores' and isinstance(value, dict):
+                                    # Check if scores has actual categories with events
+                                    if 'categories' in value and value['categories']:
+                                        for category in value['categories']:
+                                            if isinstance(category, dict) and 'events' in category:
+                                                events = category['events']
+                                                if events and len(events) > 0:
+                                                    # Check if any event has actual odds
+                                                    for event in events:
+                                                        if isinstance(event, dict) and 'odds' in event:
+                                                            odds = event['odds']
+                                                            if odds and isinstance(odds, dict) and len(odds) > 0:
+                                                                has_actual_odds = True
+                                                                break
+                                                    if has_actual_odds:
+                                                        break
+                                elif isinstance(value, dict) and 'events' in value:
+                                    # Direct events structure
+                                    events = value['events']
+                                    if events and len(events) > 0:
+                                        for event in events:
+                                            if isinstance(event, dict) and 'odds' in event:
+                                                odds = event['odds']
+                                                if odds and isinstance(odds, dict) and len(odds) > 0:
+                                                    has_actual_odds = True
                                                     break
-                            elif isinstance(value, dict) and 'events' in value:
-                                # Direct events structure
-                                events = value['events']
-                                if events and len(events) > 0:
-                                    for event in events:
-                                        if isinstance(event, dict) and 'odds' in event:
-                                            odds = event['odds']
-                                            if odds and isinstance(odds, dict) and len(odds) > 0:
-                                                has_actual_odds = True
-                                                break
-                                    if has_actual_odds:
-                                        break
-                        
-                        if not has_actual_odds:
-                            logger.warning(f"⚠️ Skipping save for {sport_name} - No actual betting odds found in response structure")
-                            logger.info(f"📊 Response structure for {sport_name}: {list(odds_content.keys())}")
-                            return False
+                                        if has_actual_odds:
+                                            break
+                            
+                            if not has_actual_odds:
+                                logger.warning(f"⚠️ Skipping save for {sport_name} - No actual betting odds found in response structure")
+                                logger.info(f"📊 Response structure for {sport_name}: {list(odds_content.keys())}")
+                                return False
             
             # Log what we're about to save (for debugging)
             logger.info(f"✅ Validation passed for {sport_name} - Proceeding to save odds data")
@@ -424,6 +502,14 @@ class PrematchOddsService:
                 json.dump(data_with_metadata, f, indent=2, ensure_ascii=False)
             
             logger.info(f"💾 Updated {sport_name} odds file: {filepath}")
+            
+            # 🎯 IMMEDIATE CACHE AND UI UPDATE: Trigger callbacks for live odds updates
+            try:
+                self._trigger_odds_updated_callbacks(sport_name, data_with_metadata)
+                logger.info(f"🚀 Live odds update triggered for {sport_name} - Cache and UI will be updated immediately")
+            except Exception as e:
+                logger.error(f"❌ Error triggering live odds update for {sport_name}: {e}")
+            
             return True
             
         except Exception as e:
@@ -493,8 +579,10 @@ class PrematchOddsService:
                 else:
                     failed_sports.append(sport_name)
                     
-                # Small delay between requests to be respectful
-                time.sleep(1)
+                # GoalServe rate limit: 60 seconds between ANY requests (per IP/API key)
+                # Wait 60 seconds between each sport to respect their global rate limits
+                logger.info(f"⏳ Waiting 60 seconds before next sport (GoalServe global rate limit)")
+                time.sleep(60)
                 
             except Exception as e:
                 logger.error(f"❌ Error processing {sport_name}: {e}")
@@ -523,9 +611,10 @@ class PrematchOddsService:
             try:
                 self._fetch_all_sports_odds()
                 
-                # Wait 30 seconds before next fetch
-                logger.info("⏳ Waiting 30 seconds before next fetch...")
-                time.sleep(30)
+                # Wait 5 minutes before next fetch cycle
+                # Each cycle takes ~18 minutes (18 sports × 60 seconds), so 5 min is reasonable
+                logger.info("⏳ Waiting 5 minutes before next fetch cycle...")
+                time.sleep(300)
                 
             except Exception as e:
                 logger.error(f"❌ Error in fetch loop: {e}")

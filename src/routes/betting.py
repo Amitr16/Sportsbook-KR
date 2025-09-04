@@ -2,14 +2,21 @@
 Betting API routes for sports betting platform
 """
 
-from flask import Blueprint, request, jsonify, g
-from src.models.betting import db, User, Bet, Transaction
-from src.routes.auth import token_required
+from flask import Blueprint, request, jsonify, g, current_app, session
+from src.models.betting import User, Bet, Transaction, BetSlip, Event, Outcome, BetStatus
+from src.routes.tenant_auth import session_required
 from datetime import datetime
 import logging
 import json
 
 logger = logging.getLogger(__name__)
+
+def _get_orm_user_for_bet(session, ns_user_id: int) -> User:
+    """Load the mapped ORM row for the current user"""
+    user = session.get(User, ns_user_id)
+    if not user:
+        raise ValueError(f"User {ns_user_id} not found")
+    return user
 
 def determine_sport_from_match_name(match_name):
     """Determine sport from match name patterns"""
@@ -33,15 +40,36 @@ def determine_sport_from_match_name(match_name):
 
 betting_bp = Blueprint('betting', __name__)
 
+@betting_bp.route('/user/balance', methods=['GET'])
+@session_required
+def get_user_balance():
+    """Get current user balance for testing"""
+    try:
+        # For read-only operations, SimpleNamespace is fine
+        user = g.current_user
+        return jsonify({
+            'success': True,
+            'user_id': user.id,
+            'username': user.username,
+            'balance': float(user.balance or 0),
+            'message': 'Balance retrieved successfully'
+        })
+    except Exception as e:
+        logger.error(f"Error getting user balance: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to get balance: {str(e)}'
+        }), 500
+
 @betting_bp.route('/bet-slip', methods=['GET'])
-@token_required
+@session_required
 def get_bet_slip():
     """Get current user's bet slip"""
     try:
         user_id = g.current_user.id
         
         # Get active bet slip
-        bet_slip = BetSlip.query.filter_by(
+        bet_slip = current_app.db.session.query(BetSlip).filter_by(
             user_id=user_id,
             status=BetStatus.PENDING
         ).first()
@@ -68,7 +96,7 @@ def get_bet_slip():
         }), 500
 
 @betting_bp.route('/bet-slip/add', methods=['POST'])
-@token_required
+@session_required
 def add_to_bet_slip():
     """Add selection to bet slip"""
     try:
@@ -87,14 +115,14 @@ def add_to_bet_slip():
             }), 400
         
         # Get event and outcome
-        event = Event.query.filter_by(goalserve_id=event_id).first()
+        event = current_app.db.session.query(Event).filter_by(goalserve_id=event_id).first()
         if not event:
             return jsonify({
                 'success': False,
                 'error': 'Event not found'
             }), 404
         
-        outcome = Outcome.query.get(outcome_id)
+        outcome = current_app.db.session.query(Outcome).get(outcome_id)
         if not outcome:
             return jsonify({
                 'success': False,
@@ -102,7 +130,7 @@ def add_to_bet_slip():
             }), 404
         
         # Check if bet already exists for this event/outcome
-        existing_bet = Bet.query.filter_by(
+        existing_bet = current_app.db.session.query(Bet).filter_by(
             user_id=user_id,
             event_id=event.id,
             outcome_id=outcome_id,
@@ -114,7 +142,7 @@ def add_to_bet_slip():
             existing_bet.stake = stake
             existing_bet.odds = outcome.odds
             existing_bet.potential_return = stake * outcome.odds
-            existing_bet.updated_at = datetime.utcnow()
+            existing_bet.updated_at = datetime.now()
         else:
             # Create new bet
             bet = Bet(
@@ -127,9 +155,9 @@ def add_to_bet_slip():
                 match_name=f"{event.home_team.name} vs {event.away_team.name}",
                 bet_selection=outcome.name
             )
-            db.session.add(bet)
+            current_app.db.session.add(bet)
         
-        db.session.commit()
+        current_app.db.session.commit()
         
         return jsonify({
             'success': True,
@@ -144,7 +172,7 @@ def add_to_bet_slip():
         }), 500
 
 @betting_bp.route('/bet-slip/remove', methods=['POST'])
-@token_required
+@session_required
 def remove_from_bet_slip():
     """Remove selection from bet slip"""
     try:
@@ -160,7 +188,7 @@ def remove_from_bet_slip():
             }), 400
         
         # Find and remove bet
-        bet = Bet.query.filter_by(
+        bet = current_app.db.session.query(Bet).filter_by(
             id=bet_id,
             user_id=user_id,
             status=BetStatus.PENDING
@@ -172,8 +200,8 @@ def remove_from_bet_slip():
                 'error': 'Bet not found'
             }), 404
         
-        db.session.delete(bet)
-        db.session.commit()
+        current_app.db.session.delete(bet)
+        current_app.db.session.commit()
         
         return jsonify({
             'success': True,
@@ -188,19 +216,19 @@ def remove_from_bet_slip():
         }), 500
 
 @betting_bp.route('/bet-slip/clear', methods=['POST'])
-@token_required
+@session_required
 def clear_bet_slip():
     """Clear all selections from bet slip"""
     try:
         user_id = g.current_user.id
         
         # Remove all pending bets for user
-        Bet.query.filter_by(
+        current_app.db.session.query(Bet).filter_by(
             user_id=user_id,
             status=BetStatus.PENDING
         ).delete()
         
-        db.session.commit()
+        current_app.db.session.commit()
         
         return jsonify({
             'success': True,
@@ -215,11 +243,22 @@ def clear_bet_slip():
         }), 500
 
 @betting_bp.route('/place', methods=['POST'])
-@token_required
+@session_required
 def place_bet():
     """Place a single bet"""
     try:
-        user = g.current_user
+        # IMPORTANT: g.current_user is a SimpleNamespace (NOT ORM)
+        # Re-load a proper ORM User for persistence:
+        db = current_app.db.session
+        user = _get_orm_user_for_bet(db, g.current_user.id)
+        
+        # Verify operator match
+        if user.sportsbook_operator_id != g.current_user.sportsbook_operator_id:
+            return jsonify({
+                'success': False,
+                'message': 'Operator mismatch'
+            }), 400
+        
         data = request.get_json()
         
         # Extract bet data from request
@@ -228,21 +267,9 @@ def place_bet():
         selection = data.get('selection')
         odds = float(data.get('odds', 1.0))
         stake = float(data.get('stake', 10))
-        sport_name = data.get('sport_name')  # New field for sport
-        bet_timing = data.get('bet_timing', 'pregame')  # Default to pregame
-        market_id = data.get('market_id', 'unknown')  # Market ID for admin liability calculation
-        
-        # Log the received data for debugging
-        logger.info(f"Received bet data: match_id={match_id}, match_name={match_name}, sport_name={sport_name}, bet_timing={bet_timing}, market_id={market_id}")
-        
-        # If sport_name is not provided, try to determine it from match_name
-        if not sport_name:
-            sport_name = determine_sport_from_match_name(match_name)
-            logger.info(f"Determined sport_name from match_name: {sport_name}")
-        
-        # TODO: The frontend should send sport_name from the odds data metadata
-        # The odds data contains: "metadata": {"sport": "soccer", "display_name": "Soccer", ...}
-        # This is much more reliable than guessing from team names
+        sport_name = data.get('sport_name')
+        bet_timing = data.get('bet_timing', 'pregame')
+        market_id = data.get('market_id', 'unknown')
         
         if not match_id or not selection:
             return jsonify({
@@ -251,9 +278,7 @@ def place_bet():
             }), 400
         
         # Check if this specific bet event is blocked by admin
-        # For now, we'll check if there's an existing bet with is_active=False
-        # In a real implementation, you'd have a separate BetEvent table
-        blocked_bet = Bet.query.filter_by(
+        blocked_bet = db.query(Bet).filter_by(
             match_id=match_id,
             selection=selection
         ).filter(Bet.is_active == False).first()
@@ -271,9 +296,9 @@ def place_bet():
                 'message': 'Insufficient balance'
             }), 400
         
-        # Create bet record (simplified for now)
+        # Create bet record using IDs only, not relationship objects
         bet = Bet(
-            user_id=user.id,
+            user_id=user.id,  # Use ID, not the user object
             match_id=match_id,
             selection=selection,
             odds=odds,
@@ -282,54 +307,105 @@ def place_bet():
             status='pending',
             match_name=match_name,
             bet_selection=selection,
-            sport_name=sport_name,  # Store sport name for reliable settlement
-            bet_timing=bet_timing,  # Store bet timing (pregame/ingame)
-            market=market_id,  # Store market ID for admin liability calculation
-            sportsbook_operator_id=user.sportsbook_operator_id,  # Set operator ID for multi-tenant support
-            is_active=True  # Default to active
+            sport_name=sport_name,
+            bet_timing=bet_timing,
+            market=market_id,
+            sportsbook_operator_id=user.sportsbook_operator_id,  # Use ID, not the user object
+            is_active=True
         )
         
-        # Deduct balance
+        # Deduct balance on the ORM user object
         user.balance -= stake
         
         # Save to database
-        db.session.add(bet)
+        db.add(bet)
+        db.flush()  # Get bet.id without committing
         
-        # Create transaction record
+        # Create transaction record using IDs only
         transaction = Transaction(
-            user_id=user.id,
+            user_id=user.id,  # Use ID, not the user object
+            bet_id=bet.id,
             amount=-stake,
             transaction_type='bet',
             description=f'Bet placement - {selection}',
             balance_before=user.balance + stake,
             balance_after=user.balance
         )
-        db.session.add(transaction)
         
-        db.session.commit()
+        db.add(transaction)
+        
+        # Commit all changes atomically
+        db.commit()
+        
+        # DO NOT refresh g.current_user - it's a SimpleNamespace!
+        # Instead, get the new balance from the ORM user object
+        new_balance = float(user.balance)
+        
+        # Update session cache with the new balance using the clean DTO approach
+        try:
+            from src.routes.tenant_auth import build_session_user
+            # Update the session cache with fresh user data
+            updated_user_data = build_session_user(user)
+            session['user_data'] = updated_user_data
+            logger.info("Session cache updated successfully")
+        except Exception as e:
+            logger.warning(f"Failed to update session user data: {e}")
+        
+        # Emit socket events using primitives only
+        try:
+            from flask_socketio import emit
+            emit('bet:placed', {
+                'user_id': user.id,
+                'bet_id': bet.id,
+                'stake': stake,
+                'new_balance': new_balance
+            }, to=f'user_{user.id}', namespace='/')
+            
+            emit('balance:update', {
+                'user_id': user.id,
+                'balance': new_balance
+            }, to=f'user_{user.id}', namespace='/')
+            
+            logger.info("Socket events emitted successfully")
+        except Exception as e:
+            logger.warning(f"Failed to emit socket events: {e}")
         
         return jsonify({
             'success': True,
             'message': 'Bet placed successfully',
             'bet_id': bet.id,
-            'new_balance': user.balance,
-            'bet_timing': bet_timing
+            'new_balance': new_balance
         })
         
     except Exception as e:
         logger.error(f"Error placing bet: {e}")
-        db.session.rollback()
+        # Rollback the session if there was an error
+        try:
+            current_app.db.session.rollback()
+        except:
+            pass
         return jsonify({
             'success': False,
             'message': f'Failed to place bet: {str(e)}'
         }), 500
 
 @betting_bp.route('/place-combo', methods=['POST'])
-@token_required
+@session_required
 def place_combo_bet():
     """Place a combo bet with multiple selections"""
     try:
-        user = g.current_user
+        # IMPORTANT: g.current_user is a SimpleNamespace (NOT ORM)
+        # Re-load a proper ORM User for persistence:
+        db = current_app.db.session
+        user = _get_orm_user_for_bet(db, g.current_user.id)
+        
+        # Verify operator match
+        if user.sportsbook_operator_id != g.current_user.sportsbook_operator_id:
+            return jsonify({
+                'success': False,
+                'message': 'Operator mismatch'
+            }), 400
+        
         data = request.get_json()
         
         # Extract combo bet data
@@ -397,7 +473,7 @@ def place_combo_bet():
         # Create combo bet record
         combo_bet = Bet(
             user_id=user.id,
-            match_id=f"combo_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+            match_id=f"combo_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             match_name=f"Combo Bet ({len(selections)} selections)",
             selection=f"Combo: {len(selections)} selections",
             odds=total_odds,
@@ -409,7 +485,7 @@ def place_combo_bet():
             sport_name=sport_name,  # Store sport name for reliable settlement
             bet_timing=bet_timing,  # Store bet timing (pregame/ingame)
             market='combo',  # Set market for combo bets
-            sportsbook_operator_id=user.sportsbook_operator_id,  # Set operator ID for multi-tenant support
+            sportsbook_operator_id=getattr(user, 'sportsbook_operator_id', None),  # Safely get operator ID
             combo_selections=json.dumps(selections)  # Store selections as JSON string
         )
         
@@ -417,42 +493,63 @@ def place_combo_bet():
         user.balance -= total_stake
         
         # Save to database
-        db.session.add(combo_bet)
+        db.add(combo_bet)
+        db.flush()  # Get combo_bet.id without committing
         
         # Create transaction record
         transaction = Transaction(
             user_id=user.id,
+            bet_id=combo_bet.id,  # Now we have the combo bet ID
             amount=-total_stake,
             transaction_type='combo_bet',
             description=f'Combo bet placement - {len(selections)} selections',
-            balance_before=user.balance + total_stake,
-            balance_after=user.balance
+            balance_before=user.balance + total_stake,  # Balance before deduction
+            balance_after=user.balance  # Balance after deduction
         )
-        db.session.add(transaction)
+        db.add(transaction)
         
-        db.session.commit()
+        # Commit all changes atomically
+        db.commit()
+        
+        # DO NOT refresh g.current_user - it's a SimpleNamespace!
+        # Instead, get the new balance from the ORM user object
+        new_balance = float(user.balance)
+        
+        # Update session cache with the new balance using the clean DTO approach
+        try:
+            from src.routes.tenant_auth import build_session_user
+            # Update the session cache with fresh user data
+            updated_user_data = build_session_user(user)
+            session['user_data'] = updated_user_data
+            logger.info("Session cache updated successfully")
+        except Exception as e:
+            logger.warning(f"Failed to update session user data: {e}")
         
         return jsonify({
             'success': True,
             'message': 'Combo bet placed successfully',
             'bet_id': combo_bet.id,
-            'new_balance': user.balance,
+            'new_balance': new_balance,
             'selections_count': len(selections),
             'total_odds': total_odds
         })
         
     except Exception as e:
         logger.error(f"Error placing combo bet: {e}")
-        db.session.rollback()
+        # Rollback the session if there was an error
+        try:
+            db.rollback()
+        except:
+            pass
         return jsonify({
             'success': False,
             'message': f'Failed to place combo bet: {str(e)}'
         }), 500
 
 @betting_bp.route('/bets', methods=['GET'])
-@token_required
+@session_required
 def get_user_bets():
-    """Get user's betting history"""
+    """Get user's betting history with connection pool optimization"""
     try:
         user_id = g.current_user.id
         
@@ -461,35 +558,48 @@ def get_user_bets():
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 20))
         
-        # Build query
-        query = Bet.query.filter_by(user_id=user_id)
+        # Use raw connection for better performance and connection management
+        from src.database_config import get_raw_database_connection
         
-        if status and status != 'all':
-            query = query.filter_by(status=status)
-        
-        # Include all bets (including pending ones)
-        # No filter to exclude pending bets
-        
-        # Order by creation date (newest first)
-        query = query.order_by(Bet.created_at.desc())
-        
-        # Paginate
-        pagination = query.paginate(
-            page=page,
-            per_page=per_page,
-            error_out=False
-        )
-        
-        bets = []
-        for bet in pagination.items:
-            bet_dict = bet.to_dict()
+        with get_raw_database_connection() as conn:
+            cursor = conn.cursor()
             
-            # Add formatted local time
-            if bet.created_at:
-                # Format the time in a readable format
-                bet_dict['created_at_local'] = bet.created_at.strftime('%b %d, %Y at %I:%M %p')
+            # Build base query
+            base_query = "FROM bets WHERE user_id = %s"
+            params = [user_id]
             
-            bets.append(bet_dict)
+            if status and status != 'all':
+                base_query += " AND status = %s"
+                params.append(status)
+            
+            # Get total count
+            count_query = f"SELECT COUNT(*) as total {base_query}"
+            cursor.execute(count_query, params)
+            total_count = cursor.fetchone()['total']
+            
+            # Calculate pagination
+            offset = (page - 1) * per_page
+            total_pages = (total_count + per_page - 1) // per_page
+            
+            # Get paginated results
+            select_query = f"""
+                SELECT id, match_name, selection, stake, odds, potential_return, 
+                       status, created_at, settled_at, sport_name, bet_timing
+                {base_query}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """
+            cursor.execute(select_query, params + [per_page, offset])
+            
+            bets = []
+            for row in cursor.fetchall():
+                bet_dict = dict(row)
+                
+                # Add formatted local time
+                if bet_dict.get('created_at'):
+                    bet_dict['created_at_local'] = bet_dict['created_at'].strftime('%b %d, %Y at %I:%M %p')
+                
+                bets.append(bet_dict)
         
         return jsonify({
             'success': True,
@@ -497,29 +607,68 @@ def get_user_bets():
             'pagination': {
                 'page': page,
                 'per_page': per_page,
-                'total': pagination.total,
-                'pages': pagination.pages,
-                'has_next': pagination.has_next,
-                'has_prev': pagination.has_prev
+                'total': total_count,
+                'pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
             }
         })
         
     except Exception as e:
         logger.error(f"Error getting user bets: {e}")
+        logger.exception("Full exception details for bet history:")
+        
+        # Try to rollback any pending transactions
+        try:
+            current_app.db.session.rollback()
+        except Exception as rollback_error:
+            logger.error(f"Failed to rollback session: {rollback_error}")
+        
         return jsonify({
             'success': False,
             'error': 'Failed to get bets'
         }), 500
 
+@betting_bp.route('/test-connection', methods=['GET'])
+@session_required
+def test_betting_connection():
+    """Test endpoint to verify database connection and authentication"""
+    try:
+        user_id = g.current_user.id
+        
+        # Simple raw query instead of ORM to test connection
+        from src.database_config import get_raw_database_connection
+        with get_raw_database_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM bets WHERE user_id = %s", (user_id,))
+            result = cursor.fetchone()
+            bet_count = result['count'] if result else 0
+        
+        return jsonify({
+            'success': True,
+            'message': 'Connection test successful',
+            'user_id': user_id,
+            'user_name': g.current_user.username,
+            'bet_count': bet_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in connection test: {e}")
+        logger.exception("Full exception details for connection test:")
+        return jsonify({
+            'success': False,
+            'error': f'Connection test failed: {str(e)}'
+        }), 500
+
 @betting_bp.route('/stats', methods=['GET'])
-@token_required
+@session_required
 def get_user_stats():
     """Get user's betting statistics"""
     try:
         user_id = g.current_user.id
         
         # Get all settled bets
-        all_bets = Bet.query.filter_by(user_id=user_id).filter(
+        all_bets = current_app.db.session.query(Bet).filter_by(user_id=user_id).filter(
             Bet.status != BetStatus.PENDING
         ).all()
         
@@ -567,7 +716,7 @@ def settle_bets():
     """Settle bets based on event results (admin endpoint)"""
     try:
         # Get all pending bets for finished events
-        pending_bets = db.session.query(Bet).join(Event).filter(
+        pending_bets = current_app.db.session.query(Bet).join(Event).filter(
             Bet.status == BetStatus.PENDING,
             Event.status == 'finished'
         ).all()
@@ -597,19 +746,19 @@ def settle_bets():
                     amount=bet.actual_return,
                     transaction_type='win',
                     description=f'Bet win - {bet.match_name}',
-                    balance_before=user.balance - bet.actual_return,
-                    balance_after=user.balance
+                    balance_before=user.balance - bet.actual_return,  # Balance before credit
+                    balance_after=user.balance  # Balance after credit
                 )
-                db.session.add(transaction)
+                current_app.db.session.add(transaction)
                 
             else:
                 bet.status = BetStatus.LOST
                 bet.actual_return = 0
             
-            bet.settled_at = datetime.utcnow()
+            bet.settled_at = datetime.now()
             settled_count += 1
         
-        db.session.commit()
+        current_app.db.session.commit()
         
         return jsonify({
             'success': True,
@@ -619,7 +768,7 @@ def settle_bets():
         
     except Exception as e:
         logger.error(f"Error settling bets: {e}")
-        db.session.rollback()
+        current_app.db.session.rollback()
         return jsonify({
             'success': False,
             'error': 'Failed to settle bets'
@@ -672,13 +821,13 @@ def determine_bet_result(bet, event, outcome, market):
         return False
 
 @betting_bp.route('/cash-out/<int:bet_id>', methods=['POST'])
-@token_required
+@session_required
 def cash_out_bet(bet_id):
     """Cash out a bet early"""
     try:
         user = g.current_user
         
-        bet = Bet.query.filter_by(
+        bet = current_app.db.session.query(Bet).filter_by(
             id=bet_id,
             user_id=user.id,
             status=BetStatus.PENDING
@@ -696,7 +845,7 @@ def cash_out_bet(bet_id):
         # Update bet status
         bet.status = BetStatus.CASHED_OUT
         bet.actual_return = cash_out_value
-        bet.settled_at = datetime.utcnow()
+        bet.settled_at = datetime.now()
         
         # Credit user account
         user.balance += cash_out_value
@@ -708,12 +857,12 @@ def cash_out_bet(bet_id):
             amount=cash_out_value,
             transaction_type='cash_out',
             description=f'Cash out - {bet.match_name}',
-            balance_before=user.balance - cash_out_value,
-            balance_after=user.balance
+            balance_before=user.balance - cash_out_value,  # Balance before credit
+            balance_after=user.balance  # Balance after credit
         )
-        db.session.add(transaction)
+        current_app.db.session.add(transaction)
         
-        db.session.commit()
+        current_app.db.session.commit()
         
         return jsonify({
             'success': True,
@@ -724,7 +873,7 @@ def cash_out_bet(bet_id):
         
     except Exception as e:
         logger.error(f"Error cashing out bet: {e}")
-        db.session.rollback()
+        current_app.db.session.rollback()
         return jsonify({
             'success': False,
             'error': 'Failed to cash out bet'
@@ -774,7 +923,7 @@ class AutoSettlementWorker:
         """Check for finished events and settle bets"""
         try:
             # Get all pending bets
-            pending_bets = Bet.query.filter_by(status=BetStatus.PENDING).all()
+            pending_bets = current_app.db.session.query(Bet).filter_by(status=BetStatus.PENDING).all()
             
             if not pending_bets:
                 return
@@ -806,12 +955,12 @@ class AutoSettlementWorker:
                     continue
             
             if settled_count > 0:
-                db.session.commit()
+                current_app.db.session.commit()
                 logger.info(f"Auto settled {settled_count} bets")
                 
         except Exception as e:
             logger.error(f"Error in auto settlement check: {e}")
-            db.session.rollback()
+            current_app.db.session.rollback()
     
     def _check_event_status(self, event, live_data):
         """Check if an event is finished based on live data"""
@@ -889,16 +1038,16 @@ class AutoSettlementWorker:
                     amount=bet.actual_return,
                     transaction_type='win',
                     description=f'Auto settled win - {bet.match_name}',
-                    balance_before=user.balance - bet.actual_return,
-                    balance_after=user.balance
+                    balance_before=user.balance - bet.actual_return,  # Balance before credit
+                    balance_after=user.balance  # Balance after credit
                 )
-                db.session.add(transaction)
+                current_app.db.session.add(transaction)
                 
             else:
                 bet.status = BetStatus.LOST
                 bet.actual_return = 0
             
-            bet.settled_at = datetime.utcnow()
+            bet.settled_at = datetime.now()
             
         except Exception as e:
             logger.error(f"Error settling single bet: {e}")
@@ -962,7 +1111,7 @@ def get_settlement_status():
         is_running = auto_settlement_worker and auto_settlement_worker.running
         
         # Get pending bets count
-        pending_count = Bet.query.filter_by(status=BetStatus.PENDING).count()
+        pending_count = current_app.db.session.query(Bet).filter_by(status=BetStatus.PENDING).count()
         
         return jsonify({
             'success': True,
@@ -978,12 +1127,12 @@ def get_settlement_status():
         }), 500
 
 @betting_bp.route('/manual-settlement', methods=['GET'])
-@token_required
+@session_required
 def get_manual_settlement_data():
     """Get pending bets grouped by match for manual settlement"""
     try:
         # Get all pending bets
-        pending_bets = db.session.query(Bet).filter(
+        pending_bets = current_app.db.session.query(Bet).filter(
             Bet.status == 'pending'
         ).all()
         
@@ -1039,7 +1188,7 @@ def get_manual_settlement_data():
         }), 500
 
 @betting_bp.route('/manual-settle', methods=['POST'])
-@token_required
+@session_required
 def manual_settle_bets():
     """Manually settle bets for a specific match and market"""
     try:
@@ -1055,7 +1204,7 @@ def manual_settle_bets():
             }), 400
         
         # Get all pending bets for this match and market
-        pending_bets = db.session.query(Bet).filter(
+        pending_bets = current_app.db.session.query(Bet).filter(
             Bet.match_id == match_id,
             Bet.market == market,
             Bet.status == 'pending'
@@ -1094,19 +1243,19 @@ def manual_settle_bets():
                         amount=bet.actual_return,
                         transaction_type='win',
                         description=f'Bet win - {bet.match_name} ({bet.selection})',
-                        balance_before=user.balance - bet.actual_return,
-                        balance_after=user.balance
+                        balance_before=user.balance - bet.actual_return,  # Balance before credit
+                        balance_after=user.balance  # Balance after credit
                     )
-                    db.session.add(transaction)
+                    current_app.db.session.add(transaction)
             else:
                 bet.status = 'lost'
                 bet.actual_return = 0
                 lost_count += 1
             
-            bet.settled_at = datetime.utcnow()
+            bet.settled_at = datetime.now()
             settled_count += 1
         
-        db.session.commit()
+        current_app.db.session.commit()
         
         return jsonify({
             'success': True,
@@ -1119,7 +1268,7 @@ def manual_settle_bets():
         
     except Exception as e:
         logger.error(f"Error manually settling bets: {e}")
-        db.session.rollback()
+        current_app.db.session.rollback()
         return jsonify({
             'success': False,
             'error': 'Failed to settle bets'

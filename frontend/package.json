@@ -1,0 +1,13 @@
+{
+  "name": "goalserve-sportsbook-frontend",
+  "version": "1.0.0",
+  "description": "GoalServe Sports Betting Platform Frontend",
+  "main": "index.html",
+  "scripts": {
+    "build": "echo 'Static HTML build - no build step required'",
+    "deploy": "echo 'Deploy to Cloudflare Pages'"
+  },
+  "keywords": ["sports", "betting", "platform", "frontend"],
+  "author": "GoalServe Team",
+  "license": "MIT"
+}

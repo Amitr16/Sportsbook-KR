@@ -4,8 +4,9 @@ Same features as admin but across ALL operators + additional super admin feature
 """
 
 from flask import Blueprint, render_template_string, jsonify, request, session, redirect
-import sqlite3
+from src import sqlite3_shim as sqlite3
 import json
+import os
 from datetime import datetime, timedelta
 from functools import wraps
 import logging
@@ -15,19 +16,17 @@ logger = logging.getLogger(__name__)
 
 comprehensive_superadmin_bp = Blueprint('comprehensive_superadmin', __name__)
 
-DATABASE_PATH = 'src/database/app.db'
-
 def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
+    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
     return conn
 
 def superadmin_required(f):
     """Decorator to require super admin authentication"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'superadmin_id' not in session:
+        from src.auth.session_utils import is_superadmin_logged_in
+        if not is_superadmin_logged_in():
             return redirect('/superadmin')
         return f(*args, **kwargs)
     return decorated_function
@@ -47,45 +46,183 @@ def superadmin_comprehensive_dashboard():
 @comprehensive_superadmin_bp.route('/api/superadmin/global-betting-events')
 @superadmin_required
 def get_global_betting_events():
-    """Get betting events across ALL operators"""
+    """Get betting events across ALL operators with show_only_with_bets filtering"""
     try:
+        show_only_with_bets = request.args.get('show_only_with_bets', 'false').lower() == 'true'
+        
+        print(f"🔍 DEBUG: Global betting events - show_only_with_bets = {show_only_with_bets}")
+        
         conn = get_db_connection()
         
-        # Get events with bets from ALL operators
-        events_query = """
-        SELECT DISTINCT b.match_id, b.sport_name, b.market, so.sportsbook_name,
-               COUNT(b.id) as total_bets,
-               SUM(CASE WHEN b.status = 'pending' THEN b.stake ELSE 0 END) as total_liability,
-               SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as total_revenue
-        FROM bets b
-        JOIN users u ON b.user_id = u.id
-        JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
-        GROUP BY b.match_id, b.sport_name, b.market, so.sportsbook_name
-        ORDER BY total_bets DESC
+        # Step 1: Get pending bets from ALL operators - AGGREGATED by event+market with LIMIT
+        base_query = """
+            SELECT 
+                b.match_id,
+                b.sport_name, 
+                b.market, 
+                COUNT(*) as bet_count
+            FROM bets b
+            JOIN users u ON b.user_id = u.id 
+            JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+            WHERE b.status = 'pending' AND so.is_active = TRUE
+            GROUP BY b.match_id, b.sport_name, b.market
+            ORDER BY b.match_id DESC
+            LIMIT 1000
         """
         
-        events = conn.execute(events_query).fetchall()
+        bet_events_result = conn.execute(base_query).fetchall()
+        print(f"🔍 DEBUG: Found {len(bet_events_result)} pending bets across all operators")
+        
+        if not bet_events_result:
+            conn.close()
+            return jsonify({
+                'events': [],
+                'summary': {
+                    'total_events': 0,
+                    'total_bets': 0,
+                    'total_stakes': 0.0,
+                    'total_potential_returns': 0.0
+                }
+            })
+        
+        # Step 2: If show_only_with_bets=true, filter by JSON file availability
+        if show_only_with_bets:
+            print("🔍 DEBUG: Filtering by JSON file availability...")
+            
+            # Get events that exist in JSON files
+            available_events = set()
+            sports_dir = os.path.join(os.getcwd(), 'Sports Pre Match')
+            
+            if os.path.exists(sports_dir):
+                for sport_folder in os.listdir(sports_dir):
+                    if os.path.isdir(os.path.join(sports_dir, sport_folder)):
+                        events_file = os.path.join(sports_dir, sport_folder, f'{sport_folder}_odds.json')
+                        if os.path.exists(events_file):
+                            try:
+                                with open(events_file, 'r', encoding='utf-8') as f:
+                                    sport_data = json.load(f)
+                                
+                                # Extract available event-market combinations
+                                if 'odds_data' in sport_data and 'scores' in sport_data['odds_data'] and 'categories' in sport_data['odds_data']['scores']:
+                                    for category in sport_data['odds_data']['scores']['categories']:
+                                        if 'matches' in category:
+                                            for match in category['matches']:
+                                                event_id = str(match.get('id', ''))
+                                                if 'odds' in match:
+                                                    for odd in match['odds']:
+                                                        market_id = str(odd.get('id', ''))
+                                                        if market_id:
+                                                            available_events.add((event_id, sport_folder, market_id))
+                                
+                            except Exception as e:
+                                print(f"Error loading {sport_folder} JSON: {e}")
+                                continue
+            
+            print(f"🔍 DEBUG: Available events in JSON: {len(available_events)}")
+            
+            # Filter bets to only include available events
+            filtered_bets = []
+            for bet in bet_events_result:
+                event_key = (str(bet['match_id']), str(bet['sport_name']), str(bet['market']))
+                if event_key in available_events:
+                    filtered_bets.append(bet)
+            
+            bet_events_result = filtered_bets
+            print(f"🔍 DEBUG: After JSON filtering: {len(bet_events_result)} bets")
+        
+        # Step 3: Process and format the results
+        all_events = []
+        total_stakes = 0.0
+        total_potential_returns = 0.0
+        
+        for bet in bet_events_result:
+            # Get detailed bet selections and calculate totals for this event+market
+            totals_query = """
+                SELECT 
+                    SUM(b.stake) as total_stakes,
+                    SUM(b.potential_return) as total_potential_returns,
+                    COUNT(DISTINCT so.sportsbook_name) as operator_count
+                FROM bets b
+                JOIN users u ON b.user_id = u.id
+                JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+                WHERE b.match_id = ? AND b.market = ? AND b.sport_name = ? AND b.status = 'pending'
+                AND so.is_active = TRUE
+            """
+            
+            totals = conn.execute(totals_query, (bet['match_id'], bet['market'], bet['sport_name'])).fetchone()
+            
+            if totals:
+                event_total_stakes = float(totals['total_stakes'] or 0)
+                event_total_potential_returns = float(totals['total_potential_returns'] or 0)
+                operator_count = int(totals['operator_count'] or 0)
+                
+                # Get detailed bet selections for liability calculation
+                selections_query = """
+                    SELECT b.bet_selection, SUM(b.stake) as total_stake, SUM(b.potential_return) as total_payout
+                    FROM bets b
+                    JOIN users u ON b.user_id = u.id
+                    JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+                    WHERE b.match_id = ? AND b.market = ? AND b.sport_name = ? AND b.status = 'pending'
+                    AND so.is_active = TRUE
+                    GROUP BY b.bet_selection
+                """
+                
+                selections = conn.execute(selections_query, (bet['match_id'], bet['market'], bet['sport_name'])).fetchall()
+                
+                if selections:
+                    # Calculate profit/loss for each possible outcome
+                    outcomes = []
+                    
+                    for selection_row in selections:
+                        total_payout = float(selection_row['total_payout'])
+                        # If this selection wins: pay out winners, keep losing stakes
+                        profit_loss = event_total_stakes - total_payout
+                        outcomes.append(profit_loss)
+                    
+                    max_liability = abs(min(outcomes)) if outcomes else 0.0
+                    max_possible_gain = max(outcomes) if outcomes else 0.0
+                else:
+                    max_liability = 0.0
+                    max_possible_gain = 0.0
+                
+                total_stakes += event_total_stakes
+                total_potential_returns += event_total_potential_returns
+                
+                # Create betting event entry - AGGREGATED at event+market level
+                betting_event = {
+                    'event_id': bet['match_id'],
+                    'sport': bet['sport_name'].title(),
+                    'event_name': f"{bet['sport_name'].title()} - {bet['market']}",
+                    'market': bet['market'],
+                    'total_bets': bet['bet_count'],
+                    'operator_count': operator_count,
+                    'max_liability': max_liability,
+                    'max_possible_gain': max_possible_gain,
+                    'total_stakes': event_total_stakes,
+                    'total_potential_returns': event_total_potential_returns,
+                    'status': 'active'
+                }
+                
+                all_events.append(betting_event)
+        
         conn.close()
         
-        events_list = []
-        for event in events:
-            events_list.append({
-                'event_id': event['match_id'],
-                'sport': event['sport_name'],
-                'event_name': f"{event['sport_name']} - {event['market']}",
-                'market': event['market'],
-                'operator': event['sportsbook_name'],
-                'total_bets': event['total_bets'],
-                'max_liability': float(event['total_liability'] or 0),
-                'max_possible_gain': float(event['total_revenue'] or 0),
-                'status': 'active'
-            })
+        # Calculate summary
+        total_events = len(all_events)
         
         return jsonify({
             'success': True,
-            'events': events_list,
-            'total_events': len(events_list),
-            'active_events': len([e for e in events_list if e['status'] == 'active'])
+            'events': all_events,
+            'total_events': total_events,
+            'active_events': total_events,
+            'total_liability': sum(e['max_liability'] for e in all_events),
+            'max_possible_gain': sum(e['max_possible_gain'] for e in all_events),
+            'summary': {
+                'total_events': total_events,
+                'total_bets': sum(event['total_bets'] for event in all_events),
+                'total_stakes': total_stakes,
+                'total_potential_returns': total_potential_returns
+            }
         })
         
     except Exception as e:
@@ -506,11 +643,54 @@ def global_manual_settle_bets():
         total_payout = 0
         
         for bet in pending_bets:
-            # Determine if bet is a winner
+            # Handle "No Result" case - cancel bet and refund stake
+            if winning_selection == 'no_result':
+                # Update bet status to voided (cancelled)
+                conn.execute("""
+                    UPDATE bets 
+                    SET status = 'voided', actual_return = ?, settled_at = ?
+                    WHERE id = ?
+                """, (bet['stake'], datetime.now(), bet['id']))
+                
+                # Refund the stake to user account
+                conn.execute("""
+                    UPDATE users 
+                    SET balance = balance + ?
+                    WHERE id = ?
+                """, (bet['stake'], bet['user_id']))
+                
+                # Create transaction record for refund
+                conn.execute("""
+                    INSERT INTO transactions (user_id, bet_id, amount, transaction_type, description, balance_before, balance_after, created_at)
+                    VALUES (?, ?, ?, 'refund', ?, ?, ?, ?)
+                """, (
+                    bet['user_id'], 
+                    bet['id'], 
+                    bet['stake'],
+                    f'Bet cancelled - {bet["match_name"]} (No Result)',
+                    bet['stake'],  # balance_before (simplified)
+                    bet['stake'] * 2,  # balance_after (simplified)
+                    datetime.now()
+                ))
+                
+                settled_count += 1
+                continue
+            
+            # Determine if bet is a winner (for normal settlement)
             is_winner = (bet['selection'] == winning_selection)
             
             if is_winner:
                 # Update bet status to won
+                conn.execute("""
+                    UPDATE bets 
+                    SET status = 'won', actual_return = ?, settled_at = ?
+                    WHERE id = ?
+                """, (bet['potential_return'], datetime.now(), bet['id']))
+                
+                won_count += 1
+                total_payout += bet['potential_return']
+                
+                # Credit user account
                 conn.execute("""
                     UPDATE bets 
                     SET status = 'won', actual_return = ?, settled_at = ?
@@ -556,13 +736,20 @@ def global_manual_settle_bets():
         conn.commit()
         conn.close()
         
+        # Prepare success message based on settlement type
+        if winning_selection == 'no_result':
+            message = f'Cancelled {settled_count} bets across all operators - stakes refunded'
+        else:
+            message = f'Settled {settled_count} bets across all operators'
+        
         return jsonify({
             'success': True,
-            'message': f'Settled {settled_count} bets across all operators',
+            'message': message,
             'settled_count': settled_count,
             'won_count': won_count,
             'lost_count': lost_count,
-            'total_payout': total_payout
+            'total_payout': total_payout,
+            'settlement_type': 'cancelled' if winning_selection == 'no_result' else 'normal'
         })
         
     except Exception as e:
@@ -1146,6 +1333,7 @@ def get_comprehensive_superadmin_template():
                             <td class="liability">$${item.total_liability.toFixed(2)}</td>
                             <td>
                                 <select class="outcome-select" id="outcome_${item.match_id}_${item.market}" style="margin-bottom: 0.5rem; width: 100%; padding: 0.3rem; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="no_result">No Result (Cancel & Refund)</option>
                                     ${item.outcomes.map(outcome => `<option value="${outcome}">${outcome}</option>`).join('')}
                                 </select>
                                 <button class="btn btn-warning" onclick="settleBets('${item.match_id}', '${item.market}', '${item.match_name}')" style="width: 100%;">
@@ -1172,7 +1360,14 @@ def get_comprehensive_superadmin_template():
             }
             
             // Confirm settlement
-            if (!confirm(`Are you sure you want to settle ${matchName}?\n\nWinning selection: ${winningSelection}\n\nThis action cannot be undone.`)) {
+            let confirmMessage;
+            if (winningSelection === 'no_result') {
+                confirmMessage = `Are you sure you want to CANCEL ${matchName}?\n\nAction: No Result (Cancel & Refund)\n\nThis will:\n• Cancel all bets for this match\n• Refund all stakes to users\n• Mark bets as "voided"\n\nThis action cannot be undone.`;
+            } else {
+                confirmMessage = `Are you sure you want to settle ${matchName}?\n\nWinning selection: ${winningSelection}\n\nThis action cannot be undone.`;
+            }
+            
+            if (!confirm(confirmMessage)) {
                 return;
             }
             
@@ -1192,7 +1387,11 @@ def get_comprehensive_superadmin_template():
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert(`✅ Successfully settled ${data.settled_count} bets!\n\nWon: ${data.won_count}\nLost: ${data.lost_count}\nTotal Payout: $${data.total_payout.toFixed(2)}`);
+                    if (data.settlement_type === 'cancelled') {
+                        alert(`✅ Successfully cancelled ${data.settled_count} bets!\n\nAll stakes have been refunded to users.\n\nBets marked as "voided"`);
+                    } else {
+                        alert(`✅ Successfully settled ${data.settled_count} bets!\n\nWon: ${data.won_count}\nLost: ${data.lost_count}\nTotal Payout: $${data.total_payout.toFixed(2)}`);
+                    }
                     // Refresh the settlement data
                     loadSettlementData();
                 } else {

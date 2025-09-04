@@ -1,0 +1,26 @@
+{
+  "edited_files": [
+    "src/routes/branding.py",
+    "src/routes/clean_multitenant_routing.py",
+    "src/routes/comprehensive_admin.py",
+    "src/routes/comprehensive_superadmin.py",
+    "src/routes/json_sports.py",
+    "src/routes/multitenant_routing.py",
+    "src/routes/rich_admin_interface.py",
+    "src/routes/rich_superadmin_interface1.py",
+    "src/routes/sportsbook_registration.py",
+    "src/routes/sportsbook_registration1.py",
+    "src/routes/superadmin.py",
+    "src/routes/tenant_admin.py",
+    "src/routes/tenant_auth.py",
+    "src/routes/theme_customization.py",
+    "src/routes/theme_customization1.py",
+    "src/routes/clean_multitenant_routing.py",
+    "src/routes/theme_customization.py",
+    "requirements.txt",
+    ".env.example",
+    "README.md",
+    "src/db_compat.py",
+    "src/sqlite3_shim.py"
+  ]
+}
