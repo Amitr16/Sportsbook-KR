@@ -70,7 +70,7 @@ CREATE TABLE disabled_events (
     sport TEXT,
     event_name TEXT,
     market TEXT,
-    is_disabled BOOLEAN DEFAULT 1,
+    is_disabled BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -201,3 +201,20 @@ This is the complete, fully-functional GoalServe sports betting platform with al
 
 **All features working and verified!** 🎯
 
+
+
+## PostgreSQL (shim) quick start
+
+1. Install deps:
+```
+pip install -r requirements.txt
+```
+
+2. Set your DSN in environment or `.env`:
+```
+PG_DSN=postgresql://USER:PASS@HOST:5432/DBNAME
+```
+
+3. Run the app as usual. All legacy `sqlite3` usages are routed through `src/sqlite3_shim` to PostgreSQL via `psycopg`.
+
+> Note: SQLite-only calls like `PRAGMA table_info(...)` were switched to `information_schema.columns`.

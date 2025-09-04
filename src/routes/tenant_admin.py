@@ -3,7 +3,7 @@ Comprehensive tenant-filtered admin interface for sportsbook operators
 """
 
 from flask import Blueprint, request, jsonify, session, render_template_string, redirect, send_file, make_response
-import sqlite3
+from src import sqlite3_shim as sqlite3
 import json
 from datetime import datetime, timedelta
 from functools import wraps

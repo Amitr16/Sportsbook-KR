@@ -3,18 +3,16 @@ Multi-tenant routing system for sportsbook operators
 """
 
 from flask import Blueprint, request, jsonify, session, render_template_string, redirect, send_from_directory
-import sqlite3
+from src import sqlite3_shim as sqlite3
+from src.auth.session_utils import clear_operator_session
 import os
 from functools import wraps
 
 multitenant_bp = Blueprint('multitenant', __name__)
 
-DATABASE_PATH = 'src/database/app.db'
-
 def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
+    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
     return conn
 
 def require_admin_auth(f):
@@ -446,7 +444,7 @@ def admin_dashboard(subdomain):
     """Admin dashboard for specific sportsbook"""
     operator = get_current_operator()
     if not operator or operator['subdomain'] != subdomain:
-        session.clear()
+        clear_operator_session(subdomain)
         return redirect(f'/admin/{subdomain}')
     
     return render_template_string(ADMIN_DASHBOARD_TEMPLATE, operator=operator)

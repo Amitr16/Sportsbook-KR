@@ -4,7 +4,7 @@ Provides endpoints for theme templates, saving/loading customizations
 """
 
 from flask import Blueprint, request, jsonify, session
-import sqlite3
+from src import sqlite3_shim as sqlite3
 import os
 from datetime import datetime
 
@@ -111,7 +111,7 @@ def save_theme():
         print("🔍 Creating sportsbook_themes table if it doesn't exist...")
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sportsbook_themes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 sportsbook_operator_id INTEGER NOT NULL,
                 primary_color TEXT DEFAULT '#1e40af',
                 secondary_color TEXT DEFAULT '#3b82f6',
@@ -278,7 +278,7 @@ def save_theme_for_operator(subdomain):
         # Create sportsbook_themes table if it doesn't exist
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sportsbook_themes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 sportsbook_operator_id INTEGER NOT NULL,
                 primary_color TEXT DEFAULT '#1e40af',
                 secondary_color TEXT DEFAULT '#3b82f6',

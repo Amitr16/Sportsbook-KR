@@ -1,216 +1,303 @@
-# GoalServe Deployment Guide
+# 🚀 Complete Deployment Guide: Fly.io (Backend) + Cloudflare Pages (Frontend)
 
-## 🚀 **Quick Deployment**
+This guide will walk you through deploying the GoalServe Sports Betting Platform to production using Fly.io for the backend and Cloudflare Pages for the frontend.
 
-### **1. User Betting Application**
+## 📋 Prerequisites
+
+- [Fly.io CLI](https://fly.io/docs/hands-on/install-flyctl/) installed
+- [Cloudflare account](https://dash.cloudflare.com/sign-up) 
+- [Git](https://git-scm.com/) installed
+- PostgreSQL database (we'll use Fly.io's managed PostgreSQL)
+
+## 🔧 Step 1: Prepare Your Project
+
+### 1.1 Install Fly.io CLI
 ```bash
-cd GoalServe-FINAL-COMPLETE
-python3 app.py
-```
-- **Access**: http://localhost:5000
-- **Features**: User registration, sports betting, event filtering
+# Windows (PowerShell)
+iwr https://fly.io/install.ps1 -useb | iex
 
-### **2. Admin Dashboard**
+# macOS/Linux
+curl -L https://fly.io/install.sh | sh
+```
+
+### 1.2 Login to Fly.io
 ```bash
-python3 admin_app.py
+fly auth login
 ```
-- **Access**: http://localhost:8080
-- **Features**: Event management, financial analysis, user control
 
-## 📋 **Prerequisites**
+### 1.3 Verify your project structure
+Your project should have these deployment files:
+- `fly.toml` - Fly.io configuration
+- `Dockerfile` - Container configuration
+- `.dockerignore` - Docker build exclusions
+- `env.production` - Production environment template
 
-### **Python Requirements:**
+## 🗄️ Step 2: Set Up PostgreSQL Database
+
+### 2.1 Create PostgreSQL app on Fly.io
 ```bash
-pip3 install flask flask-cors flask-sqlalchemy sqlite3
+fly postgres create goalserve-postgres
 ```
 
-### **System Requirements:**
-- Python 3.7+
-- SQLite3
-- 2GB RAM minimum
-- 1GB disk space
-
-## 🗄️ **Database Setup**
-
-The database is already configured with all required tables:
-
-### **Existing Tables:**
-- ✅ `users` - User accounts and authentication
-- ✅ `bets` - Betting history and calculations
-- ✅ `sessions` - User session management
-
-### **New Table (Already Created):**
-- ✅ `disabled_events` - Event disable/enable functionality
-
-### **Manual Database Check:**
+### 2.2 Attach PostgreSQL to your app
 ```bash
-sqlite3 src/database/app.db
-.tables
-.schema disabled_events
-SELECT * FROM disabled_events;
+fly postgres attach goalserve-postgres --app goalserve-sportsbook-backend
 ```
 
-## 🔧 **Configuration**
-
-### **User App Configuration (app.py):**
-- **Port**: 5000 (default)
-- **Database**: `src/database/app.db`
-- **CORS**: Enabled for all origins
-- **Debug**: Disabled for production
-
-### **Admin App Configuration (admin_app.py):**
-- **Port**: 8080 (default)
-- **Database**: Same as user app
-- **Debug**: Enabled for development
-
-### **Change Ports (if needed):**
-```python
-# In app.py (User App)
-if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
-
-# In admin_app.py (Admin Dashboard)
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8080)
-```
-
-## 🌐 **Production Deployment**
-
-### **1. Security Updates:**
-```python
-# Update secret keys in app.py
-app.config['SECRET_KEY'] = 'your-production-secret-key-here'
-```
-
-### **2. Database Backup:**
+### 2.3 Get database connection details
 ```bash
-cp src/database/app.db src/database/app.db.backup
+fly postgres show goalserve-postgres
 ```
 
-### **3. WSGI Server (Recommended):**
+## 🌐 Step 3: Deploy Backend to Fly.io
+
+### 3.1 Create the app
 ```bash
-pip3 install gunicorn
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
+fly apps create goalserve-sportsbook-backend
 ```
 
-### **4. Nginx Configuration (Optional):**
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-    
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-    
-    location /admin {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-## 🧪 **Testing Deployment**
-
-### **1. Test User App:**
+### 3.2 Set up secrets (environment variables)
 ```bash
-curl http://localhost:5000/api/sports/sports
-```
-Expected: JSON response with sports list
+# Generate secure secret keys
+fly secrets set SECRET_KEY="$(openssl rand -hex 32)"
+fly secrets set JWT_SECRET_KEY="$(openssl rand -hex 32)"
 
-### **2. Test Admin Dashboard:**
+# Set database URL (replace with your actual database URL)
+fly secrets set DATABASE_URL="postgresql://postgres:password@goalserve-postgres.internal:5432/goalserve_sportsbook"
+
+# Set other environment variables
+fly secrets set FLASK_ENV="production"
+fly secrets set FLASK_DEBUG="false"
+fly secrets set HOST="0.0.0.0"
+fly secrets set PORT="8080"
+
+# Set your actual API keys and OAuth credentials
+fly secrets set GOOGLE_CLIENT_ID="your-google-oauth-client-id"
+fly secrets set GOOGLE_CLIENT_SECRET="your-google-oauth-client-secret"
+fly secrets set GOALSERVE_API_KEY="your-goalserve-api-key"
+```
+
+### 3.3 Create volume for persistent data
 ```bash
-curl http://localhost:8080/api/betting-events
+fly volumes create goalserve_data --size 10 --region iad
 ```
-Expected: JSON response with betting events and financial data
 
-### **3. Test Event Toggle:**
+### 3.4 Deploy the application
 ```bash
-curl -X POST http://localhost:8080/api/betting-events/347149_unknown/toggle
+fly deploy
 ```
-Expected: JSON response with success status
 
-## 📊 **Monitoring**
-
-### **Key Metrics to Monitor:**
-- **Active Events Count**: Should match enabled events
-- **Max Liability**: Total platform risk exposure
-- **User Registration**: New user signups
-- **Betting Volume**: Total stakes placed
-
-### **Log Files:**
-- User app logs: Check console output
-- Admin app logs: Check console output
-- Database errors: Check SQLite error logs
-
-## 🔒 **Security Checklist**
-
-### **Before Production:**
-- [ ] Change default secret keys
-- [ ] Enable HTTPS/SSL
-- [ ] Configure firewall rules
-- [ ] Set up database backups
-- [ ] Review CORS settings
-- [ ] Implement rate limiting
-- [ ] Add input validation
-- [ ] Set up monitoring alerts
-
-### **Admin Access:**
-- Admin dashboard has no authentication (by design)
-- Consider adding admin authentication for production
-- Restrict admin dashboard access by IP if needed
-
-## 🆘 **Troubleshooting**
-
-### **Common Issues:**
-
-**1. Port Already in Use:**
+### 3.5 Verify deployment
 ```bash
-# Kill existing processes
-pkill -f "port=5000"
-pkill -f "port=8080"
+fly status
+fly logs
 ```
 
-**2. Database Locked:**
+### 3.6 Test the health endpoint
 ```bash
-# Check for open connections
-lsof src/database/app.db
+curl https://goalserve-sportsbook-backend.fly.dev/health
 ```
 
-**3. Missing Dependencies:**
+## 🎨 Step 4: Deploy Frontend to Cloudflare Pages
+
+### 4.1 Prepare frontend files
+The frontend is already in the `src/static/` directory. We'll deploy this to Cloudflare Pages.
+
+### 4.2 Install Wrangler CLI
 ```bash
-pip3 install -r requirements.txt
+npm install -g wrangler
 ```
 
-**4. Permission Errors:**
+### 4.3 Login to Cloudflare
 ```bash
-chmod +x app.py admin_app.py
+wrangler login
 ```
 
-### **Database Issues:**
+### 4.4 Deploy to Cloudflare Pages
 ```bash
-# Reset database (WARNING: Deletes all data)
-rm src/database/app.db
-python3 -c "from app import create_app; app = create_app(); app.app_context().push(); from src.models.betting import db; db.create_all()"
+# Navigate to frontend directory
+cd frontend
+
+# Deploy to Cloudflare Pages
+wrangler pages deploy src/static --project-name goalserve-sportsbook-frontend
 ```
 
-## 📞 **Support**
+### 4.5 Alternative: Manual Cloudflare Pages Deployment
+1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/)
+2. Navigate to Pages → Create a project
+3. Connect your GitHub repository
+4. Set build settings:
+   - Build command: `echo "Static build"`
+   - Build output directory: `src/static`
+   - Root directory: `/`
+5. Deploy
 
-### **Feature Verification:**
-- ✅ Max Liability/Gain columns working
-- ✅ Event disable/enable functionality
-- ✅ User app filtering disabled events
-- ✅ Database persistence
-- ✅ Real-time updates
+## 🔗 Step 5: Configure CORS and Frontend-Backend Communication
 
-### **Performance:**
-- Handles 100+ concurrent users
-- Sub-second response times
-- Efficient database queries
-- Optimized JSON parsing
+### 5.1 Update CORS origins in Fly.io
+```bash
+# Get your Cloudflare Pages URL
+fly secrets set CORS_ORIGINS="https://goalserve-sportsbook-frontend.pages.dev,https://your-custom-domain.com"
+```
 
-**Deployment Ready!** 🎯
+### 5.2 Update frontend API endpoints
+In your frontend HTML files, update API calls to point to your Fly.io backend:
+
+```javascript
+// Replace localhost:5000 with your Fly.io URL
+const API_BASE_URL = 'https://goalserve-sportsbook-backend.fly.dev';
+```
+
+### 5.2 Redeploy backend with updated CORS
+```bash
+fly deploy
+```
+
+## 🌍 Step 6: Custom Domain Setup (Optional)
+
+### 6.1 Add custom domain to Fly.io backend
+```bash
+fly certs add your-domain.com
+```
+
+### 6.2 Add custom domain to Cloudflare Pages
+1. Go to Cloudflare Pages project
+2. Navigate to Custom domains
+3. Add your domain
+4. Update DNS records as instructed
+
+## 🔍 Step 7: Testing and Verification
+
+### 7.1 Test backend endpoints
+```bash
+# Health check
+curl https://goalserve-sportsbook-backend.fly.dev/health
+
+# Test sports API
+curl https://goalserve-sportsbook-backend.fly.dev/api/sports/soccer
+```
+
+### 7.2 Test frontend
+- Visit your Cloudflare Pages URL
+- Test user registration and login
+- Test betting functionality
+- Verify WebSocket connections
+
+### 7.3 Monitor logs
+```bash
+# Backend logs
+fly logs
+
+# Database logs
+fly postgres logs goalserve-postgres
+```
+
+## 🚨 Step 8: Production Security Checklist
+
+### 8.1 Environment Variables
+- [ ] All sensitive data moved to Fly.io secrets
+- [ ] No hardcoded credentials in code
+- [ ] Production database URL configured
+
+### 8.2 Security Headers
+- [ ] HTTPS enforced
+- [ ] CORS properly configured
+- [ ] Rate limiting implemented (if needed)
+
+### 8.3 Monitoring
+- [ ] Health checks working
+- [ ] Logs accessible
+- [ ] Error tracking configured
+
+## 🔄 Step 9: Continuous Deployment
+
+### 9.1 Set up GitHub Actions (Optional)
+Create `.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy to Fly.io
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+```
+
+### 9.2 Automatic deployments
+```bash
+# Enable automatic deployments
+fly autoscale set min=1 max=3
+```
+
+## 📊 Step 10: Performance Optimization
+
+### 10.1 Database optimization
+```bash
+# Monitor database performance
+fly postgres connect goalserve-postgres
+```
+
+### 10.2 Application scaling
+```bash
+# Scale based on demand
+fly scale count 2
+fly scale memory 2048
+```
+
+## 🆘 Troubleshooting
+
+### Common Issues:
+
+1. **Database Connection Failed**
+   ```bash
+   fly postgres connect goalserve-postgres
+   fly logs
+   ```
+
+2. **Build Failed**
+   ```bash
+   fly logs
+   fly deploy --remote-only
+   ```
+
+3. **CORS Issues**
+   - Verify CORS_ORIGINS secret is set correctly
+   - Check frontend is calling correct backend URL
+   - Redeploy backend after CORS changes
+
+4. **Static Files Not Loading**
+   - Verify static folder path in Dockerfile
+   - Check file permissions
+   - Verify .dockerignore exclusions
+
+## 📞 Support
+
+- **Fly.io**: [Documentation](https://fly.io/docs/) | [Community](https://community.fly.io/)
+- **Cloudflare Pages**: [Documentation](https://developers.cloudflare.com/pages/)
+- **Project Issues**: Check the project repository
+
+## 🎯 Final URLs
+
+After deployment, you'll have:
+- **Backend**: `https://goalserve-sportsbook-backend.fly.dev`
+- **Frontend**: `https://goalserve-sportsbook-frontend.pages.dev`
+- **Database**: Managed PostgreSQL on Fly.io
+
+## 🚀 Next Steps
+
+1. Set up monitoring and alerting
+2. Configure backup strategies
+3. Set up staging environment
+4. Implement CI/CD pipeline
+5. Add performance monitoring
+6. Set up SSL certificates for custom domains
+
+---
+
+**🎉 Congratulations! Your GoalServe Sports Betting Platform is now deployed to production!**
 

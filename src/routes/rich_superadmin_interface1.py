@@ -4,10 +4,11 @@ Same rich interface as admin_app.py but shows data across all operators
 """
 
 from flask import Blueprint, request, session, redirect, render_template_string, jsonify
-import sqlite3
+from src import sqlite3_shim as sqlite3
 import json
 from datetime import datetime, timedelta
 import os
+from sqlalchemy import text
 
 rich_superadmin_bp = Blueprint('rich_superadmin', __name__)
 
@@ -18,6 +19,36 @@ def get_db_connection():
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def update_operator_revenue(operator_id, conn):
+    """Update the total_revenue field for an operator based on actual bet settlements"""
+    try:
+        # Calculate current total revenue from actual bet settlements
+        revenue_query = """
+        SELECT 
+            SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_net_payouts
+        FROM bets b
+        JOIN users u ON b.user_id = u.id
+        WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = ?
+        """
+        
+        result = conn.execute(revenue_query, (operator_id,)).fetchone()
+        total_stakes_lost = float(result['total_stakes_lost'] or 0)
+        total_net_payouts = float(result['total_net_payouts'] or 0)
+        total_revenue = total_stakes_lost - total_net_payouts
+        
+        # Update the operator's total_revenue field
+        conn.execute("""
+            UPDATE sportsbook_operators 
+            SET total_revenue = ? 
+            WHERE id = ?
+        """, (total_revenue, operator_id))
+        
+        print(f"✅ Updated operator {operator_id} total_revenue to: {total_revenue}")
+        
+    except Exception as e:
+        print(f"❌ Error updating operator revenue: {e}")
 
 def calculate_global_event_financials(event_id, market_id, sport_name):
     """Calculate max liability and max possible gain for a specific event+market combination across ALL operators"""
@@ -31,7 +62,7 @@ def calculate_global_event_financials(event_id, market_id, sport_name):
         JOIN users u ON b.user_id = u.id
         JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
         WHERE b.match_id = ? AND b.market = ? AND b.sport_name = ? AND b.status = 'pending'
-        AND op.is_active = 1
+        AND op.is_active = TRUE
         """
         
         bets = conn.execute(query, (event_id, market_id, sport_name)).fetchall()
@@ -79,7 +110,8 @@ def calculate_global_event_financials(event_id, market_id, sport_name):
 def check_superadmin_auth(f):
     """Decorator to check if user is authenticated as super admin"""
     def decorated_function(*args, **kwargs):
-        if not ('superadmin_id' in session):
+        from src.auth.session_utils import is_superadmin_logged_in
+        if not is_superadmin_logged_in():
             return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
     decorated_function.__name__ = f.__name__
@@ -91,16 +123,62 @@ def rich_superadmin_dashboard():
     """Rich super admin dashboard with same interface as original admin_app.py"""
     return render_template_string(RICH_SUPERADMIN_TEMPLATE)
 
-@rich_superadmin_bp.route('/superadmin/api/global-betting-events', methods=['POST'])
+@rich_superadmin_bp.route('/test-toggle-status', methods=['POST'])
+def test_toggle_status():
+    """Test endpoint for toggle status without authentication"""
+    try:
+        # Test the toggle logic with a dummy event
+        event_id = "test_event_123"
+        sport_name = "test_sport"
+        event_name = "Test Event"
+        market_name = "test_market"
+        
+        conn = get_db_connection()
+        
+        # Test the INSERT statement that was causing the boolean error
+        conn.execute("""
+            INSERT INTO disabled_events (event_key, sport, event_name, market, is_disabled)
+            VALUES (?, ?, ?, ?, TRUE)
+            ON CONFLICT (event_key) DO UPDATE SET
+                sport = EXCLUDED.sport,
+                event_name = EXCLUDED.event_name,
+                market = EXCLUDED.market,
+                is_disabled = EXCLUDED.is_disabled
+        """, (event_id, sport_name, event_name, market_name))
+        
+        # Clean up - remove the test record
+        conn.execute("DELETE FROM disabled_events WHERE event_key = ?", (event_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Database constraint fix test passed - ON CONFLICT working correctly'})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/global-betting-events', methods=['GET', 'POST'])
 @check_superadmin_auth
 def get_global_betting_events():
     """Get global betting events across all operators with global liability calculations"""
     try:
-        data = request.get_json()
-        sport_filter = data.get('sport', '')
-        market_filter = data.get('market', '')
-        search_term = data.get('search', '')
-        show_bets_only = data.get('show_bets_only', True)
+        # Handle both GET and POST methods
+        if request.method == 'GET':
+            # GET method - get parameters from query string
+            show_bets_only = request.args.get('show_only_with_bets', 'false').lower() == 'true'
+            sport_filter = request.args.get('sport', '')
+            market_filter = request.args.get('market', '')
+            search_term = request.args.get('search', '')
+        else:
+            # POST method - get parameters from JSON body
+            data = request.get_json() or {}
+            show_bets_only = data.get('show_bets_only', True)
+            sport_filter = data.get('sport', '')
+            market_filter = data.get('market', '')
+            search_term = data.get('search', '')
+
+        print(f"🔍 DEBUG: Global betting events - show_bets_only = {show_bets_only}")
+        print(f"🔍 DEBUG: Method = {request.method}")
 
         conn = get_db_connection()
         
@@ -112,7 +190,7 @@ def get_global_betting_events():
         FROM bets b
                 JOIN users u ON b.user_id = u.id 
                 JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                WHERE op.is_active = 1
+                WHERE op.is_active = TRUE
                 GROUP BY b.match_id, b.sport_name, b.market
                 HAVING COUNT(*) > 0
                 ORDER BY bet_count DESC
@@ -226,7 +304,7 @@ def get_global_betting_events():
                                     FROM bets b 
                                     JOIN users u ON b.user_id = u.id 
                                     JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                                    WHERE op.is_active = 1 AND b.match_id = ? AND b.sport_name = ? AND b.market = ? AND b.is_active = 1
+                                    WHERE op.is_active = TRUE AND b.match_id = ? AND b.sport_name = ? AND b.market = ? AND b.is_active = TRUE
                                 """, (event_id, sport_folder, market_id)).fetchone()
                                 
                                 total_check = conn.execute("""
@@ -234,7 +312,7 @@ def get_global_betting_events():
                                     FROM bets b 
                                     JOIN users u ON b.user_id = u.id 
                                     JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                                    WHERE op.is_active = 1 AND b.match_id = ? AND b.sport_name = ? AND b.market = ?
+                                    WHERE op.is_active = TRUE AND b.match_id = ? AND b.sport_name = ? AND b.market = ?
                                 """, (event_id, sport_folder, market_id)).fetchone()
                                 
                                 total_bets_for_event = total_check['total_count'] if total_check else 0
@@ -264,7 +342,7 @@ def get_global_betting_events():
                                     FROM bets b 
                                     JOIN users u ON b.user_id = u.id 
                                     JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                                    WHERE op.is_active = 1 AND b.match_id = ? AND b.sport_name = ? AND b.market = ?
+                                    WHERE op.is_active = TRUE AND b.match_id = ? AND b.sport_name = ? AND b.market = ?
                                 """, (event_id, sport_folder, market_id)).fetchone()
                                 total_bets = bet_count_result['count'] if bet_count_result else 0
                                 betting_event['total_bets'] = total_bets
@@ -341,13 +419,13 @@ def toggle_global_event_status():
             if market:
                 bets_result = conn.execute("""
                     UPDATE bets 
-                    SET is_active = 0 
+                    SET is_active = FALSE 
                     WHERE match_id = ? AND market = ?
                 """, (base_event_id, market))
             else:
                 bets_result = conn.execute("""
                     UPDATE bets 
-                    SET is_active = 0 
+                    SET is_active = FALSE 
                     WHERE match_id = ?
                 """, (base_event_id,))
         else:
@@ -355,13 +433,13 @@ def toggle_global_event_status():
             if market:
                 bets_result = conn.execute("""
                     UPDATE bets 
-                    SET is_active = 1 
+                    SET is_active = TRUE 
                     WHERE match_id = ? AND market = ?
                 """, (base_event_id, market))
             else:
                 bets_result = conn.execute("""
                     UPDATE bets 
-                    SET is_active = 1 
+                    SET is_active = TRUE 
                     WHERE match_id = ?
                 """, (base_event_id,))
         
@@ -387,8 +465,13 @@ def toggle_global_event_status():
             
             # Insert into disabled_events table
             conn.execute("""
-                INSERT OR REPLACE INTO disabled_events (event_key, sport, event_name, market, is_disabled) 
-                VALUES (?, ?, ?, ?, 1)
+                INSERT INTO disabled_events (event_key, sport, event_name, market, is_disabled)
+                VALUES (?, ?, ?, ?, TRUE)
+                ON CONFLICT (event_key) DO UPDATE SET
+                    sport = EXCLUDED.sport,
+                    event_name = EXCLUDED.event_name,
+                    market = EXCLUDED.market,
+                    is_disabled = EXCLUDED.is_disabled
             """, (event_id, sport_name, event_name, market_name))
             
         else:
@@ -542,63 +625,62 @@ def toggle_operator_status(operator_id):
 @check_superadmin_auth
 def get_global_stats():
     """Get global statistics for the super admin dashboard (adapted from admin interface)"""
+    db = None
     try:
-        conn = get_db_connection()
+        from src.db import SessionLocal, close_db
+        db = SessionLocal()
         
         # Get total operators count
-        operator_count = conn.execute(
-            "SELECT COUNT(*) as count FROM sportsbook_operators WHERE is_active = 1"
-        ).fetchone()['count']
+        operator_count = db.execute(
+            text("SELECT COUNT(*) FROM sportsbook_operators WHERE is_active = TRUE")
+        ).scalar_one()
         
         # Get total users count across all operators
-        user_count = conn.execute("""
-            SELECT COUNT(*) as count 
+        user_count = db.execute(text("""
+            SELECT COUNT(*) 
             FROM users u 
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
-            WHERE op.is_active = 1
-        """).fetchone()['count']
+            WHERE op.is_active = TRUE
+        """)).scalar_one()
         
         # Get total bets count across all operators
-        bet_count = conn.execute("""
-            SELECT COUNT(*) as count 
+        bet_count = db.execute(text("""
+            SELECT COUNT(*) 
             FROM bets b 
             JOIN users u ON b.user_id = u.id 
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = 1
-        """).fetchone()['count']
+            WHERE op.is_active = TRUE
+        """)).scalar_one()
         
         # Get total revenue across all operators (from won bets)
-        revenue_result = conn.execute("""
-            SELECT COALESCE(SUM(b.potential_return - b.stake), 0) as revenue
+        total_revenue = db.execute(text("""
+            SELECT COALESCE(SUM(b.actual_return - b.stake), 0)
             FROM bets b 
             JOIN users u ON b.user_id = u.id 
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = 1 AND b.status = 'won'
-        """).fetchone()
-        total_revenue = float(revenue_result['revenue'] or 0)
+            WHERE op.is_active = TRUE AND b.status = 'won'
+        """)).scalar_one()
+        total_revenue = float(total_revenue or 0)
         
         # Get active events count across all operators (events with pending bets)
-        active_events_result = conn.execute("""
-            SELECT COUNT(DISTINCT b.match_id) as count
+        active_events = db.execute(text("""
+            SELECT COUNT(DISTINCT b.match_id)
             FROM bets b 
             JOIN users u ON b.user_id = u.id 
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = 1 AND b.status = 'pending'
-        """).fetchone()
-        active_events = active_events_result['count']
+            WHERE op.is_active = TRUE AND b.status = 'pending'
+        """)).scalar_one()
         
         # Get total liability across all operators (sum of all pending bet potential returns)
         # This matches the calculation shown in the betting events table
-        liability_result = conn.execute("""
-            SELECT COALESCE(SUM(b.potential_return), 0) as liability
+        total_liability = db.execute(text("""
+            SELECT COALESCE(SUM(b.potential_return), 0)
             FROM bets b 
             JOIN users u ON b.user_id = u.id 
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = 1 AND b.status = 'pending'
-        """).fetchone()
-        total_liability = float(liability_result['liability'] or 0)
-        
-        conn.close()
+            WHERE op.is_active = TRUE AND b.status = 'pending'
+        """)).scalar_one()
+        total_liability = float(total_liability or 0)
         
         return jsonify({
             'total_operators': operator_count,
@@ -612,6 +694,9 @@ def get_global_stats():
     except Exception as e:
         print(f"Error getting global stats: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if db:
+            close_db(db)
 
 @rich_superadmin_bp.route('/superadmin/api/global-reports/overview')
 @check_superadmin_auth
@@ -626,7 +711,7 @@ def get_global_reports_overview():
         SELECT 
             COUNT(*) as total_bets,
             SUM(b.stake) as total_stakes,
-            SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as total_payouts,
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_payouts,
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_revenue_from_losses,
             COUNT(CASE WHEN b.status = 'pending' THEN 1 END) as pending_bets,
             COUNT(CASE WHEN b.status = 'won' THEN 1 END) as won_bets,
@@ -634,7 +719,7 @@ def get_global_reports_overview():
         FROM bets b
         JOIN users u ON b.user_id = u.id
         JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-        WHERE op.is_active = 1
+        WHERE op.is_active = TRUE
         """
         
         totals = conn.execute(total_query).fetchone()
@@ -642,16 +727,16 @@ def get_global_reports_overview():
         # Daily revenue for the last 30 days across all operators
         daily_query = """
         SELECT 
-            DATE(b.created_at) as bet_date,
+            b.created_at::date as bet_date,
             COUNT(*) as daily_bets,
             SUM(b.stake) as daily_stakes,
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-            SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as daily_revenue
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as daily_revenue
         FROM bets b
         JOIN users u ON b.user_id = u.id
         JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-        WHERE op.is_active = 1 AND b.created_at >= date('now', '-30 days')
-        GROUP BY DATE(b.created_at)
+        WHERE op.is_active = TRUE AND b.created_at >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY b.created_at::date
         ORDER BY bet_date DESC
         """
         
@@ -664,11 +749,11 @@ def get_global_reports_overview():
             COUNT(*) as bets_count,
             SUM(b.stake) as total_stakes,
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-            SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as sport_revenue
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as sport_revenue
         FROM bets b
         JOIN users u ON b.user_id = u.id
         JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-        WHERE op.is_active = 1
+        WHERE op.is_active = TRUE
         GROUP BY b.sport_name
         ORDER BY sport_revenue DESC
         """
@@ -717,15 +802,15 @@ def generate_global_custom_report():
         conn = get_db_connection()
         
         # Build base query with global filtering (all active operators)
-        base_where = "op.is_active = 1"
+        base_where = "op.is_active = TRUE"
         params = []
         
         # Add date filters if provided
         if date_from:
-            base_where += " AND DATE(b.created_at) >= ?"
+            base_where += " AND b.created_at::date >= ?"
             params.append(date_from)
         if date_to:
-            base_where += " AND DATE(b.created_at) <= ?"
+            base_where += " AND b.created_at::date <= ?"
             params.append(date_to)
         if sport_filter:
             base_where += " AND b.sport_name = ?"
@@ -735,17 +820,17 @@ def generate_global_custom_report():
         if report_type == 'revenue':
             query = f"""
             SELECT 
-                DATE(b.created_at) as bet_date,
+                b.created_at::date as bet_date,
                 b.sport_name,
                 COUNT(*) as total_bets,
                 SUM(b.stake) as total_stakes,
                 SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as revenue
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
             FROM bets b
             JOIN users u ON b.user_id = u.id
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
             WHERE {base_where}
-            GROUP BY DATE(b.created_at), b.sport_name
+            GROUP BY b.created_at::date, b.sport_name
             ORDER BY bet_date DESC, revenue DESC
             """
             
@@ -756,14 +841,14 @@ def generate_global_custom_report():
                 u.email,
                 COUNT(b.id) as total_bets,
                 SUM(b.stake) as total_staked,
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as payout,
-                SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as user_profit,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as payout,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END) - 
+                SUM(b.stake) as user_profit,
                 u.created_at as joined_date
             FROM users u
             LEFT JOIN bets b ON u.id = b.user_id
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = 1
+            WHERE op.is_active = TRUE
             GROUP BY u.id, u.username, u.email, u.created_at
             ORDER BY total_bets DESC
             """
@@ -772,7 +857,7 @@ def generate_global_custom_report():
         elif report_type == 'betting-patterns':
             query = f"""
             SELECT 
-                DATE(b.created_at) as bet_date,
+                b.created_at::date as bet_date,
                 b.sport_name,
                 b.market as bet_type,
                 COUNT(*) as count,
@@ -782,7 +867,7 @@ def generate_global_custom_report():
             JOIN users u ON b.user_id = u.id
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
             WHERE {base_where}
-            GROUP BY DATE(b.created_at), b.sport_name, b.market
+            GROUP BY b.created_at::date, b.sport_name, b.market
             ORDER BY bet_date DESC, count DESC
             """
             
@@ -795,7 +880,7 @@ def generate_global_custom_report():
                 COUNT(CASE WHEN b.status = 'won' THEN 1 END) as won_bets,
                 COUNT(CASE WHEN b.status = 'lost' THEN 1 END) as lost_bets,
                 SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as sport_revenue,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as sport_revenue,
                 (COUNT(CASE WHEN b.status = 'won' THEN 1 END) * 100.0 / COUNT(*)) as win_rate
             FROM bets b
             JOIN users u ON b.user_id = u.id
@@ -835,7 +920,7 @@ def get_global_available_sports_for_reports():
         FROM bets b
         JOIN users u ON b.user_id = u.id
         JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-        WHERE op.is_active = 1 AND b.sport_name IS NOT NULL AND b.sport_name != ''
+        WHERE op.is_active = TRUE AND b.sport_name IS NOT NULL AND b.sport_name != ''
         ORDER BY b.sport_name
         """
         
@@ -870,14 +955,14 @@ def export_global_custom_report():
         conn = get_db_connection()
         
         # Build base query (similar to generate endpoint)
-        base_where = "op.is_active = 1"
+        base_where = "op.is_active = TRUE"
         params = []
         
         if date_from:
-            base_where += " AND DATE(b.created_at) >= ?"
+            base_where += " AND b.created_at::date >= ?"
             params.append(date_from)
         if date_to:
-            base_where += " AND DATE(b.created_at) <= ?"
+            base_where += " AND b.created_at::date <= ?"
             params.append(date_to)
         if sport_filter:
             base_where += " AND b.sport_name = ?"
@@ -887,17 +972,17 @@ def export_global_custom_report():
         if report_type == 'revenue':
             query = f"""
             SELECT 
-                DATE(b.created_at) as bet_date,
+                b.created_at::date as bet_date,
                 b.sport_name,
                 COUNT(*) as total_bets,
                 SUM(b.stake) as total_stakes,
                 SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as revenue
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
             FROM bets b
             JOIN users u ON b.user_id = u.id
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
             WHERE {base_where}
-            GROUP BY DATE(b.created_at), b.sport_name
+            GROUP BY b.created_at::date, b.sport_name
             ORDER BY bet_date DESC, revenue DESC
             """
             headers = ['Date', 'Sport', 'Total Bets', 'Total Stakes', 'Revenue']
@@ -909,14 +994,14 @@ def export_global_custom_report():
                 u.email,
                 COUNT(b.id) as total_bets,
                 SUM(b.stake) as total_staked,
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as payout,
-                SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake ELSE 0 END) as user_profit,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as payout,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END) - 
+                SUM(b.stake) as user_profit,
                 u.created_at as joined_date
             FROM users u
             LEFT JOIN bets b ON u.id = b.user_id
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = 1
+            WHERE op.is_active = TRUE
             GROUP BY u.id, u.username, u.email, u.created_at
             ORDER BY total_bets DESC
             """
@@ -1081,6 +1166,39 @@ def global_manual_settle_bets():
         total_payout = 0
         
         for bet in pending_bets:
+            # Handle "No Result" case - cancel bet and refund stake
+            if winning_selection == 'no_result':
+                # Update bet status to voided (cancelled)
+                conn.execute("""
+                    UPDATE bets 
+                    SET status = 'voided', actual_return = ?, settled_at = ?
+                    WHERE id = ?
+                """, (bet['stake'], datetime.now(), bet['id']))
+                
+                # Refund the stake to user account
+                conn.execute("""
+                    UPDATE users 
+                    SET balance = balance + ?
+                    WHERE id = ?
+                """, (bet['stake'], bet['user_id']))
+                
+                # Create transaction record for refund
+                conn.execute("""
+                    INSERT INTO transactions (user_id, bet_id, amount, transaction_type, description, balance_before, balance_after, created_at)
+                    VALUES (?, ?, ?, 'refund', ?, ?, ?, ?)
+                """, (
+                    bet['user_id'], 
+                    bet['id'], 
+                    bet['stake'],
+                    f'Bet cancelled - {bet["match_name"]} (No Result)',
+                    bet['stake'],  # balance_before (simplified)
+                    bet['stake'] * 2,  # balance_after (simplified)
+                    datetime.now()
+                ))
+                
+                settled_count += 1
+                continue
+            
             # Determine if bet is a winner
             if winning_selection == 'none':
                 # If "None" is selected, all bets lose
@@ -1132,16 +1250,28 @@ def global_manual_settle_bets():
             
             settled_count += 1
         
+        # Update total_revenue for all affected operators
+        affected_operators = set(bet['sportsbook_operator_id'] for bet in pending_bets)
+        for operator_id in affected_operators:
+            update_operator_revenue(operator_id, conn)
+        
         conn.commit()
         conn.close()
         
+        # Prepare success message based on settlement type
+        if winning_selection == 'no_result':
+            message = f'Cancelled {settled_count} bets across all operators - stakes refunded'
+        else:
+            message = f'Settled {settled_count} bets across all operators'
+        
         return jsonify({
             'success': True,
-            'message': f'Settled {settled_count} bets across all operators',
+            'message': message,
             'settled_count': settled_count,
             'won_count': won_count,
             'lost_count': lost_count,
-            'total_payout': total_payout
+            'total_payout': total_payout,
+            'settlement_type': 'cancelled' if winning_selection == 'no_result' else 'normal'
         })
         
     except Exception as e:
@@ -2091,7 +2221,15 @@ RICH_SUPERADMIN_TEMPLATE = '''
         
         async function loadGlobalBettingEvents() {
             try {
-                const response = await fetch('/superadmin/api/global-betting-events');
+                // Get the checkbox value
+                const showBetsOnly = document.getElementById('global-show-bets-only')?.checked || false;
+                console.log('🔍 DEBUG: showBetsOnly checkbox value:', showBetsOnly);
+                
+                // Build the URL with query parameters
+                const url = `/superadmin/api/global-betting-events?show_only_with_bets=${showBetsOnly}`;
+                console.log('🔍 DEBUG: Calling URL:', url);
+                
+                const response = await fetch(url);
                 const data = await response.json();
                 
                 if (data.error) {
@@ -2101,8 +2239,15 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 }
                 
                 // Update summary cards
-                document.getElementById('global-total-events').textContent = data.total || 0;
-                document.getElementById('global-active-events').textContent = data.events.length || 0;
+                if (document.getElementById('global-total-bets')) {
+                    document.getElementById('global-total-bets').textContent = data.summary?.total_events || 0;
+                }
+                if (document.getElementById('global-active-events')) {
+                    document.getElementById('global-active-events').textContent = data.summary?.active_events || 0;
+                }
+                if (document.getElementById('global-total-liability')) {
+                    document.getElementById('global-total-liability').textContent = `$${data.summary?.total_liability || '0.00'}`;
+                }
                 
                 // Update table
                 const tbody = document.getElementById('global-events-tbody');
@@ -2115,11 +2260,15 @@ RICH_SUPERADMIN_TEMPLATE = '''
                             <td>${event.sport}</td>
                             <td>${event.event_name}</td>
                             <td>${event.market}</td>
-                            <td><span class="operator-name">${event.operator_name || 'Unknown'}</span></td>
                             <td>${event.total_bets || 0}</td>
                             <td class="liability">$${event.liability || '0.00'}</td>
                             <td class="revenue">$${event.revenue || '0.00'}</td>
                             <td><span class="status-badge status-${event.status}">${event.status}</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-warning" onclick="toggleEventStatus('${event.event_id}', '${event.sport}', '${event.market}')">
+                                    ${event.status === 'disabled' ? 'Enable' : 'Disable'}
+                                </button>
+                            </td>
                         </tr>
                     `).join('');
                 }
@@ -2127,6 +2276,42 @@ RICH_SUPERADMIN_TEMPLATE = '''
             } catch (error) {
                 document.getElementById('global-events-tbody').innerHTML = 
                     `<tr><td colspan="9" class="error">Error loading events: ${error.message}</td></tr>`;
+            }
+        }
+        
+        async function toggleEventStatus(eventId, sport, market) {
+            try {
+                console.log('🔍 toggleEventStatus called with:', { eventId, sport, market });
+                
+                // Show confirmation dialog
+                const confirmed = confirm(`Are you sure you want to toggle the status for ${sport} event ${eventId} (${market})?`);
+                if (!confirmed) return;
+                
+                // Call the API to toggle event status
+                const response = await fetch('/superadmin/api/global-betting-events/toggle-status', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        event_id: eventId,
+                        status: 'disabled' // For now, always disable. You can enhance this to toggle between enabled/disabled
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('Event status updated successfully!');
+                    // Refresh the table to show updated status
+                    await loadGlobalBettingEvents();
+                } else {
+                    alert('Error updating event status: ' + (result.error || 'Unknown error'));
+                }
+                
+            } catch (error) {
+                console.error('Error toggling event status:', error);
+                alert('Error toggling event status: ' + error.message);
             }
         }
         
@@ -2494,7 +2679,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
         }
         
         // Global Betting Events Management Functions
-        function loadGlobalBettingEvents() {
+        function loadGlobalBettingEventsWithFilters() {
             const sportFilter = document.getElementById('global-events-sport-filter').value;
             const marketFilter = document.getElementById('global-market-filter').value;
             const searchTerm = document.getElementById('global-event-search').value;
@@ -2536,7 +2721,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
         }
 
         function refreshGlobalEvents() {
-            loadGlobalBettingEvents();
+            loadGlobalBettingEventsWithFilters();
         }
 
         // Table sorting function
@@ -2609,7 +2794,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     <td data-sort="${event.total_bets}">${event.total_bets}</td>
                     <td data-sort="${event.liability}" class="${event.liability < 0 ? 'negative' : 'positive'}">$${Math.abs(event.liability).toFixed(2)}</td>
                     <td data-sort="${event.revenue}" class="${event.revenue < 0 ? 'negative' : 'positive'}">$${Math.abs(event.revenue).toFixed(2)}</td>
-                    <td data-sort="${event.status}"><span class="status-badge ${event.status}">${event.status}</span></td>
+                    <td data-sort="${event.status}"><span class="status-badge ${event.status}">${event.status}</td>
                     <td>
                         <button onclick="toggleGlobalEventStatus('${event.event_id}', '${event.status}')" 
                                 class="btn ${event.status === 'active' ? 'btn-danger' : 'btn-success'} btn-sm">
@@ -2866,6 +3051,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                             <td class="liability">$${item.total_liability.toFixed(2)}</td>
                             <td>
                                 <select class="outcome-select" id="outcome_${item.match_id}_${item.market}" style="margin-bottom: 0.5rem; width: 100%; padding: 0.3rem; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="no_result">No Result (Cancel & Refund)</option>
                                     <option value="none">None (No Winner)</option>
                                     ${item.outcomes.map(outcome => `<option value="${outcome}">${outcome}</option>`).join('')}
                                 </select>
@@ -2893,9 +3079,14 @@ RICH_SUPERADMIN_TEMPLATE = '''
             }
             
             // Confirm settlement
-            const confirmationMessage = winningSelection === 'none' 
-                ? `Are you sure you want to settle ${matchName}?\n\nResult: None (All bets lose)\n\nThis action cannot be undone.`
-                : `Are you sure you want to settle ${matchName}?\n\nWinning selection: ${winningSelection}\n\nThis action cannot be undone.`;
+            let confirmationMessage;
+            if (winningSelection === 'no_result') {
+                confirmationMessage = `Are you sure you want to CANCEL ${matchName}?\n\nAction: No Result (Cancel & Refund)\n\nThis will:\n• Cancel all bets for this match\n• Refund all stakes to users\n• Mark bets as "voided"\n\nThis action cannot be undone.`;
+            } else if (winningSelection === 'none') {
+                confirmationMessage = `Are you sure you want to settle ${matchName}?\n\nResult: None (All bets lose)\n\nThis action cannot be undone.`;
+            } else {
+                confirmationMessage = `Are you sure you want to settle ${matchName}?\n\nWinning selection: ${winningSelection}\n\nThis action cannot be undone.`;
+            }
                 
             if (!confirm(confirmationMessage)) {
                 return;

@@ -4,7 +4,8 @@ Super Admin routes and dashboard for global management
 
 from flask import Blueprint, request, jsonify, session, render_template_string, redirect
 from werkzeug.security import check_password_hash, generate_password_hash
-import sqlite3
+from src import sqlite3_shim as sqlite3
+from src.auth.session_utils import log_out_superadmin
 from datetime import datetime, timedelta
 from functools import wraps
 import json
@@ -23,7 +24,8 @@ def require_superadmin_auth(f):
     """Decorator to require super admin authentication"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'superadmin_id' not in session:
+        from src.auth.session_utils import is_superadmin_logged_in
+        if not is_superadmin_logged_in():
             # If it's an API request, return JSON error
             if request.path.startswith('/api/') or request.headers.get('Content-Type') == 'application/json':
                 return jsonify({
@@ -40,7 +42,8 @@ def require_superadmin_auth(f):
 def superadmin_login_page():
     """Super admin login page"""
     # Check if already logged in
-    if 'superadmin_id' in session:
+    from src.auth.session_utils import is_superadmin_logged_in
+    if is_superadmin_logged_in():
         return redirect('/superadmin/rich-dashboard')  # Redirect to rich dashboard
     
     return render_template_string(SUPERADMIN_LOGIN_TEMPLATE)
@@ -100,10 +103,13 @@ def superadmin_login():
         conn.commit()
         conn.close()
         
-        # Store in session
-        session['superadmin_id'] = superadmin['id']
-        session['superadmin_username'] = superadmin['username']
-        session['superadmin_email'] = superadmin['email']
+        # Store in session with namespaced key
+        from src.auth.session_utils import log_in_superadmin
+        log_in_superadmin({
+            'id': superadmin['id'],
+            'username': superadmin['username'],
+            'email': superadmin['email']
+        })
         
         return jsonify({
             'success': True,
@@ -119,7 +125,7 @@ def superadmin_login():
 @superadmin_bp.route('/api/superadmin/logout', methods=['POST'])
 def superadmin_logout():
     """Super admin logout endpoint"""
-    session.clear()
+    log_out_superadmin()
     return jsonify({
         'success': True,
         'message': 'Logged out successfully'
@@ -128,7 +134,7 @@ def superadmin_logout():
 @superadmin_bp.route('/superadmin/logout')
 def superadmin_logout_redirect():
     """Super admin logout redirect endpoint"""
-    session.clear()
+    log_out_superadmin()
     return redirect('/superadmin')
 
 @superadmin_bp.route('/superadmin/dashboard')
@@ -151,7 +157,7 @@ def get_global_stats():
         
         # Get active operators
         active_operators = conn.execute(
-            "SELECT COUNT(*) as count FROM sportsbook_operators WHERE is_active = 1"
+            "SELECT COUNT(*) as count FROM sportsbook_operators WHERE is_active = TRUE"
         ).fetchone()['count']
         
         # Get total users across all operators
@@ -297,7 +303,7 @@ def get_global_reports_overview():
                 COALESCE(SUM(b.stake), 0) as total_stake,
                 COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) as payouts
             FROM bets b
-            WHERE b.created_at >= DATE('now', '-7 days')
+            WHERE b.created_at >= CURRENT_DATE - INTERVAL '7 days'
             GROUP BY DATE(b.created_at)
             ORDER BY date DESC
         """).fetchall()
@@ -484,7 +490,7 @@ def get_revenue_by_operator():
                 COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) as net_revenue
             FROM sportsbook_operators so
             LEFT JOIN bets b ON so.id = b.sportsbook_operator_id
-            WHERE so.is_active = 1
+            WHERE so.is_active = TRUE
             GROUP BY so.id
             ORDER BY net_revenue DESC
         """).fetchall()

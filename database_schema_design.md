@@ -16,7 +16,7 @@ CREATE TABLE sportsbook_operators (
     password_hash VARCHAR(255) NOT NULL,
     email VARCHAR(120),
     subdomain VARCHAR(50) NOT NULL UNIQUE,
-    is_active BOOLEAN DEFAULT 1,
+    is_active BOOLEAN DEFAULT true,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_login DATETIME,
@@ -35,7 +35,7 @@ CREATE TABLE super_admins (
     username VARCHAR(50) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     email VARCHAR(120) NOT NULL UNIQUE,
-    is_active BOOLEAN DEFAULT 1,
+    is_active BOOLEAN DEFAULT true,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_login DATETIME,
     permissions TEXT -- JSON field for granular permissions

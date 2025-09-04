@@ -66,7 +66,7 @@ def setup_database():
                 password_hash VARCHAR(255) NOT NULL,
                 email VARCHAR(120),
                 subdomain VARCHAR(50) NOT NULL UNIQUE,
-                is_active BOOLEAN DEFAULT 1,
+                is_active BOOLEAN DEFAULT true,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_login DATETIME,

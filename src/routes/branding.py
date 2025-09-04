@@ -3,19 +3,16 @@ Comprehensive branding and customization system for sportsbook operators
 """
 
 from flask import Blueprint, request, jsonify, render_template_string
-import sqlite3
+from src import sqlite3_shim as sqlite3
 import json
 import os
 from datetime import datetime
 
 branding_bp = Blueprint('branding', __name__)
 
-DATABASE_PATH = 'src/database/app.db'
-
 def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
+    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
     return conn
 
 def get_operator_branding(subdomain):
@@ -27,7 +24,7 @@ def get_operator_branding(subdomain):
             id, sportsbook_name, subdomain, email, is_active,
             settings, created_at
         FROM sportsbook_operators 
-        WHERE subdomain = ? AND is_active = 1
+        WHERE subdomain = ? AND is_active = TRUE
     """, (subdomain,)).fetchone()
     
     conn.close()
@@ -102,7 +99,7 @@ def get_operator_branding(subdomain):
         'name': operator['sportsbook_name'],
         'subdomain': operator['subdomain'],
         'email': operator['email'],
-        'created_at': operator['created_at']
+        'created_at': operator['created_at'].isoformat() if operator['created_at'] else None
     }
     
     return branding
@@ -374,7 +371,7 @@ def update_branding(subdomain):
             UPDATE sportsbook_operators 
             SET settings = ?, updated_at = ?
             WHERE subdomain = ?
-        """, (json.dumps(current_settings), datetime.utcnow(), subdomain))
+        """, (json.dumps(current_settings), datetime.now(), subdomain))
         
         conn.commit()
         conn.close()

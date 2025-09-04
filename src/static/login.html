@@ -64,7 +64,21 @@
   </div>
 
   <script>
+    // Get subdomain from current URL
+    function getSubdomain() {
+      const hostname = window.location.hostname;
+      if (hostname.includes('localhost')) {
+        // For local development, extract subdomain from path
+        const path = window.location.pathname;
+        const match = path.match(/^\/([^\/]+)/);
+        return match ? match[1] : 'kr99'; // Default to kr99
+      }
+      const parts = hostname.split('.');
+      return parts.length > 2 ? parts[0] : 'kr99'; // Default to kr99
+    }
+
     const API_BASE = '';
+    const SUBDOMAIN = getSubdomain();
 
     function setMode(mode) {
       const isLogin = mode === 'login';
@@ -98,18 +112,21 @@
       try {
         let response;
         if (mode === 'login') {
-          response = await fetch(`${API_BASE}/api/auth/login`, {
+          // Use subdomain-specific login endpoint
+          response = await fetch(`${API_BASE}/api/auth/${SUBDOMAIN}/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify({ username, password }),
+            credentials: 'include' // Include cookies for session
           });
         } else {
           if (!email) { errorEl.textContent = 'Email is required'; return; }
           if (password !== confirmPassword) { errorEl.textContent = 'Passwords do not match'; return; }
-          response = await fetch(`${API_BASE}/api/auth/register`, {
+          response = await fetch(`${API_BASE}/api/auth/${SUBDOMAIN}/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, email, password })
+            body: JSON.stringify({ username, email, password }),
+            credentials: 'include' // Include cookies for session
           });
         }
 
@@ -118,19 +135,27 @@
 
         if (mode === 'register') { alert('Registration successful! You can now login.'); setMode('login'); return; }
 
-        // Login success
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user || {}));
-        window.location.href = '/';
+        // Login success - server session is now active
+        if (data.user) {
+          console.log('✅ Login successful, server session active:', data.user);
+          console.log('✅ Subdomain:', SUBDOMAIN);
+        } else {
+          console.error('❌ No user data in response:', data);
+        }
+        
+        // Set flag to prevent post-login race conditions
+        sessionStorage.setItem('justLoggedIn', '1');
+        
+        // Redirect to the subdomain-specific page
+        console.log('🔄 Redirecting to:', `/${SUBDOMAIN}`);
+        window.location.href = `/${SUBDOMAIN}`;
       } catch (err) {
         errorEl.textContent = 'Request failed. Please try again.';
       }
     });
 
-    // If already logged in, redirect to app
+    // Initialize login form
     (function init() {
-      const token = localStorage.getItem('token');
-      if (token) { window.location.href = '/'; return; }
       setMode('login');
     })();
   </script>

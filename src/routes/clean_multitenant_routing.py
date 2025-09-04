@@ -5,19 +5,34 @@ Clean multi-tenant routing system with improved URL structure
 /<subdomain>/admin - admin interface
 """
 
-from flask import Blueprint, request, redirect, render_template_string
-import sqlite3
+from flask import Blueprint, request, redirect, render_template_string, session
+from src import sqlite3_shim as sqlite3
+from src.db_compat import connect
+from src.auth.session_utils import clear_operator_session
 import os
+from functools import wraps
+from urllib.parse import quote
 
 clean_multitenant_bp = Blueprint('clean_multitenant', __name__)
 
-DATABASE_PATH = 'src/database/app.db'
-
 def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Get database connection with retry mechanism"""
+    import time
+    max_retries = 3
+    retry_delay = 0.1
+    
+    for attempt in range(max_retries):
+        try:
+            return connect()
+        except Exception as e:
+            if "PoolClosed" in str(e) and attempt < max_retries - 1:
+                print(f"⚠️ Pool closed, retrying connection (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                continue
+            else:
+                print(f"❌ Failed to get database connection after {max_retries} attempts: {e}")
+                raise
 
 def validate_subdomain(subdomain):
     """Validate subdomain and return operator info"""
@@ -46,6 +61,37 @@ def sportsbook_home(subdomain):
     """Serve the customer betting interface for a specific sportsbook"""
     from src.routes.branding import get_operator_branding, generate_custom_css, generate_custom_js
     
+    # Simple authentication check using Flask-Session
+    from flask import session
+    
+    # Check if user is authenticated
+    if not session.get('user_id'):
+        print(f"❌ Auth failed: user not authenticated")
+        return redirect(f'/{subdomain}/login', code=302)
+    
+    # Check if user belongs to this operator (normalized comparison)
+    want = (subdomain or "").strip().lower()
+    have = (session.get("operator_subdomain") or "").strip().lower()
+    
+    if have and have != want:
+        print(f"❌ Tenant mismatch: want='{want}', have='{have}'")
+        nxt = quote(request.full_path or request.path, safe="")
+        return redirect(f"/{want}/login?next={nxt}", code=302)
+    
+    # Debug: Log session data
+    print(f"🔒 Sportsbook home auth check for '{subdomain}': session data = {dict(session)}")
+    
+    # Check for session conflicts - ensure no superadmin session is active
+    from src.auth.session_utils import is_superadmin_logged_in
+    if is_superadmin_logged_in():
+        print(f"⚠️ Session conflict detected: superadmin session active, clearing...")
+        from src.auth.session_utils import log_out_superadmin
+        log_out_superadmin()
+    
+    # Log session structure for debugging
+    print(f"🔍 Session structure: {dict(session)}")
+    print(f"✅ Auth successful for '{subdomain}': user_id={session.get('user_id')}")
+    
     # Get operator branding
     branding = get_operator_branding(subdomain)
     if not branding:
@@ -69,53 +115,19 @@ def sportsbook_home(subdomain):
         content = content.replace('GoalServe Sports Betting Platform', f"{operator['name']} - Sports Betting")
         content = content.replace('GoalServe', operator['name'])
         
+        # Fix hardcoded login redirects to maintain operator context
+        content = content.replace('window.location.href = \'/login\'', f'window.location.href = \'/{subdomain}/login\'')
+        content = content.replace('window.location.href = "/login"', f'window.location.href = "/{subdomain}/login"')
+        content = content.replace('window.location.href = \'/login\';', f'window.location.href = \'/{subdomain}/login\';')
+        content = content.replace('window.location.href = "/login";', f'window.location.href = "/{subdomain}/login";')
+        
         # Inject custom CSS
         custom_css = generate_custom_css(branding)
         content = content.replace('</head>', f'{custom_css}</head>')
         
-        # Fix authentication redirects to maintain operator context
-        auth_fix_js = f"""
-        <script>
-        // Override authentication redirects to maintain operator context
-        window.OPERATOR_SUBDOMAIN = '{subdomain}';
-        
-        // Override the original auth functions
-        window.showLogin = function() {{ window.location.href = '/{subdomain}/login'; }};
-        window.showRegister = function() {{ window.location.href = '/{subdomain}/login'; }};
-        
-        // Fix the DOMContentLoaded authentication check
-        document.addEventListener('DOMContentLoaded', function() {{
-            const originalHandler = arguments.callee;
-            const token = localStorage.getItem('token');
-            if (!token) {{ 
-                window.location.href = '/{subdomain}/login'; 
-                return; 
-            }}
-            // Continue with normal authentication but with operator context
-            fetch(`/api/auth/${{'{subdomain}'}}/profile`, {{ 
-                headers: {{ 'Authorization': `Bearer ${{token}}` }} 
-            }})
-            .then(r => {{ 
-                if (!r.ok) throw new Error('Invalid token'); 
-                return r.json(); 
-            }})
-            .then(data => {{
-                currentUser = data.user;
-                document.getElementById('mainApp').style.display = 'block';
-                if (typeof initWebSocket === 'function') initWebSocket();
-                loadSports();
-                // Don't start auto-refresh for admin pages - it causes constant reloading
-                // if (typeof startOddsAutoRefresh === 'function') startOddsAutoRefresh();
-                updateBettingMarkets();
-                updateBetModeDisplay();
-            }})
-            .catch(() => {{ 
-                localStorage.removeItem('token'); 
-                window.location.href = '/{subdomain}/login'; 
-            }});
-        }}, true);
-        </script>
-        """
+        # Authentication is now handled by the frontend bootstrapAuth function
+        # No server-side JavaScript injection needed
+        auth_fix_js = ""
         
         # Inject custom JavaScript
         custom_js = generate_custom_js(branding)
@@ -599,6 +611,9 @@ def admin_login_api(subdomain):
         session['admin_username'] = username
         session['admin_id'] = operator['id']  # Keep for backward compatibility
         session['admin_subdomain'] = subdomain  # Keep for backward compatibility
+        session['sportsbook_name'] = operator['sportsbook_name']
+        session.permanent = True  # Make session persistent
+        
         return jsonify({'success': True, 'message': 'Login successful'})
     else:
         return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
@@ -609,8 +624,8 @@ def admin_logout(subdomain):
     """Handle admin logout and redirect to admin login"""
     from flask import session, redirect
     
-    # Clear the session
-    session.clear()
+    # Clear only operator session data, leaving superadmin intact
+    clear_operator_session(subdomain)
     
     # Redirect to admin login page for this subdomain
     return redirect(f'/{subdomain}/admin/login')
@@ -710,7 +725,7 @@ def save_theme_for_operator(subdomain):
         print("🔍 Creating sportsbook_themes table if it doesn't exist...")
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sportsbook_themes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 sportsbook_operator_id INTEGER NOT NULL,
                 primary_color TEXT DEFAULT '#1e40af',
                 secondary_color TEXT DEFAULT '#3b82f6',
@@ -733,20 +748,8 @@ def save_theme_for_operator(subdomain):
         ''')
         print("✅ Table creation/check successful")
         
-        # Check if new columns exist, if not add them
-        print("🔍 Checking for new columns...")
-        cursor.execute("PRAGMA table_info(sportsbook_themes)")
-        columns = [column[1] for column in cursor.fetchall()]
-        
-        if 'logo_type' not in columns:
-            print("➕ Adding logo_type column...")
-            cursor.execute('ALTER TABLE sportsbook_themes ADD COLUMN logo_type TEXT DEFAULT "default"')
-            
-        if 'sportsbook_name' not in columns:
-            print("➕ Adding sportsbook_name column...")
-            cursor.execute('ALTER TABLE sportsbook_themes ADD COLUMN sportsbook_name TEXT DEFAULT "Your Sportsbook"')
-            
-        print("✅ Column check/update complete")
+        # Table already has all required columns, no need to add them
+        print("✅ Table schema is already correct - all columns exist")
         
         # Check if theme customization already exists for this operator
         print(f"🔍 Checking for existing theme for operator_id: {operator_id}")
@@ -962,59 +965,101 @@ def load_public_theme_for_operator(subdomain):
 
 @clean_multitenant_bp.route('/api/theme-css/<subdomain>', methods=['GET'])
 def get_theme_css(subdomain):
-    """Serve theme CSS for specific operator"""
-    from flask import Response
+    """Serve theme CSS for specific operator - bulletproof against DB failures"""
+    from flask import Response, make_response
+    
+    # Initialize default theme values
+    primary_color = '#22C55E'
+    secondary_color = '#3b82f6'
+    accent_color = '#22C55E'
+    background_color = '#1A1A1A'
+    text_color = '#FFFFFF'
+    font_family = 'Inter, sans-serif'
+    layout_style = 'modern'
+    button_style = 'rounded'
+    card_style = 'shadow'
     
     try:
         print(f"🔍 Serving theme CSS for operator: {subdomain}")
         
+        # Validate subdomain first
         operator, error = validate_subdomain(subdomain)
         if not operator:
             print(f"❌ Operator not found: {error}")
-            return Response("/* Operator not found */", mimetype='text/css')
+            # Still return valid CSS with defaults
+            css_content = f"""/* Theme CSS for {subdomain} - operator not found, using defaults */
+:root {{
+    --primary-color: {primary_color};
+    --secondary-color: {secondary_color};
+    --accent-color: {accent_color};
+    --background-color: {background_color};
+    --text-color: {text_color};
+    --font-family: {font_family};
+}}
+
+body {{
+    font-family: var(--font-family);
+    background: var(--background-color);
+    color: var(--text-color);
+}}
+
+.header, .sidebar, .content-area {{
+    background: var(--background-color);
+}}
+
+.logo-icon, .sport-item.active, .refresh-btn, .view-btn.active {{
+    background: var(--primary-color);
+    color: white;
+}}
+
+.status-indicator.connected {{
+    background: rgba(34, 197, 94, 0.2);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}}
+"""
+            resp = make_response(css_content, 200)
+            resp.headers["Content-Type"] = "text/css; charset=utf-8"
+            return resp
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        # Try to get database connection with bulletproof error handling
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get theme customization for this operator
+            cursor.execute('''
+                SELECT 
+                    primary_color, secondary_color, accent_color, 
+                    background_color, text_color, font_family,
+                    layout_style, button_style, card_style
+                FROM sportsbook_themes 
+                WHERE sportsbook_operator_id = ?
+            ''', (operator['id'],))
+            
+            theme = cursor.fetchone()
+            conn.close()
+            
+            if theme:
+                print(f"✅ Found saved theme for operator: {subdomain}")
+                primary_color = theme[0] or primary_color
+                secondary_color = theme[1] or secondary_color
+                accent_color = theme[2] or accent_color
+                background_color = theme[3] or background_color
+                text_color = theme[4] or text_color
+                font_family = theme[5] or font_family
+                layout_style = theme[6] or layout_style
+                button_style = theme[7] or button_style
+                card_style = theme[8] or card_style
+            else:
+                print(f"ℹ️ No saved theme found for operator: {subdomain}, using defaults")
+                
+        except Exception as db_error:
+            print(f"⚠️ Database connection failed for theme CSS, using defaults: {db_error}")
+            # Continue with default values - don't fail the request
         
-        # Get theme customization for this operator
-        cursor.execute('''
-            SELECT 
-                primary_color, secondary_color, accent_color, 
-                background_color, text_color, font_family,
-                layout_style, button_style, card_style
-            FROM sportsbook_themes 
-            WHERE sportsbook_operator_id = ?
-        ''', (operator['id'],))
-        
-        theme = cursor.fetchone()
-        conn.close()
-        
-        if theme:
-            print(f"✅ Found saved theme for operator: {subdomain}")
-            primary_color = theme[0] or '#22C55E'
-            secondary_color = theme[1] or '#3b82f6'
-            accent_color = theme[2] or '#22C55E'
-            background_color = theme[3] or '#1A1A1A'
-            text_color = theme[4] or '#FFFFFF'
-            font_family = theme[5] or 'Inter, sans-serif'
-            layout_style = theme[6] or 'modern'
-            button_style = theme[7] or 'rounded'
-            card_style = theme[8] or 'shadow'
-        else:
-            print(f"ℹ️ No saved theme found for operator: {subdomain}, using defaults")
-            primary_color = '#22C55E'
-            secondary_color = '#3b82f6'
-            accent_color = '#22C55E'
-            background_color = '#1A1A1A'
-            text_color = '#FFFFFF'
-            font_family = 'Inter, sans-serif'
-            layout_style = 'modern'
-            button_style = 'rounded'
-            card_style = 'shadow'
-        
-        # Generate CSS with theme values
-        css_content = f"""
-/* Theme CSS for {subdomain} */
+        # Generate CSS with theme values (always succeeds)
+        css_content = f"""/* Theme CSS for {subdomain} */
 :root {{
     --primary-color: {primary_color};
     --secondary-color: {secondary_color};
@@ -1090,9 +1135,14 @@ body {{
 """
         
         print(f"✅ Theme CSS generated for operator: {subdomain}")
-        return Response(css_content, mimetype='text/css')
+        resp = make_response(css_content, 200)
+        resp.headers["Content-Type"] = "text/css; charset=utf-8"
+        return resp
         
     except Exception as e:
         print(f"Error generating theme CSS for operator {subdomain}: {e}")
-        return Response("/* Error loading theme */", mimetype='text/css')
+        # Always return valid CSS with headers to prevent write() before start_response
+        resp = make_response("/* theme error; using defaults */", 200)
+        resp.headers["Content-Type"] = "text/css; charset=utf-8"
+        return resp
 

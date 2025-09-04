@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: sportsbook
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and sessions
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/sportsbook
+      - REDIS_URL=redis://redis:6379/0
+      - FLASK_ENV=development
+      - DEBUG=true
+      - PORT=8000
+      - HOST=0.0.0.0
+    volumes:
+      - ./src:/app/src
+      - ./mock_feeds:/app/mock_feeds
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn src.main:asgi --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Settlement worker service
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/sportsbook
+      - REDIS_URL=redis://redis:6379/0
+      - FLASK_ENV=development
+      - WORKER_MODE=true
+    volumes:
+      - ./src:/app/src
+      - ./mock_feeds:/app/mock_feeds
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m src.worker
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

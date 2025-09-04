@@ -1,13 +1,159 @@
-import threading
-import time
-import json
-from datetime import datetime, timedelta
-from src.goalserve_client import OptimizedGoalServeClient
-from src.models.betting import db, Bet, User, Transaction
-from sqlalchemy import and_
+"""
+Bet settlement service for automatically settling bets based on match results
+"""
+
+from __future__ import annotations  # avoids runtime eval of type hints
+from flask import current_app
+from sqlalchemy import and_, select
+from sqlalchemy.orm import Session
+
+# Import models at module level for consistent access
+from src.models.betting import Bet, User, Transaction
 import logging
+import time
+import threading
+from datetime import datetime, timedelta
+import json
+from src.goalserve_client import OptimizedGoalServeClient
 
 logger = logging.getLogger(__name__)
+
+# Define final statuses for all sports
+FINAL_STATUSES = {
+    "final", "finished", "ended", "ft", "full time", "game over", 
+    "after extra time", "aet", "penalties", "pen", "90", "120",
+    "complete", "completed", "result", "results", "final result"
+}
+
+def norm(x): 
+    """Normalize text for comparison"""
+    if x is None:
+        return ""
+    return str(x).lower().strip()
+
+def event_key(event):
+    """Create composite key for event matching"""
+    # Adjust keys to your feed shape
+    league = norm(event.get("league") or event.get("competition") or event.get("category"))
+    home = norm(event.get("home", {}).get("name") if isinstance(event.get("home"), dict) else event.get("home"))
+    away = norm(event.get("away", {}).get("name") if isinstance(event.get("away"), dict) else event.get("away"))
+    # Use kickoff date (not full timestamp) to avoid TZ hiccups
+    date = str(event.get("time") or event.get("date") or "")[:10]
+    return (league, home, away, date)
+
+def bet_key(bet):
+    """Create composite key for bet matching"""
+    # Extract team names from match_name (e.g., "Team A vs Team B")
+    match_name = bet.match_name or ""
+    if " vs " in match_name:
+        home_team, away_team = match_name.split(" vs ", 1)
+    else:
+        home_team, away_team = match_name, ""
+    
+    # Use sport_name instead of league, and created_at instead of kickoff
+    sport = getattr(bet, "sport_name", None) or getattr(bet, "sport", None) or "unknown"
+    return (norm(sport), norm(home_team), norm(away_team), str(bet.created_at)[:10] if bet.created_at else "")
+
+def _to_int(x):
+    """Convert value to integer safely"""
+    try:
+        return int(x)
+    except (TypeError, ValueError):
+        return None
+
+def get_team_score(event: dict, side: str) -> int | None:
+    """
+    Extract team score from event object with multiple fallback strategies
+    side: 'home' | 'away'
+    Supports any of:
+      event['home_score'] / ['away_score']               # normalized
+      event['home']['@totalscore'] / ['away']['@totalscore']
+      event['localteam']['@totalscore'] / ['awayteam']['@totalscore']  # legacy Goalserve XML mapping
+    """
+    # 1) normalized flat fields (most reliable)
+    v = event.get(f'{side}_score')
+    if v is not None:
+        return _to_int(v)
+
+    # 2) normalized nested dicts
+    node = event.get(side) or {}
+    v = node.get('@totalscore')
+    if v is not None:
+        return _to_int(v)
+
+    # 3) legacy goalserve mapping names
+    legacy_key = 'localteam' if side == 'home' else 'awayteam'
+    node = event.get(legacy_key) or {}
+    v = node.get('@totalscore')
+    if v is not None:
+        return _to_int(v)
+
+    # 4) try other common score fields
+    for key in ("runs", "r", "goals", "score", "points", "goals_scored"):
+        v = node.get(key)
+        if v is not None:
+            return _to_int(v)
+    
+    # 5) fallback: top-level score string like "3-2"
+    sc = event.get("score") or event.get("result") or event.get("ft_score")
+    if isinstance(sc, str) and "-" in sc:
+        try:
+            h, a = [int(x.strip()) for x in sc.split("-", 1)]
+            return h if side == "home" else a
+        except (ValueError, TypeError): 
+            pass
+
+    return None
+
+def determine_outcome(event: dict) -> str | None:
+    """Determine match outcome from scores"""
+    hs = get_team_score(event, 'home')
+    as_ = get_team_score(event, 'away')
+    if hs is None or as_ is None:
+        return None
+    if hs > as_:
+        return 'HOME'
+    if hs < as_:
+        return 'AWAY'
+    return 'DRAW'
+
+def get_score(ev, side):
+    """Legacy function - now delegates to get_team_score"""
+    return get_team_score(ev, side)
+
+def robust_goalserve_parse(response_text, content_type=""):
+    """
+    Robust parsing for Goalserve responses that might be JSON or XML
+    Handles cases where ?json=1 returns XML anyway
+    """
+    try:
+        # Try JSON first if content type suggests it
+        if "json" in content_type.lower() or response_text.strip().startswith("{"):
+            return json.loads(response_text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # Fallback to XML parsing
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(response_text)
+        
+        # Convert XML to dict-like structure for compatibility
+        def xml_to_dict(element):
+            result = {}
+            for child in element:
+                if len(child) == 0:
+                    result[child.tag] = child.text or ""
+                else:
+                    result[child.tag] = xml_to_dict(child)
+            return result
+        
+        return xml_to_dict(root)
+    except ET.ParseError:
+        logger.warning("Failed to parse Goalserve response as either JSON or XML")
+        return None
+
+
 
 class BetSettlementService:
     def __init__(self, app=None):
@@ -56,7 +202,7 @@ class BetSettlementService:
                 self.last_check_time = datetime.utcnow()
                 self.total_checks += 1
                 
-                logger.info(f"🔍 Settlement check #{self.total_checks} - {self.last_check_time.strftime('%H:%M:%S')}")
+                logger.debug(f"🔍 Settlement check #{self.total_checks} - {self.last_check_time.strftime('%H:%M:%S')}")
                 logger.info(f"📊 Current stats - Running: {self.running}, Checks: {self.total_checks}")
                 
                 # Check if we can access the database
@@ -76,7 +222,7 @@ class BetSettlementService:
                 if self.total_checks % 10 == 0:  # Every 10 checks (5 minutes)
                     logger.info(f"📊 Settlement Service Stats: {self.total_checks} checks, {self.successful_settlements} settlements, {self.failed_settlements} failures")
                 
-                logger.info(f"✅ Settlement check #{self.total_checks} completed successfully")
+                logger.debug(f"✅ Settlement check #{self.total_checks} completed successfully")
                 
             except Exception as e:
                 self.failed_settlements += 1
@@ -167,7 +313,7 @@ class BetSettlementService:
             
             # Log details of each pending bet
             for i, bet in enumerate(pending_bets):
-                logger.info(f"  Bet {i+1}: ID={bet.id}, Match={bet.match_name}, Sport={bet.sport_name}, Match_ID={bet.match_id}")
+                logger.debug(f"  Bet {i+1}: ID={bet.id}, Match={bet.match_name}, Sport={bet.sport_name}, Match_ID={bet.match_id}")
             
             # Collect all unique match IDs we need to check
             match_ids_to_check = set()
@@ -244,6 +390,13 @@ class BetSettlementService:
             
             logger.info(f"Found {len(historical_events)} historical events to check for settlement")
             
+            # 1) After building the historical list - CRITICAL LOG
+            if historical_events:
+                sample_ids = [str(e.get("id", "NO_ID")) for e in historical_events[:5]]
+                logger.info("🧾 Historical events sample (first 5 IDs): %s", sample_ids)
+            else:
+                logger.warning("⚠️ No historical events found for settlement")
+            
             # Separate single bets and combo bets
             single_bets = []
             combo_bets = []
@@ -263,9 +416,13 @@ class BetSettlementService:
                         bets_by_match[match_key] = []
                     bets_by_match[match_key].append(bet)
                 
-                # Process each match within the same app context
-                for match_name, bets in bets_by_match.items():
-                    self._check_match_completion(match_name, bets, historical_events)
+                            # Process each match within the same app context
+            for match_name, bets in bets_by_match.items():
+                # 2) When checking each pending bet - CRITICAL LOG
+                for bet in bets:
+                    logger.info("🔎 Looking for event: bet_id=%s match_id=%s sport=%s",
+                                bet.id, bet.match_id, bet.sport_name or "unknown")
+                self._check_match_completion(match_name, bets, historical_events)
             
             # Process combo bets (new logic)
             if combo_bets:
@@ -282,11 +439,12 @@ class BetSettlementService:
         
         for bet in bets:
             # Use stored sport_name if available (most reliable)
-            if bet.sport_name:
-                sports_to_check.add(bet.sport_name)
+            sport = getattr(bet, "sport_name", None) or getattr(bet, "sport", None)
+            if sport:
+                sports_to_check.add(sport)
             else:
                 # Fallback to match name analysis (for legacy bets)
-                match_name = bet.match_name.lower()
+                match_name = getattr(bet, "match_name", "").lower()
                 
                 # Determine sport from match name patterns
                 if any(team in match_name for team in ['marines', 'hawks', 'dragons', 'tigers', 'eagles', 'buffaloes', 'giants', 'swallows', 'carp', 'baystars', 'lions', 'fighters', 'orix']):
@@ -375,28 +533,57 @@ class BetSettlementService:
                 logger.warning(f"No match_id found for bets on {match_name}")
                 return
             
-            # Find the match in current events by match ID
+            # Find the match in current events by match ID - ROBUST MATCHING
             match_event = None
-            for event in events:
-                if event.get('id') == match_id:
-                    match_event = event
-                    break
+            
+            # Build indexes once per fetch for efficient lookup
+            by_id = {str(e.get("id")): e for e in events if e.get("id") is not None}
+            by_composite = {event_key(e): e for e in events}
+            
+            # Try ID lookup first
+            match_event = by_id.get(str(match_id))
+            if not match_event and str(match_id).isdigit():
+                match_event = by_id.get(str(int(match_id)))
+            
+            # If no ID match, try composite lookup (league+teams+date)
+            if not match_event and bets:
+                bet = bets[0]  # Use first bet for composite matching
+                composite_key = bet_key(bet)
+                match_event = by_composite.get(composite_key)
+                if match_event:
+                    logger.info("✅ Found match by composite key (league+teams+date) for bet_id=%s", bet.id)
             
             if not match_event:
                 logger.info(f"Match with ID {match_id} not found in current events: {match_name}")
                 # Try to find in historical data
-                match_event = self._find_match_in_historical_data(match_id, match_name, bets[0].sport_name if bets else None)
+                sport_name = getattr(bets[0], "sport_name", None) if bets else None
+                match_event = self._find_match_in_historical_data(match_id, match_name, sport_name)
                 if not match_event:
-                    logger.warning(f"Match with ID {match_id} not found in historical data either: {match_name}")
+                    logger.warning(f"❌ Couldn't locate event for bet_id=%s (id=%s).", 
+                                  bets[0].id if bets else "unknown", match_id)
                     return
             
-            # Check if match is completed
+            # Check if match is completed - ROBUST STATUS CHECKING
             is_completed = match_event.get('is_completed', False)
             is_cancelled = match_event.get('is_cancelled', False)
             
             # Also check status field for completion indicators
             status = match_event.get('status', '')
-            if status in ['FT', '90', '120'] or (status.isdigit() and int(status) > 90):
+            normalized_status = norm(status)
+            
+            # Check if status indicates completion
+            if normalized_status in FINAL_STATUSES:
+                is_completed = True
+            elif status in ['FT', '90', '120'] or (status.isdigit() and int(status) > 90):
+                is_completed = True
+            
+            # 3) Before deciding settlement - CRITICAL LOG
+            logger.info("📌 Event found for bet_id=%s: status=%s raw_status=%s id=%s",
+                        bets[0].id if bets else "unknown", normalized_status, status, match_event.get('id'))
+            
+            # Check if status is final but not completed
+            if normalized_status in FINAL_STATUSES and not is_completed:
+                logger.info("🔄 Status indicates final but not marked completed, forcing completion")
                 is_completed = True
             
             # Run settlement within Flask app context
@@ -408,6 +595,9 @@ class BetSettlementService:
                     elif is_cancelled or status in ['Cancl.', 'Postp.', 'WO']:
                         logger.info(f"❌ MATCH CANCELLED: {match_name} - Auto-voiding bets")
                         self._auto_void_bets_for_match(match_event, bets)
+                    else:
+                        logger.info(f"⏳ Present but not final (bet_id=%s, status=%s)", 
+                                  bets[0].id if bets else "unknown", normalized_status)
             else:
                 logger.error("❌ No Flask app instance available for database access")
                 
@@ -563,10 +753,19 @@ class BetSettlementService:
     def _auto_settle_bets_for_match(self, match_event, bets):
         """Automatically settle bets for a completed match"""
         try:
-            home_score = int(match_event.get('home_score', 0))
-            away_score = int(match_event.get('away_score', 0))
+            # DEBUG: Log the full match event structure
+            logger.debug(f"🔍 DEBUG: Full match event structure: {match_event}")
             
-            logger.info(f"🏁 Auto-settling bets for {match_event['home_team']} vs {match_event['away_team']} - Final Score: {home_score}-{away_score}")
+            # ROBUST SCORE EXTRACTION WITH MULTIPLE FALLBACKS
+            home_score = get_team_score(match_event, 'home')
+            away_score = get_team_score(match_event, 'away')
+            
+            if home_score is None or away_score is None:
+                logger.warning("⚠️ Couldn't parse scores for match %s; skipping settlement", match_event.get('id'))
+                logger.warning("🔍 Event structure: %s", match_event)
+                return
+            
+            logger.info(f"🏁 Auto-settling bets for {match_event.get('home_team', 'Unknown')} vs {match_event.get('away_team', 'Unknown')} - Final Score: {home_score}-{away_score}")
             
             settled_count = 0
             won_count = 0
@@ -576,7 +775,7 @@ class BetSettlementService:
             for bet in bets:
                 try:
                     # Re-query the bet in the current session to ensure it's persistent
-                    bet = Bet.query.get(bet.id)
+                    bet = current_app.db.session.get(Bet, bet.id)
                     if not bet:
                         logger.warning(f"Bet {bet.id} not found in current session, skipping")
                         continue
@@ -594,11 +793,11 @@ class BetSettlementService:
                             bet.status = 'won'
                             bet.actual_return = bet.potential_return
                             
-                            # Update user balance
-                            user = User.query.get(bet.user_id)
+                            # Update user balance - EXPLICIT WALLET UPDATE
+                            user = current_app.db.session.get(User, bet.user_id)
                             if user:
-                                balance_before = user.balance
-                                user.balance += bet.actual_return
+                                balance_before = user.balance or 0
+                                user.balance = balance_before + bet.actual_return
                                 balance_after = user.balance
                                 
                                 # Create transaction record
@@ -612,31 +811,70 @@ class BetSettlementService:
                                     balance_after=balance_after
                                 )
                                 
-                                db.session.add(transaction)
+                                current_app.db.session.add_all([user, transaction])
                                 won_count += 1
-                                logger.info(f"✅ User {user.username} WON ${bet.actual_return} on bet {bet.id}")
+                                logger.info("💰 Wallet updated u=%s Δ=%.2f new=%.2f bet=%s",
+                                            user.id, bet.actual_return, user.balance, bet.id)
+                                
+                                # Emit WebSocket balance update event
+                                try:
+                                    from flask_socketio import emit
+                                    emit('bet:settled', {
+                                        'user_id': user.id,
+                                        'bet_id': bet.id,
+                                        'result': 'won',
+                                        'payout': bet.actual_return,
+                                        'new_balance': user.balance
+                                    }, room=f'user_{user.id}')
+                                    
+                                    # Also emit balance update
+                                    emit('balance:update', {
+                                        'user_id': user.id,
+                                        'balance': user.balance
+                                    }, room=f'user_{user.id}')
+                                except Exception as e:
+                                    logger.warning(f"Failed to emit WebSocket events: {e}")
                         else:
                             # Bet lost
                             bet.status = 'lost'
                             bet.actual_return = 0.0
                             lost_count += 1
                             logger.info(f"❌ User LOST bet {bet.id} on {bet.match_name}")
+                            
+                            # Emit WebSocket balance update event for lost bet
+                            try:
+                                from flask_socketio import emit
+                                user = current_app.db.session.get(User, bet.user_id)
+                                if user:
+                                    emit('bet:settled', {
+                                        'user_id': bet.user_id,
+                                        'bet_id': bet.id,
+                                        'result': 'lost',
+                                        'payout': 0,
+                                        'new_balance': user.balance
+                                    }, room=f'user_{bet.user_id}')
+                            except Exception as e:
+                                logger.warning(f"Failed to emit WebSocket events: {e}")
                         
                         bet.settled_at = datetime.utcnow()
                         settled_count += 1
                     
                 except Exception as e:
                     logger.error(f"Error auto-settling bet {bet.id}: {e}")
-                    db.session.rollback()
+                    current_app.db.session.rollback()
                     continue
             
             # Commit all settlements
-            db.session.commit()
+            current_app.db.session.commit()
+            
+            # Update total_revenue for all affected operators
+            self._update_operator_revenues(bets)
+            
             logger.info(f"🎉 Auto-settlement complete: {settled_count} bets settled ({won_count} won, {lost_count} lost)")
                     
         except Exception as e:
             logger.error(f"Error auto-settling bets for match: {e}")
-            db.session.rollback()
+            current_app.db.session.rollback()
     
     def _auto_void_bets_for_match(self, match_event, bets):
         """Automatically void bets for a cancelled match"""
@@ -656,11 +894,11 @@ class BetSettlementService:
                                 voided_count += 1
                             else:
                                 # Handle single bet voiding
-                                # Return stake to user
-                                user = User.query.get(bet.user_id)
+                                # Return stake to user - EXPLICIT WALLET UPDATE
+                                user = current_app.db.session.get(User, bet.user_id)
                                 if user:
-                                    balance_before = user.balance
-                                    user.balance += bet.stake  # Return the stake
+                                    balance_before = user.balance or 0
+                                    user.balance = balance_before + bet.stake  # Return the stake
                                     balance_after = user.balance
                                     
                                     # Create transaction record
@@ -674,8 +912,28 @@ class BetSettlementService:
                                         balance_after=balance_after
                                     )
                                     
-                                    db.session.add(transaction)
-                                    logger.info(f"🔄 User {user.username} refunded ${bet.stake} for voided bet {bet.id}")
+                                    current_app.db.session.add_all([user, transaction])
+                                    logger.info("💰 Wallet updated u=%s Δ=%.2f new=%.2f bet=%s (void)",
+                                                user.id, bet.stake, user.balance, bet.id)
+                                    
+                                    # Emit WebSocket balance update event for voided bet
+                                    try:
+                                        from flask_socketio import emit
+                                        emit('bet:settled', {
+                                            'user_id': user.id,
+                                            'bet_id': bet.id,
+                                            'result': 'void',
+                                            'payout': bet.stake,
+                                            'new_balance': user.balance
+                                        }, room=f'user_{user.id}')
+                                        
+                                        # Also emit balance update
+                                        emit('balance:update', {
+                                            'user_id': user.id,
+                                            'balance': user.balance
+                                        }, room=f'user_{user.id}')
+                                    except Exception as e:
+                                        logger.warning(f"Failed to emit WebSocket events: {e}")
                                 
                                 bet.status = 'void'
                                 bet.actual_return = bet.stake  # Return stake
@@ -684,11 +942,11 @@ class BetSettlementService:
                             
                         except Exception as e:
                             logger.error(f"Error auto-voiding bet {bet.id}: {e}")
-                            db.session.rollback()
+                            current_app.db.session.rollback()
                             continue
                 
                 # Commit all void transactions
-                db.session.commit()
+                current_app.db.session.commit()
                 logger.info(f"🔄 Auto-void complete: {voided_count} bets voided")
             else:
                 logger.error("❌ No Flask app instance available for database access")
@@ -696,7 +954,7 @@ class BetSettlementService:
                     
         except Exception as e:
             logger.error(f"Error auto-voiding bets for match: {e}")
-            db.session.rollback()
+            current_app.db.session.rollback()
     
     def _void_combo_bet(self, bet, match_event):
         """Void a combo bet when one of its matches is cancelled"""
@@ -734,11 +992,11 @@ class BetSettlementService:
             bet.settled_at = datetime.utcnow()
             bet.combo_selections = json.dumps(selections)
             
-            # Return stake to user
-            user = User.query.get(bet.user_id)
+            # Return stake to user - EXPLICIT WALLET UPDATE
+            user = current_app.db.session.get(User, bet.user_id)
             if user:
-                balance_before = user.balance
-                user.balance += bet.stake
+                balance_before = user.balance or 0
+                user.balance = balance_before + bet.stake
                 balance_after = user.balance
                 
                 # Create transaction record
@@ -752,8 +1010,9 @@ class BetSettlementService:
                     balance_after=balance_after
                 )
                 
-                db.session.add(transaction)
-                logger.info(f"🔄 User {user.username} refunded ${bet.stake} for voided combo bet {bet.id}")
+                current_app.db.session.add_all([user, transaction])
+                logger.info("💰 Wallet updated u=%s Δ=%.2f new=%.2f bet=%s (combo void)",
+                            user.id, bet.stake, user.balance, bet.id)
             
         except Exception as e:
             logger.error(f"Error voiding combo bet {bet.id}: {e}")
@@ -803,7 +1062,7 @@ class BetSettlementService:
                     bet.actual_return = bet.potential_return
                     
                     # Update user balance
-                    user = User.query.get(bet.user_id)
+                    user = current_app.db.session.get(User, bet.user_id)
                     if user:
                         balance_before = user.balance
                         user.balance += bet.actual_return
@@ -820,7 +1079,7 @@ class BetSettlementService:
                             balance_after=balance_after
                         )
                         
-                        db.session.add(transaction)
+                        current_app.db.session.add(transaction)
                         logger.info(f"🎯 User {user.username} WON combo bet {bet.id} - ${bet.actual_return}")
                 else:
                     # Combo bet lost - at least one selection lost
@@ -830,6 +1089,48 @@ class BetSettlementService:
                 
                 bet.settled_at = datetime.utcnow()
                 bet.combo_selections = json.dumps(selections)  # Update with results
+                
+                # UPDATE WALLET BALANCE FOR COMBO BET
+                try:
+                    user = current_app.db.session.query(User).filter_by(id=bet.user_id).with_for_update().first()
+                    if user and all_won and bet.actual_return > 0:
+                        # Combo bet won - add winnings
+                        balance_before = user.balance or 0
+                        user.balance = balance_before + bet.actual_return
+                        balance_after = user.balance
+                        
+                        # Create transaction record
+                        transaction = Transaction(
+                            user_id=user.id,
+                            bet_id=bet.id,
+                            amount=bet.actual_return,
+                            transaction_type='bet_win',
+                            description=f'Combo bet win: {bet.match_name}',
+                            balance_before=balance_before,
+                            balance_after=balance_after
+                        )
+                        current_app.db.session.add_all([user, transaction])
+                        
+                        logger.info(f"💰 Combo bet wallet updated u={user.id} Δ={bet.actual_return:.2f} new={user.balance:.2f} bet={bet.id}")
+                        
+                        # Emit WebSocket balance update event (only if in app context)
+                        try:
+                            from flask import current_app
+                            if current_app:
+                                from src.main import socketio
+                                socketio.emit('balance:update', {
+                                    'user_id': user.id,
+                                    'balance': user.balance
+                                }, to=f'user_{user.id}', namespace='/')
+                        except Exception as e:
+                            logger.warning(f"Failed to emit WebSocket events: {e}")
+                    
+                    # Commit all changes
+                    current_app.db.session.commit()
+                    
+                except Exception as e:
+                    logger.error(f"Error updating wallet for combo bet {bet.id}: {e}")
+                    current_app.db.session.rollback()
                 
                 logger.info(f"🎯 Combo bet {bet.id} fully settled: {'WON' if all_won else 'LOST'}")
             else:
@@ -984,6 +1285,10 @@ class BetSettlementService:
     def _parse_match_for_settlement(self, match, sport_name, endpoint):
         """Parse a match for settlement purposes - includes completed matches"""
         try:
+            # DEBUG: Log the raw match data for baseball matches
+            if sport_name == 'baseball':
+                logger.debug(f"🔍 DEBUG: Parsing baseball match from {endpoint}: {match.get('@id', 'unknown')} - {match.get('localteam', {}).get('@name', 'unknown')} vs {match.get('awayteam', {}).get('@name', 'unknown')}")
+            
             # Extract team names
             home_team = (match.get('localteam', {}).get('@name') or 
                         match.get('localteam', {}).get('name', 'Unknown Home'))
@@ -1003,43 +1308,92 @@ class BetSettlementService:
             date_str = match.get('@date', '') or match.get('@formatted_date', '') or datetime.now().strftime('%b %d')
             status = match.get('@status', time_str)
             
-            # Determine match status for settlement
+            # DEBUG: Log status for baseball matches
+            if sport_name == 'baseball':
+                logger.debug(f"🔍 DEBUG: Baseball match status: '{status}' from endpoint {endpoint}")
+            
+            # Determine match status for settlement - SPORT-SPECIFIC
             is_completed = False
             is_cancelled = False
             
-            if status == "FT" or status == "90" or status == "120":
-                is_completed = True
-            elif status.isdigit():
-                status_code = int(status)
-                if status_code > 90:  # Over 90 minutes indicates completed
+            # Baseball-specific statuses
+            if sport_name == 'baseball':
+                if status.lower() in ["finished", "final", "game over", "complete", "completed"]:
                     is_completed = True
-            elif status in ["Cancl.", "Postp.", "WO"]:
-                is_cancelled = True
+                    logger.info(f"✅ Baseball match marked as completed: {home_team} vs {away_team}")
+                elif status in ["Cancl.", "Postp.", "WO", "Cancelled", "Postponed"]:
+                    is_cancelled = True
+            else:
+                # Soccer/football statuses
+                if status == "FT" or status == "90" or status == "120":
+                    is_completed = True
+                elif status.isdigit():
+                    status_code = int(status)
+                    if status_code > 90:  # Over 90 minutes indicates completed
+                        is_completed = True
+                elif status in ["Cancl.", "Postp.", "WO"]:
+                    is_cancelled = True
             
-            # Extract scores
-            home_score = (match.get('localteam', {}).get('@goals') or 
-                         match.get('localteam', {}).get('@totalscore') or
-                         match.get('localteam', {}).get('goals') or
-                         match.get('localteam', {}).get('totalscore', '0'))
-            away_score = (match.get('awayteam', {}).get('@goals') or 
-                         match.get('awayteam', {}).get('@totalscore') or
-                         match.get('awayteam', {}).get('goals') or
-                         match.get('awayteam', {}).get('totalscore', '0'))
+            # Extract scores - ENHANCED for baseball
+            home_score = None
+            away_score = None
             
-            # Fallback for soccer structure (visitorteam)
-            if away_score == '0':
-                away_score = (match.get('visitorteam', {}).get('@goals') or 
-                            match.get('visitorteam', {}).get('@totalscore') or
-                            match.get('visitorteam', {}).get('goals') or
-                            match.get('visitorteam', {}).get('totalscore', '0'))
+            if sport_name == 'baseball':
+                # Try multiple possible score locations for baseball
+                localteam = match.get('localteam', {})
+                awayteam = match.get('awayteam', {})
+                
+                # DEBUG: Log the team data structures
+                logger.debug(f"🔍 DEBUG: Baseball localteam structure: {localteam.get('@name', 'unknown')} - score: {localteam.get('@totalscore', 'unknown')}")
+                logger.debug(f"🔍 DEBUG: Baseball awayteam structure: {awayteam.get('@name', 'unknown')} - score: {awayteam.get('@totalscore', 'unknown')}")
+                
+                # Try various score fields
+                home_score = (localteam.get('@goals') or 
+                             localteam.get('@totalscore') or
+                             localteam.get('goals') or
+                             localteam.get('totalscore') or
+                             localteam.get('runs') or
+                             localteam.get('score') or
+                             localteam.get('points'))
+                
+                away_score = (awayteam.get('@goals') or 
+                             awayteam.get('@totalscore') or
+                             awayteam.get('goals') or
+                             awayteam.get('totalscore') or
+                             awayteam.get('runs') or
+                             awayteam.get('score') or
+                             awayteam.get('points'))
+                
+                logger.debug(f"🔍 DEBUG: Baseball scores extracted - home: '{home_score}', away: '{away_score}'")
+            else:
+                # Original logic for other sports
+                home_score = (match.get('localteam', {}).get('@goals') or 
+                             match.get('localteam', {}).get('@totalscore') or
+                             match.get('localteam', {}).get('goals') or
+                             match.get('localteam', {}).get('totalscore', '0'))
+                away_score = (match.get('awayteam', {}).get('@goals') or 
+                             match.get('awayteam', {}).get('@totalscore') or
+                             match.get('awayteam', {}).get('goals') or
+                             match.get('awayteam', {}).get('totalscore', '0'))
+                
+                # Fallback for soccer structure (visitorteam)
+                if away_score == '0':
+                    away_score = (match.get('visitorteam', {}).get('@goals') or 
+                                match.get('visitorteam', {}).get('@totalscore') or
+                                match.get('visitorteam', {}).get('goals') or
+                                match.get('visitorteam', {}).get('totalscore', '0'))
             
             # Convert scores to integers
             try:
-                home_score = int(home_score) if home_score != '?' else 0
-                away_score = int(away_score) if away_score != '?' else 0
+                home_score = int(home_score) if home_score and home_score != '?' else 0
+                away_score = int(away_score) if away_score and away_score != '?' else 0
             except (ValueError, TypeError):
                 home_score = 0
                 away_score = 0
+            
+            # DEBUG: Log final scores for baseball
+            if sport_name == 'baseball':
+                logger.debug(f"🔍 DEBUG: Final baseball scores - home: {home_score}, away: {away_score}")
             
             # Extract match ID
             match_id = match.get('@id', f"{sport_name}_{hash(f'{home_team}_{away_team}_{time_str}')}")
@@ -1056,11 +1410,64 @@ class BetSettlementService:
                 'date': date_str,
                 'is_completed': is_completed,
                 'is_cancelled': is_cancelled,
-                'match_name': f"{home_team} vs {away_team}"
+                'match_name': f"{home_team} vs {away_team}",
+                'sport': sport_name,  # Add sport for score extraction
+                'category': match.get('@category', '')  # Add category for debugging
             }
             
             return event
             
         except Exception as e:
             logger.error(f"Error parsing match for settlement: {e}")
-            return None 
+            return None
+    
+    def _update_operator_revenues(self, bets):
+        """Update total_revenue field for all operators affected by the settled bets"""
+        try:
+            # Get unique operator IDs from the settled bets
+            affected_operators = set()
+            for bet in bets:
+                # Get the user's operator ID
+                user = current_app.db.session.get(User, bet.user_id)
+                if user and user.sportsbook_operator_id:
+                    affected_operators.add(user.sportsbook_operator_id)
+            
+            # Update revenue for each affected operator
+            for operator_id in affected_operators:
+                self._update_operator_revenue(operator_id)
+                
+        except Exception as e:
+            logger.error(f"Error updating operator revenues: {e}")
+    
+    def _update_operator_revenue(self, operator_id):
+        """Update the total_revenue field for a specific operator based on actual bet settlements"""
+        try:
+            from src.models.multitenant_models import SportsbookOperator
+            
+            # Calculate current total revenue from actual bet settlements
+            revenue_query = """
+            SELECT 
+                SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
+                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_net_payouts
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = :operator_id
+            """
+            
+            result = current_app.db.session.execute(text(revenue_query), {'operator_id': operator_id}).fetchone()
+            total_stakes_lost = float(result[0] or 0)
+            total_net_payouts = float(result[1] or 0)
+            total_revenue = total_stakes_lost - total_net_payouts
+            
+            # Update the operator's total_revenue field
+            operator = current_app.db.session.get(SportsbookOperator, operator_id)
+            if operator:
+                operator.total_revenue = total_revenue
+                current_app.db.session.commit()
+                logger.info(f"✅ Updated operator {operator_id} total_revenue to: {total_revenue}")
+            else:
+                logger.warning(f"Operator {operator_id} not found for revenue update")
+                
+        except Exception as e:
+            logger.error(f"❌ Error updating operator {operator_id} revenue: {e}")
+            current_app.db.session.rollback() 
