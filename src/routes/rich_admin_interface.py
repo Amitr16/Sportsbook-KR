@@ -1983,6 +1983,63 @@ RICH_ADMIN_TEMPLATE = '''
             background: linear-gradient(90deg, transparent, #dee2e6, transparent);
             margin: 2rem 0;
         }
+        
+        /* Pagination Styles */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 1.5rem 0;
+            padding: 1rem;
+        }
+        
+        .pagination button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #ddd;
+            background: white;
+            color: #333;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+        
+        .pagination button:hover:not(:disabled) {
+            background: #f8f9fa;
+            border-color: #667eea;
+        }
+        
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .pagination button.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .pagination-info {
+            margin: 0 1rem;
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .pagination-controls select {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
@@ -2079,17 +2136,18 @@ RICH_ADMIN_TEMPLATE = '''
             
             <div class="controls">
                 <button onclick="loadUsers()">🔄 Refresh Users</button>
-                
-                <div class="reset-users-controls" style="display: inline-block; margin-left: 20px;">
-                    <input type="number" id="reset-balance-amount" placeholder="Enter balance amount" 
-                           style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 150px;">
-                    <button onclick="resetAllUsers()" style="background: #dc2626; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
-                        🔄 Reset Users
-                    </button>
-                    <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                        ⚠️ This will cancel all pending bets (refund stakes), reset all user balances, and set default balance for new users
-                    </div>
-                </div>
+            </div>
+            
+            <!-- Pagination Controls -->
+            <div class="pagination-controls">
+                <label for="users-per-page">Users per page:</label>
+                <select id="users-per-page" onchange="changeUsersPerPage()">
+                    <option value="10">10</option>
+                    <option value="20" selected>20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                </select>
+                <span id="users-pagination-info" class="pagination-info">Loading...</span>
             </div>
             
             <div class="table-container">
@@ -2133,6 +2191,15 @@ RICH_ADMIN_TEMPLATE = '''
                         <tr><td colspan="11" class="loading">Loading users...</td></tr>
                     </tbody>
                 </table>
+            </div>
+            
+            <!-- Pagination -->
+            <div id="users-pagination" class="pagination" style="display: none;">
+                <button onclick="goToUsersPage(1)" id="users-first-page">« First</button>
+                <button onclick="goToUsersPage(currentUsersPage - 1)" id="users-prev-page">‹ Previous</button>
+                <div id="users-page-numbers"></div>
+                <button onclick="goToUsersPage(currentUsersPage + 1)" id="users-next-page">Next ›</button>
+                <button onclick="goToUsersPage(totalUsersPages)" id="users-last-page">Last »</button>
             </div>
         </div>
         
@@ -2403,9 +2470,18 @@ RICH_ADMIN_TEMPLATE = '''
         
 
         
-        async function loadUsers() {
+        // Pagination variables
+        let currentUsersPage = 1;
+        let totalUsersPages = 1;
+        let usersPerPage = 20;
+        
+        async function loadUsers(page = 1) {
             try {
-                const response = await fetch(`/${SUBDOMAIN}/admin/api/users`);
+                currentUsersPage = page;
+                const perPage = parseInt(document.getElementById('users-per-page').value) || 20;
+                usersPerPage = perPage;
+                
+                const response = await fetch(`/${SUBDOMAIN}/admin/api/users?page=${page}&per_page=${perPage}`);
                 const data = await response.json();
                 
                 if (data.error) {
@@ -2413,6 +2489,11 @@ RICH_ADMIN_TEMPLATE = '''
                         `<tr><td colspan="11" class="error">Error: ${data.error}</td></tr>`;
                     return;
                 }
+                
+                // Update pagination info
+                totalUsersPages = Math.ceil(data.total / perPage);
+                document.getElementById('users-pagination-info').textContent = 
+                    `Showing ${((page - 1) * perPage) + 1}-${Math.min(page * perPage, data.total)} of ${data.total} users`;
                 
                 const tbody = document.getElementById('users-tbody');
                 if (data.users.length === 0) {
@@ -2440,10 +2521,53 @@ RICH_ADMIN_TEMPLATE = '''
                     `).join('');
                 }
                 
+                // Update pagination controls
+                updateUsersPagination();
+                
             } catch (error) {
                 document.getElementById('users-tbody').innerHTML = 
                     `<tr><td colspan="11" class="error">Error loading users: ${error.message}</td></tr>`;
             }
+        }
+        
+        function updateUsersPagination() {
+            const pagination = document.getElementById('users-pagination');
+            const pageNumbers = document.getElementById('users-page-numbers');
+            
+            if (totalUsersPages <= 1) {
+                pagination.style.display = 'none';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            
+            // Update button states
+            document.getElementById('users-first-page').disabled = currentUsersPage === 1;
+            document.getElementById('users-prev-page').disabled = currentUsersPage === 1;
+            document.getElementById('users-next-page').disabled = currentUsersPage === totalUsersPages;
+            document.getElementById('users-last-page').disabled = currentUsersPage === totalUsersPages;
+            
+            // Generate page numbers
+            let pageNumbersHtml = '';
+            const startPage = Math.max(1, currentUsersPage - 2);
+            const endPage = Math.min(totalUsersPages, currentUsersPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageNumbersHtml += `<button onclick="goToUsersPage(${i})" class="${i === currentUsersPage ? 'active' : ''}">${i}</button>`;
+            }
+            
+            pageNumbers.innerHTML = pageNumbersHtml;
+        }
+        
+        function goToUsersPage(page) {
+            if (page >= 1 && page <= totalUsersPages) {
+                loadUsers(page);
+            }
+        }
+        
+        function changeUsersPerPage() {
+            currentUsersPage = 1;
+            loadUsers(1);
         }
         
         async function toggleUserStatus(userId) {
@@ -2464,55 +2588,6 @@ RICH_ADMIN_TEMPLATE = '''
             }
         }
         
-        async function resetAllUsers() {
-            const resetAmount = document.getElementById('reset-balance-amount').value;
-            
-            if (!resetAmount || resetAmount < 0) {
-                alert('Please enter a valid balance amount (must be 0 or greater)');
-                return;
-            }
-            
-            if (!confirm(`⚠️ WARNING: This will:\n\n1. Cancel ALL pending bets (refund stakes)\n2. Reset ALL user balances to $${resetAmount}\n3. Set default balance for NEW users to $${resetAmount}\n4. This action cannot be undone!\n\nAre you sure you want to continue?`)) {
-                return;
-            }
-            
-            try {
-                const response = await fetch(`/${SUBDOMAIN}/admin/api/users/reset`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        new_balance: parseFloat(resetAmount)
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert(`✅ Successfully reset all users!\n\n- ${data.bets_cancelled} pending bets cancelled (refunded)\n- ${data.users_reset} user balances reset to $${resetAmount}\n- New users will now get $${resetAmount} by default`);
-                    loadUsers(); // Reload the users table
-                    
-                    // Force refresh balance for current user if they're logged in
-                    if (typeof refreshUserBalance === 'function') {
-                        console.log('🔄 Forcing balance refresh after admin reset...');
-                        refreshUserBalance();
-                    }
-                    
-                    // Also trigger a page refresh to ensure all users see updated balances
-                    setTimeout(() => {
-                        if (confirm('🔄 Balance has been reset. Refresh the page to see updated balances?')) {
-                            window.location.reload();
-                        }
-                    }, 2000);
-                } else {
-                    alert('❌ Error: ' + data.error);
-                }
-                
-            } catch (error) {
-                alert('❌ Error resetting users: ' + error.message);
-            }
-        }
         
         function openThemeCustomizer() {
             // Open theme customizer in new tab for this specific operator
