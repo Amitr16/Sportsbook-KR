@@ -3523,6 +3523,10 @@ RICH_SUPERADMIN_TEMPLATE = '''
         document.addEventListener('DOMContentLoaded', function() {
             console.log('DOM loaded, setting up event listeners...');
             
+            // Load initial data for global overview
+            loadGlobalOverview();
+            loadRevenueScriptStatus();
+            
             // Test the showSection function
             window.testShowSection = function(sectionId) {
                 console.log('Testing showSection with:', sectionId);
