@@ -602,6 +602,198 @@ def reset_all_global_users():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@rich_superadmin_bp.route('/superadmin/api/run-daily-revenue-calculator', methods=['POST'])
+@check_superadmin_auth
+def run_daily_revenue_calculator():
+    """Run the daily revenue calculator script"""
+    try:
+        from datetime import datetime
+        import json
+        
+        # Import the daily revenue calculator functions directly
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        
+        # Import the functions from the script
+        from daily_revenue_calculator import (
+            get_operator_wallet_balances, 
+            get_previous_total_revenue,
+            calculate_revenue_distribution,
+            update_daily_revenue_calculations
+        )
+        
+        # Call the main function from the script
+        update_daily_revenue_calculations()
+        
+        # Get statistics after running
+        conn = get_db_connection()
+        try:
+            # Count operators processed
+            operators_query = """
+            SELECT COUNT(*) as count
+            FROM sportsbook_operators 
+            WHERE is_active = TRUE
+            """
+            operators_processed = conn.execute(operators_query).fetchone()['count']
+            
+            # Count calculations created today
+            calculations_query = """
+            SELECT COUNT(*) as count
+            FROM revenue_calculations 
+            WHERE DATE(processed_at) = DATE('now')
+            """
+            calculations_created = conn.execute(calculations_query).fetchone()['count']
+            
+            return jsonify({
+                'success': True,
+                'message': 'Daily revenue calculator completed successfully',
+                'operators_processed': operators_processed,
+                'calculations_created': calculations_created
+            })
+            
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/run-update-operator-wallets', methods=['POST'])
+@check_superadmin_auth
+def run_update_operator_wallets():
+    """Run the update operator wallets script"""
+    try:
+        from datetime import datetime
+        import json
+        
+        # Import the update operator wallets functions directly
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        
+        # Import the functions from the script
+        from update_operator_wallets import (
+            get_unprocessed_revenue_calculations,
+            get_current_wallet_balances,
+            update_wallet_balance,
+            process_revenue_calculation
+        )
+        
+        conn = get_db_connection()
+        
+        try:
+            # Get unprocessed revenue calculations
+            calculations = get_unprocessed_revenue_calculations(conn)
+            calculations_processed = len(calculations)
+            
+            wallets_updated = 0
+            
+            for calculation in calculations:
+                # Process the revenue calculation
+                process_revenue_calculation(calculation, conn)
+                
+                wallets_updated += 1
+            
+            conn.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Update operator wallets completed successfully',
+                'calculations_processed': calculations_processed,
+                'wallets_updated': wallets_updated
+            })
+            
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/revenue-script-status')
+@check_superadmin_auth
+def get_revenue_script_status():
+    """Get the last run times for revenue scripts"""
+    try:
+        conn = get_db_connection()
+        
+        # Get last revenue calculation processed_at
+        last_revenue_calc = conn.execute("""
+            SELECT processed_at 
+            FROM revenue_calculations 
+            ORDER BY processed_at DESC 
+            LIMIT 1
+        """).fetchone()
+        
+        # Get last wallet update updated_at
+        last_wallet_update = conn.execute("""
+            SELECT updated_at 
+            FROM operator_wallets 
+            ORDER BY updated_at DESC 
+            LIMIT 1
+        """).fetchone()
+        
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'last_revenue_calculation': last_revenue_calc['processed_at'] if last_revenue_calc else None,
+            'last_wallet_update': last_wallet_update['updated_at'] if last_wallet_update else None
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/global-overview')
+@check_superadmin_auth
+def get_global_overview():
+    """Get global overview statistics"""
+    try:
+        conn = get_db_connection()
+        
+        # Get total operators
+        total_operators = conn.execute("SELECT COUNT(*) as count FROM sportsbook_operators").fetchone()['count']
+        
+        # Get total users
+        total_users = conn.execute("SELECT COUNT(*) as count FROM users").fetchone()['count']
+        
+        # Get total bets
+        total_bets = conn.execute("SELECT COUNT(*) as count FROM bets").fetchone()['count']
+        
+        # Get total revenue
+        total_revenue = conn.execute("""
+            SELECT COALESCE(SUM(total_revenue), 0) as total 
+            FROM sportsbook_operators
+        """).fetchone()['total']
+        
+        # Get active events (events with pending bets)
+        active_events = conn.execute("""
+            SELECT COUNT(DISTINCT match_id) as count 
+            FROM bets 
+            WHERE status = 'pending'
+        """).fetchone()['count']
+        
+        # Get total liability (sum of all pending bet stakes)
+        total_liability = conn.execute("""
+            SELECT COALESCE(SUM(stake), 0) as total 
+            FROM bets 
+            WHERE status = 'pending'
+        """).fetchone()['total']
+        
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'total_operators': total_operators,
+            'total_users': total_users,
+            'total_bets': total_bets,
+            'total_revenue': total_revenue,
+            'active_events': active_events,
+            'total_liability': total_liability
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @rich_superadmin_bp.route('/superadmin/api/operators')
 @check_superadmin_auth
 def get_operators():
@@ -1982,8 +2174,50 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     <h3>Total Liability</h3>
                     <p id="global-total-liability">$0.00</p>
                 </div>
+            </div>
+            
+            <!-- Revenue Management Section -->
+            <div style="background: white; border-radius: 8px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <h3 style="color: #2c3e50; margin-bottom: 15px; border-bottom: 2px solid #e67e22; padding-bottom: 10px;">💰 Revenue Management</h3>
+                <p style="color: #666; margin-bottom: 20px;">Run daily revenue calculations and update operator wallets</p>
+                
+                <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 15px;">
+                    <button onclick="runDailyRevenueCalculator()" 
+                            style="background: linear-gradient(135deg, #28a745, #20c997); color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: all 0.3s ease;"
+                            onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(40, 167, 69, 0.3)'"
+                            onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+                        <span>📊</span>
+                        <span>Run Daily Revenue Calculator</span>
+                    </button>
+                    
+                    <button onclick="runUpdateOperatorWallets()" 
+                            style="background: linear-gradient(135deg, #007bff, #0056b3); color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: all 0.3s ease;"
+                            onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(0, 123, 255, 0.3)'"
+                            onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+                        <span>💳</span>
+                        <span>Update Operator Wallets</span>
+                    </button>
+                </div>
+                
+                <!-- Last Run Status -->
+                <div style="background: #f8f9fa; border-radius: 6px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #e67e22;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <strong style="color: #2c3e50;">📊 Last Revenue Calculation:</strong>
+                            <span id="last-revenue-calculation" style="color: #666; font-style: italic;">Loading...</span>
+                        </div>
+                        <div>
+                            <strong style="color: #2c3e50;">💳 Last Wallet Update:</strong>
+                            <span id="last-wallet-update" style="color: #666; font-style: italic;">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="revenue-script-status" style="margin-top: 15px; padding: 10px; border-radius: 4px; display: none;">
+                    <!-- Status messages will appear here -->
                 </div>
             </div>
+        </div>
             
         <!-- Global Betting Events Management -->
         <div id="global-betting-events" class="section">
@@ -2584,6 +2818,148 @@ RICH_SUPERADMIN_TEMPLATE = '''
         function changeGlobalUsersPerPage() {
             currentGlobalUsersPage = 1;
             loadGlobalUsers(1);
+        }
+        
+        async function loadGlobalOverview() {
+            try {
+                const response = await fetch('/superadmin/api/global-overview');
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('global-total-operators').textContent = data.total_operators || 0;
+                    document.getElementById('global-total-users').textContent = data.total_users || 0;
+                    document.getElementById('global-total-bets').textContent = data.total_bets || 0;
+                    document.getElementById('global-total-revenue').textContent = `$${(data.total_revenue || 0).toFixed(2)}`;
+                    document.getElementById('global-active-events').textContent = data.active_events || 0;
+                    document.getElementById('global-total-liability').textContent = `$${(data.total_liability || 0).toFixed(2)}`;
+                }
+            } catch (error) {
+                console.error('Error loading global overview:', error);
+            }
+        }
+        
+        async function loadRevenueScriptStatus() {
+            try {
+                const response = await fetch('/superadmin/api/revenue-script-status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const lastRevenueCalc = document.getElementById('last-revenue-calculation');
+                    const lastWalletUpdate = document.getElementById('last-wallet-update');
+                    
+                    if (data.last_revenue_calculation) {
+                        const date = new Date(data.last_revenue_calculation);
+                        lastRevenueCalc.textContent = date.toLocaleString();
+                        lastRevenueCalc.style.color = '#28a745';
+                    } else {
+                        lastRevenueCalc.textContent = 'Never run';
+                        lastRevenueCalc.style.color = '#dc3545';
+                    }
+                    
+                    if (data.last_wallet_update) {
+                        const date = new Date(data.last_wallet_update);
+                        lastWalletUpdate.textContent = date.toLocaleString();
+                        lastWalletUpdate.style.color = '#28a745';
+                    } else {
+                        lastWalletUpdate.textContent = 'Never run';
+                        lastWalletUpdate.style.color = '#dc3545';
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading revenue script status:', error);
+                document.getElementById('last-revenue-calculation').textContent = 'Error loading';
+                document.getElementById('last-wallet-update').textContent = 'Error loading';
+            }
+        }
+        
+        async function runDailyRevenueCalculator() {
+            const statusDiv = document.getElementById('revenue-script-status');
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '<div style="color: #007bff; font-weight: 500;">🔄 Running Daily Revenue Calculator...</div>';
+            
+            try {
+                const response = await fetch('/superadmin/api/run-daily-revenue-calculator', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.innerHTML = `
+                        <div style="color: #28a745; font-weight: 500;">
+                            ✅ Daily Revenue Calculator completed successfully!<br>
+                            <small>Processed ${data.operators_processed} operators, ${data.calculations_created} revenue calculations created</small>
+                        </div>
+                    `;
+                    // Refresh the status display
+                    loadRevenueScriptStatus();
+                } else {
+                    statusDiv.innerHTML = `
+                        <div style="color: #dc3545; font-weight: 500;">
+                            ❌ Error running Daily Revenue Calculator: ${data.error}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div style="color: #dc3545; font-weight: 500;">
+                        ❌ Error running Daily Revenue Calculator: ${error.message}
+                    </div>
+                `;
+            }
+            
+            // Hide status after 5 seconds
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        async function runUpdateOperatorWallets() {
+            const statusDiv = document.getElementById('revenue-script-status');
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '<div style="color: #007bff; font-weight: 500;">🔄 Updating Operator Wallets...</div>';
+            
+            try {
+                const response = await fetch('/superadmin/api/run-update-operator-wallets', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.innerHTML = `
+                        <div style="color: #28a745; font-weight: 500;">
+                            ✅ Operator Wallets updated successfully!<br>
+                            <small>Processed ${data.calculations_processed} revenue calculations, ${data.wallets_updated} wallets updated</small>
+                        </div>
+                    `;
+                    // Refresh the status display
+                    loadRevenueScriptStatus();
+                } else {
+                    statusDiv.innerHTML = `
+                        <div style="color: #dc3545; font-weight: 500;">
+                            ❌ Error updating Operator Wallets: ${data.error}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div style="color: #dc3545; font-weight: 500;">
+                        ❌ Error updating Operator Wallets: ${error.message}
+                    </div>
+                `;
+            }
+            
+            // Hide status after 5 seconds
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
         }
         
         async function resetAllGlobalUsers() {
@@ -3218,7 +3594,11 @@ RICH_SUPERADMIN_TEMPLATE = '''
         
         // Load data for specific sections
         console.log('🔄 Loading data for section:', sectionId);
-        if (sectionId === 'global-betting-events') {
+        if (sectionId === 'global-overview') {
+            console.log('🏠 Loading global overview...');
+            loadGlobalOverview();
+            loadRevenueScriptStatus();
+        } else if (sectionId === 'global-betting-events') {
             console.log('📊 Loading global betting events...');
             loadGlobalBettingEvents();
         } else if (sectionId === 'manual-settlement') {
