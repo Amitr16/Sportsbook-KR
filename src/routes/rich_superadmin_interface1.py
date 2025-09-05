@@ -537,6 +537,71 @@ def get_global_users():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@rich_superadmin_bp.route('/superadmin/api/global-users/reset', methods=['POST'])
+@check_superadmin_auth
+def reset_all_global_users():
+    """Reset all users across all operators - superadmin only"""
+    try:
+        data = request.get_json()
+        new_balance = float(data.get('new_balance', 0))
+        
+        if new_balance < 0:
+            return jsonify({'success': False, 'error': 'Balance must be 0 or greater'}), 400
+        
+        conn = get_db_connection()
+        
+        # Cancel all pending bets and refund stakes
+        bets_cancelled = conn.execute("""
+            UPDATE bets 
+            SET status = 'cancelled' 
+            WHERE status = 'pending'
+        """).rowcount
+        
+        # Reset all user balances
+        users_reset = conn.execute("""
+            UPDATE users 
+            SET balance = ?
+        """, (new_balance,)).rowcount
+        
+        # Update default balance for all operators
+        import json
+        
+        # First get all operators and update their settings
+        operators = conn.execute("SELECT id, settings FROM sportsbook_operators").fetchall()
+        
+        for operator in operators:
+            try:
+                settings = json.loads(operator['settings']) if operator['settings'] else {}
+                settings['default_user_balance'] = new_balance
+                
+                conn.execute("""
+                    UPDATE sportsbook_operators 
+                    SET settings = ? 
+                    WHERE id = ?
+                """, (json.dumps(settings), operator['id']))
+            except Exception as e:
+                print(f"Error updating operator {operator['id']} settings: {e}")
+                # If JSON parsing fails, create a new settings object
+                conn.execute("""
+                    UPDATE sportsbook_operators 
+                    SET settings = ? 
+                    WHERE id = ?
+                """, (json.dumps({'default_user_balance': new_balance}), operator['id']))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully reset all users across all operators',
+            'bets_cancelled': bets_cancelled,
+            'users_reset': users_reset,
+            'new_balance': new_balance
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @rich_superadmin_bp.route('/superadmin/api/operators')
 @check_superadmin_auth
 def get_operators():
@@ -1783,6 +1848,63 @@ RICH_SUPERADMIN_TEMPLATE = '''
             color: #666;
             font-style: italic;
         }
+        
+        /* Pagination Styles */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 1.5rem 0;
+            padding: 1rem;
+        }
+        
+        .pagination button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #ddd;
+            background: white;
+            color: #333;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+        
+        .pagination button:hover:not(:disabled) {
+            background: #f8f9fa;
+            border-color: #e67e22;
+        }
+        
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .pagination button.active {
+            background: #e67e22;
+            color: white;
+            border-color: #e67e22;
+        }
+        
+        .pagination-info {
+            margin: 0 1rem;
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .pagination-controls select {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
 
         .error {
             text-align: center;
@@ -1974,6 +2096,29 @@ RICH_SUPERADMIN_TEMPLATE = '''
             
             <div class="controls">
                 <button onclick="loadGlobalUsers()">🔄 Refresh Global Users</button>
+                
+                <div class="reset-users-controls" style="display: inline-block; margin-left: 20px;">
+                    <input type="number" id="global-reset-balance-amount" placeholder="Enter balance amount" 
+                           style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 150px;">
+                    <button onclick="resetAllGlobalUsers()" style="background: #dc2626; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
+                        🔄 Reset All Users
+                    </button>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                        ⚠️ This will cancel all pending bets (refund stakes), reset ALL user balances across ALL operators, and set default balance for new users
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Pagination Controls -->
+            <div class="pagination-controls">
+                <label for="global-users-per-page">Users per page:</label>
+                <select id="global-users-per-page" onchange="changeGlobalUsersPerPage()">
+                    <option value="10">10</option>
+                    <option value="20" selected>20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                </select>
+                <span id="global-users-pagination-info" class="pagination-info">Loading...</span>
             </div>
             
             <div class="table-container">
@@ -2020,6 +2165,15 @@ RICH_SUPERADMIN_TEMPLATE = '''
                         <tr><td colspan="12" class="loading">Loading global users...</td></tr>
                     </tbody>
                 </table>
+            </div>
+            
+            <!-- Pagination -->
+            <div id="global-users-pagination" class="pagination" style="display: none;">
+                <button onclick="goToGlobalUsersPage(1)" id="global-users-first-page">« First</button>
+                <button onclick="goToGlobalUsersPage(currentGlobalUsersPage - 1)" id="global-users-prev-page">‹ Previous</button>
+                <div id="global-users-page-numbers"></div>
+                <button onclick="goToGlobalUsersPage(currentGlobalUsersPage + 1)" id="global-users-next-page">Next ›</button>
+                <button onclick="goToGlobalUsersPage(totalGlobalUsersPages)" id="global-users-last-page">Last »</button>
             </div>
         </div>
         
@@ -2315,11 +2469,20 @@ RICH_SUPERADMIN_TEMPLATE = '''
             }
         }
         
-        async function loadGlobalUsers() {
+        // Pagination variables for global users
+        let currentGlobalUsersPage = 1;
+        let totalGlobalUsersPages = 1;
+        let globalUsersPerPage = 20;
+        
+        async function loadGlobalUsers(page = 1) {
             console.log('🔍 loadGlobalUsers function called');
             try {
+                currentGlobalUsersPage = page;
+                const perPage = parseInt(document.getElementById('global-users-per-page').value) || 20;
+                globalUsersPerPage = perPage;
+                
                 console.log('🌐 Fetching from /superadmin/api/global-users');
-                const response = await fetch('/superadmin/api/global-users');
+                const response = await fetch(`/superadmin/api/global-users?page=${page}&per_page=${perPage}`);
                 console.log('📡 Response status:', response.status);
                 
                 const data = await response.json();
@@ -2330,6 +2493,11 @@ RICH_SUPERADMIN_TEMPLATE = '''
                         `<tr><td colspan="12" class="error">Error: ${data.error}</td></tr>`;
                     return;
                 }
+                
+                // Update pagination info
+                totalGlobalUsersPages = Math.ceil(data.total / perPage);
+                document.getElementById('global-users-pagination-info').textContent = 
+                    `Showing ${((page - 1) * perPage) + 1}-${Math.min(page * perPage, data.total)} of ${data.total} users`;
                 
                 const tbody = document.getElementById('global-users-tbody');
                 if (data.users.length === 0) {
@@ -2369,9 +2537,89 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     });
                 }
                 
+                // Update pagination controls
+                updateGlobalUsersPagination();
+                
             } catch (error) {
                 document.getElementById('global-users-tbody').innerHTML = 
                     `<tr><td colspan="12" class="error">Error loading users: ${error.message}</td></tr>`;
+            }
+        }
+        
+        function updateGlobalUsersPagination() {
+            const pagination = document.getElementById('global-users-pagination');
+            const pageNumbers = document.getElementById('global-users-page-numbers');
+            
+            if (totalGlobalUsersPages <= 1) {
+                pagination.style.display = 'none';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            
+            // Update button states
+            document.getElementById('global-users-first-page').disabled = currentGlobalUsersPage === 1;
+            document.getElementById('global-users-prev-page').disabled = currentGlobalUsersPage === 1;
+            document.getElementById('global-users-next-page').disabled = currentGlobalUsersPage === totalGlobalUsersPages;
+            document.getElementById('global-users-last-page').disabled = currentGlobalUsersPage === totalGlobalUsersPages;
+            
+            // Generate page numbers
+            let pageNumbersHtml = '';
+            const startPage = Math.max(1, currentGlobalUsersPage - 2);
+            const endPage = Math.min(totalGlobalUsersPages, currentGlobalUsersPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageNumbersHtml += `<button onclick="goToGlobalUsersPage(${i})" class="${i === currentGlobalUsersPage ? 'active' : ''}">${i}</button>`;
+            }
+            
+            pageNumbers.innerHTML = pageNumbersHtml;
+        }
+        
+        function goToGlobalUsersPage(page) {
+            if (page >= 1 && page <= totalGlobalUsersPages) {
+                loadGlobalUsers(page);
+            }
+        }
+        
+        function changeGlobalUsersPerPage() {
+            currentGlobalUsersPage = 1;
+            loadGlobalUsers(1);
+        }
+        
+        async function resetAllGlobalUsers() {
+            const resetAmount = document.getElementById('global-reset-balance-amount').value;
+            
+            if (!resetAmount || resetAmount < 0) {
+                alert('Please enter a valid balance amount (must be 0 or greater)');
+                return;
+            }
+            
+            if (!confirm(`⚠️ WARNING: This will:\n\n1. Cancel ALL pending bets (refund stakes) across ALL operators\n2. Reset ALL user balances to $${resetAmount} across ALL operators\n3. Set default balance for NEW users to $${resetAmount}\n4. This action cannot be undone!\n\nAre you sure you want to continue?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/superadmin/api/global-users/reset', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        new_balance: parseFloat(resetAmount)
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`✅ Successfully reset all users across all operators!\n\n- ${data.bets_cancelled} pending bets cancelled (refunded)\n- ${data.users_reset} user balances reset to $${resetAmount}\n- New users will now get $${resetAmount} by default`);
+                    loadGlobalUsers(); // Reload the users table
+                } else {
+                    alert('❌ Error: ' + data.error);
+                }
+                
+            } catch (error) {
+                alert('❌ Error resetting users: ' + error.message);
             }
         }
         
