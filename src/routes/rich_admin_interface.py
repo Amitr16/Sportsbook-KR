@@ -164,17 +164,17 @@ def calculate_total_revenue(operator_id):
         return 0.0
 
 def get_operator_from_session():
-    """Get operator info from session"""
+    """Get operator info from session - ADMIN ONLY"""
     print(f"🔍 DEBUG: Session data: {session}")
-    print(f"🔍 DEBUG: operator_id in session: {session.get('operator_id')}")
-    print(f"🔍 DEBUG: operator_subdomain in session: {session.get('operator_subdomain')}")
+    print(f"🔍 DEBUG: admin_operator_id in session: {session.get('admin_operator_id')}")
+    print(f"🔍 DEBUG: admin_subdomain in session: {session.get('admin_subdomain')}")
     
-    # Check for new session keys first, fall back to old ones for backward compatibility
-    operator_id = session.get('operator_id') or session.get('admin_id')
-    operator_subdomain = session.get('operator_subdomain') or session.get('admin_subdomain')
+    # Only use admin-specific session keys to prevent superadmin interference
+    operator_id = session.get('admin_operator_id')
+    operator_subdomain = session.get('admin_subdomain')
     
     if not operator_id:
-        print("❌ DEBUG: No operator_id or admin_id in session")
+        print("❌ DEBUG: No admin_operator_id in session - admin not logged in")
         return None
     
     conn = get_db_connection()

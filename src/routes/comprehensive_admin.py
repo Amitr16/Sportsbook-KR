@@ -288,10 +288,10 @@ def get_users(subdomain):
     """Get users for specific operator"""
     try:
         operator = get_operator_by_subdomain(subdomain)
-        # Check for the correct session keys that are set by operator admin login
-        admin_operator_id = session.get('admin_operator_id') or session.get('admin_id') or session.get('operator_id')
-        if not operator or admin_operator_id != operator['id']:
-            return jsonify({'error': 'Unauthorized'}), 403
+        # Check for admin-specific session keys only to prevent superadmin interference
+        admin_operator_id = session.get('admin_operator_id')
+        if not operator or not admin_operator_id or admin_operator_id != operator['id']:
+            return jsonify({'error': 'Unauthorized - admin session required'}), 403
         
         operator_id = operator['id']
         conn = get_db_connection()
