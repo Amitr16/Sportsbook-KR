@@ -605,13 +605,16 @@ def admin_login_api(subdomain):
     
     # Verify admin credentials
     if username == operator['login'] and password:  # Need to add password verification
-        # Use consistent session keys that match the rest of the application
-        session['operator_id'] = operator['id']
-        session['operator_subdomain'] = subdomain
+        # Use admin-specific session keys to prevent superadmin interference
+        session['admin_operator_id'] = operator['id']
+        session['admin_subdomain'] = subdomain
         session['admin_username'] = username
-        session['admin_id'] = operator['id']  # Keep for backward compatibility
-        session['admin_subdomain'] = subdomain  # Keep for backward compatibility
         session['sportsbook_name'] = operator['sportsbook_name']
+        
+        # Clear any superadmin session data to prevent conflicts
+        from src.auth.session_utils import log_out_superadmin
+        log_out_superadmin()
+        
         session.permanent = True  # Make session persistent
         
         return jsonify({'success': True, 'message': 'Login successful'})
@@ -624,8 +627,17 @@ def admin_logout(subdomain):
     """Handle admin logout and redirect to admin login"""
     from flask import session, redirect
     
-    # Clear only operator session data, leaving superadmin intact
-    clear_operator_session(subdomain)
+    # Clear admin-specific session data
+    session.pop('admin_operator_id', None)
+    session.pop('admin_subdomain', None)
+    session.pop('admin_username', None)
+    session.pop('sportsbook_name', None)
+    
+    # Clear any legacy session keys
+    session.pop('operator_id', None)
+    session.pop('operator_subdomain', None)
+    session.pop('admin_id', None)
+    session.pop('admin_subdomain', None)
     
     # Redirect to admin login page for this subdomain
     return redirect(f'/{subdomain}/admin/login')
