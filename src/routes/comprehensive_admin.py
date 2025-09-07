@@ -27,7 +27,8 @@ def admin_required(f):
         # Check if this is an API call (URL contains /api/)
         is_api_call = '/api/' in request.path
         
-        if 'admin_id' not in session and 'operator_id' not in session:
+        # Check for admin-specific session keys
+        if 'admin_operator_id' not in session:
             if is_api_call:
                 return jsonify({'error': 'Unauthorized'}), 401
             else:

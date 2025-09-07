@@ -191,7 +191,7 @@ def get_operator_from_session():
 def serve_rich_admin_template(subdomain):
     """Serve rich admin template for a specific subdomain"""
     # Check if admin is logged in using new session keys, fall back to old ones
-    operator_id = session.get('operator_id') or session.get('admin_id')
+    operator_id = session.get('operator_id') or session.get('admin_operator_id')
     operator_subdomain = session.get('operator_subdomain') or session.get('admin_subdomain')
     
     if not operator_id or operator_subdomain != subdomain:
@@ -1425,13 +1425,13 @@ def session_test(subdomain):
     """Test endpoint to debug session issues"""
     print(f"🔍 DEBUG: Session test called for subdomain: {subdomain}")
     print(f"🔍 DEBUG: Full session data: {dict(session)}")
-    print(f"🔍 DEBUG: admin_id: {session.get('admin_id')}")
+    print(f"🔍 DEBUG: admin_id: {session.get('admin_operator_id')}")
     print(f"🔍 DEBUG: admin_subdomain: {session.get('admin_subdomain')}")
     print(f"🔍 DEBUG: admin_username: {session.get('admin_username')}")
     
     return jsonify({
         'session_data': dict(session),
-        'admin_id': session.get('admin_id'),
+        'admin_operator_id': session.get('admin_operator_id'),
         'admin_subdomain': session.get('admin_subdomain'),
         'admin_username': session.get('admin_username')
     })
@@ -1441,11 +1441,11 @@ def get_manual_settlement_data(subdomain):
     """Get pending bets grouped by match for manual settlement"""
     try:
         # Check admin authentication
-        if not session.get('admin_id') or session.get('admin_subdomain') != subdomain:
+        if not session.get('admin_operator_id') or session.get('admin_subdomain') != subdomain:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
         
         # Get operator ID from session
-        operator_id = session.get('admin_id')
+        operator_id = session.get('admin_operator_id')
         
         conn = get_db_connection()
         
@@ -1521,11 +1521,11 @@ def manual_settle_bets(subdomain):
     """Manually settle bets for a specific match and market"""
     try:
         # Check admin authentication
-        if not session.get('admin_id') or session.get('admin_subdomain') != subdomain:
+        if not session.get('admin_operator_id') or session.get('admin_subdomain') != subdomain:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
         
         # Get operator ID from session
-        operator_id = session.get('admin_id')
+        operator_id = session.get('admin_operator_id')
         
         data = request.get_json()
         match_id = data.get('match_id')
