@@ -325,8 +325,8 @@
                 <!-- URL Preview -->
                 <div class="url-preview" id="urlPreview" style="display: none; margin-top: 15px; padding: 15px; background: rgba(102, 126, 234, 0.1); border-radius: 10px; border-left: 4px solid #667eea;">
                     <h4 style="margin: 0 0 10px 0; color: #667eea; font-size: 16px;">🔗 Your URLs will be:</h4>
-                    <p style="margin: 5px 0; font-size: 14px;"><strong>🏢 Admin Panel:</strong> <span id="adminURL" style="color: #667eea; font-family: monospace;">http://localhost:5000/[subdomain]/admin</span></p>
-                    <p style="margin: 5px 0; font-size: 14px;"><strong>👥 Client App:</strong> <span id="clientURL" style="color: #667eea; font-family: monospace;">http://localhost:5000/[subdomain]</span></p>
+                    <p style="margin: 5px 0; font-size: 14px;"><strong>🏢 Admin Panel:</strong> <span id="adminURL" style="color: #667eea; font-family: monospace;">https://sportsbook.kryzel.io/[subdomain]/admin</span></p>
+                    <p style="margin: 5px 0; font-size: 14px;"><strong>👥 Client App:</strong> <span id="clientURL" style="color: #667eea; font-family: monospace;">https://sportsbook.kryzel.io/[subdomain]</span></p>
                 </div>
             </div>
 
@@ -413,8 +413,8 @@
                     .replace(/\s+/g, '')
                     .substring(0, 15);
                 
-                document.getElementById('adminURL').textContent = `http://localhost:5000/${subdomain}/admin`;
-                document.getElementById('clientURL').textContent = `http://localhost:5000/${subdomain}`;
+                document.getElementById('adminURL').textContent = `https://sportsbook.kryzel.io/${subdomain}/admin`;
+                document.getElementById('clientURL').textContent = `https://sportsbook.kryzel.io/${subdomain}`;
                 urlPreview.style.display = 'block';
             } else {
                 urlPreview.style.display = 'none';
