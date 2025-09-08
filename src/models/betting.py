@@ -250,7 +250,7 @@ def bind_models_to_db(db_instance):
         'email': db_instance.Column(db_instance.String(120), unique=True, nullable=False),
         'password_hash': db_instance.Column(db_instance.String(255), nullable=False),
         'balance': db_instance.Column(db_instance.Float, default=1000.0),
-        'created_at': db_instance.Column(db_instance.DateTime, default=datetime.now),
+        'created_at': db_instance.Column(db_instance.DateTime, default=datetime.utcnow),
         'last_login': db_instance.Column(db_instance.DateTime),
         'is_active': db_instance.Column(db_instance.Boolean, default=True),
         'sportsbook_operator_id': db_instance.Column(db_instance.Integer, nullable=True),
@@ -280,8 +280,8 @@ def bind_models_to_db(db_instance):
         'actual_return': db_instance.Column(db_instance.Float, default=0.0),
         'settled_at': db_instance.Column(db_instance.DateTime),
         'combo_selections': db_instance.Column(db_instance.Text),
-        'created_at': db_instance.Column(db_instance.DateTime, default=datetime.now),
-        'updated_at': db_instance.Column(db_instance.DateTime, default=datetime.now, onupdate=datetime.now)
+        'created_at': db_instance.Column(db_instance.DateTime, default=datetime.utcnow),
+        'updated_at': db_instance.Column(db_instance.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     })
     
     # Bind Transaction model
@@ -309,8 +309,8 @@ def bind_models_to_db(db_instance):
         'total_stake': db_instance.Column(db_instance.Float, default=0.0),
         'potential_return': db_instance.Column(db_instance.Float, default=0.0),
         'status': db_instance.Column(db_instance.String(20), default='pending'),
-        'created_at': db_instance.Column(db_instance.DateTime, default=datetime.now),
-        'updated_at': db_instance.Column(db_instance.DateTime, default=datetime.now, onupdate=datetime.now)
+        'created_at': db_instance.Column(db_instance.DateTime, default=datetime.utcnow),
+        'updated_at': db_instance.Column(db_instance.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     })
     
     # Bind Event model

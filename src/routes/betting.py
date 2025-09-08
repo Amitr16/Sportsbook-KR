@@ -595,9 +595,20 @@ def get_user_bets():
             for row in cursor.fetchall():
                 bet_dict = dict(row)
                 
-                # Add formatted local time
+                # Add UTC ISO-8601 timestamp (bulletproof for any user timezone)
                 if bet_dict.get('created_at'):
-                    bet_dict['created_at_local'] = bet_dict['created_at'].strftime('%b %d, %Y at %I:%M %p')
+                    from datetime import timezone
+                    
+                    def to_utc_iso(dt):
+                        # dt may be naive or aware; normalize to UTC-aware, then ISO with Z
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        else:
+                            dt = dt.astimezone(timezone.utc)
+                        return dt.isoformat().replace("+00:00", "Z")
+                    
+                    bet_dict["created_at_iso"] = to_utc_iso(bet_dict['created_at'])
+                    bet_dict["created_at"] = bet_dict["created_at_iso"]  # alias for compatibility
                 
                 bets.append(bet_dict)
         

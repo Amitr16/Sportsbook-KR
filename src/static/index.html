@@ -46,53 +46,7 @@
         const API_BASE = '';
         console.log('[CONFIG] API_BASE:', API_BASE);
         
-        // Load theme CSS based on current subdomain
-        function loadThemeCSS() {
-            const path = window.location.pathname;
-            const subdomain = path.split('/')[1]; // Get subdomain from path like /subdomain/...
-            
-            if (subdomain && subdomain !== 'static' && subdomain !== 'api') {
-                const themeCssLink = document.getElementById('theme-css');
-                const themeCssPreload = document.getElementById('theme-css-preload');
-                // Since API_BASE is empty, use relative path
-                const themeUrl = `/api/theme-css/${subdomain}`;
-                
-                // Set both preload and main link to prevent theme "blink"
-                if (themeCssPreload) themeCssPreload.href = themeUrl;
-                themeCssLink.href = themeUrl;
-                console.log('[THEME] Loading CSS from:', themeUrl);
-                
-                // Also load theme data from database for dynamic updates
-                loadThemeFromDatabase(subdomain);
-            } else {
-                console.warn('[THEME] No valid subdomain found in path:', path);
-            }
-        }
-        
-        // Load theme data from database (using same logic as theme customizer)
-        async function loadThemeFromDatabase(subdomain) {
-            console.log('🔍 loadThemeFromDatabase called with subdomain:', subdomain);
-            try {
-                const apiUrl = `/${subdomain}/api/public/load-theme`;
-                console.log('🌐 Fetching theme from:', apiUrl);
-                
-                const response = await fetch(apiUrl);
-                console.log('📡 Response status:', response.status);
-                
-                if (response.ok) {
-                    const themeData = await response.json();
-                    console.log('✅ Theme data loaded from database:', themeData);
-                    
-                    // Apply theme using same logic as theme customizer
-                    applyThemeToPage(themeData);
-                } else {
-                    console.log('❌ Response not ok:', response.status, response.statusText);
-                }
-            } catch (error) {
-                console.error('❌ Error loading theme:', error);
-                console.log('Database theme not loaded, using CSS file only');
-            }
-        }
+        // Old theme loading functions removed - now handled by loadThemeCSSAndData()
         
         // Apply theme to page (using same logic as theme customizer)
         function applyThemeToPage(theme) {
@@ -161,14 +115,145 @@
             console.log('--text-color:', getComputedStyle(document.documentElement).getPropertyValue('--text-color'));
         }
         
-        // Load theme CSS immediately
-        loadThemeCSS();
+        // Unified loading function to prevent flickering
+        let loadingComplete = false;
+        let themeLoaded = false;
+        let authLoaded = false;
+        
+        function checkLoadingComplete() {
+            if (themeLoaded && authLoaded && !loadingComplete) {
+                loadingComplete = true;
+                hideLoadingScreen();
+            }
+        }
+        
+        function hideLoadingScreen() {
+            const loadingScreen = document.getElementById('loadingScreen');
+            const mainContent = document.getElementById('mainApp');
+            
+            if (loadingScreen && mainContent) {
+                // Fade out loading screen
+                loadingScreen.style.opacity = '0';
+                loadingScreen.style.transition = 'opacity 0.3s ease-in-out';
+                
+                // Show main content
+                mainContent.classList.add('loaded');
+                
+                // Remove loading screen after fade
+                setTimeout(() => {
+                    loadingScreen.remove();
+                }, 300);
+            }
+        }
+        
+        // Load everything in parallel
+        async function initializePage() {
+            console.log('🚀 Starting parallel initialization...');
+            
+            // Load theme CSS and data in parallel
+            const themePromise = loadThemeCSSAndData();
+            
+            // Wait for both theme and auth to complete
+            await Promise.all([themePromise]);
+            
+            console.log('✅ Page initialization complete');
+        }
+        
+        // Modified theme loading function
+        async function loadThemeCSSAndData() {
+            const path = window.location.pathname;
+            const subdomain = path.split('/')[1];
+            
+            if (subdomain && subdomain !== 'static' && subdomain !== 'api') {
+                const themeUrl = `/api/theme-css/${subdomain}`;
+                const themeDataUrl = `/${subdomain}/api/public/load-theme`;
+                
+                console.log('[THEME] Loading CSS and data in parallel...');
+                
+                // Load both CSS and data in parallel
+                const [cssResponse, dataResponse] = await Promise.allSettled([
+                    fetch(themeUrl),
+                    fetch(themeDataUrl)
+                ]);
+                
+                // Apply CSS immediately
+                const themeCssLink = document.getElementById('theme-css');
+                const themeCssPreload = document.getElementById('theme-css-preload');
+                if (themeCssPreload) themeCssPreload.href = themeUrl;
+                if (themeCssLink) themeCssLink.href = themeUrl;
+                
+                // Apply theme data if available
+                if (dataResponse.status === 'fulfilled' && dataResponse.value.ok) {
+                    try {
+                        const themeData = await dataResponse.value.json();
+                        applyThemeToPage(themeData);
+                    } catch (e) {
+                        console.log('Theme data parsing failed, using CSS only');
+                    }
+                }
+                
+                console.log('[THEME] Theme loading complete');
+            }
+            
+            themeLoaded = true;
+            checkLoadingComplete();
+        }
+        
+        // Start initialization immediately
+        initializePage();
     </script>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+        }
+        
+        /* Loading screen to prevent flickering */
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #1A1A1A;
+            color: #FFFFFF;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid #22C55E;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            font-size: 16px;
+            font-weight: 500;
+        }
+        
+        /* Hide main content until loaded */
+        .main-content {
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        .main-content.loaded {
+            opacity: 1;
         }
 
         body {
@@ -1414,6 +1499,12 @@
     </style>
 </head>
 <body>
+    <!-- Loading screen to prevent flickering -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading Sportsbook...</div>
+    </div>
+    
     <!-- Custom Fancy Alert Component -->
     <div class="custom-alert-overlay" id="customAlertOverlay">
         <div class="custom-alert" id="customAlert">
@@ -1522,6 +1613,8 @@
           showPublicMode();
         } finally {
           bootstrapAuthInProgress = false;
+          authLoaded = true;
+          checkLoadingComplete();
         }
       })();
 
@@ -1675,6 +1768,9 @@
               console.log('🚫 Initialization already in progress or completed, skipping...');
               return;
           }
+          
+          // Don't start initialization here - let the unified loading system handle it
+          console.log('📄 DOM ready, waiting for unified loading system...');
           
           initializationInProgress = true;
           console.log('🚀 CONSOLIDATED INITIALIZATION: Starting single initialization sequence...');
@@ -2077,7 +2173,7 @@
     </script>
 
     <!-- Main Application -->
-                <div id="mainApp">
+                <div id="mainApp" class="main-content">
     <!-- Header -->
         <header class="header">
             <div class="header-content">
@@ -6108,18 +6204,31 @@
                         'cashed_out': 'Cashed Out'
                     };
 
-                    // Convert UTC time to local time
+                    // Format UTC ISO-8601 timestamp to user's local timezone (bulletproof)
+                    function formatLocalDateTime(isoUtcString) {
+                        // relies on browser TZ; `Z` ensures Date parses as UTC then converts locally
+                        const dt = new Date(isoUtcString); // e.g. "2025-09-08T15:57:00Z"
+                        // Use the user's locale and timezone automatically
+                        return new Intl.DateTimeFormat(undefined, {
+                            dateStyle: "medium",
+                            timeStyle: "short"
+                        }).format(dt);
+                    }
+                    
+                    // Guardrail for legacy data (no `Z`)
+                    function coerceToISOZ(s) {
+                        // If it looks like "YYYY-MM-DD HH:MM:SS" without timezone, assume UTC and add Z
+                        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+                            return s.replace(" ", "T") + "Z";
+                        }
+                        return s;
+                    }
+                    
+                    const raw = bet.created_at_iso || bet.created_at; // prefer the new field
+                    const safe = raw ? coerceToISOZ(raw) : null;
                     let localTime = 'N/A';
-                    if (bet.created_at) {
-                        const date = new Date(bet.created_at);
-                        localTime = date.toLocaleString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: true,
-                            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                        });
+                    if (safe) {
+                        localTime = formatLocalDateTime(safe);
                     }
 
                     // Get proper match name (prefer match_name over match_id)
