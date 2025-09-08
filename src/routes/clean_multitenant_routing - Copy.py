@@ -39,7 +39,7 @@ def validate_subdomain(subdomain):
     conn = get_db_connection()
     
     operator = conn.execute("""
-        SELECT id, sportsbook_name, login, password_hash, subdomain, is_active, email
+        SELECT id, sportsbook_name, login, subdomain, is_active, email
         FROM sportsbook_operators 
         WHERE subdomain = ?
     """, (subdomain,)).fetchone()
@@ -54,12 +54,43 @@ def validate_subdomain(subdomain):
     
     return dict(operator), None
 
-# Customer betting interface - clean URL (works for both authenticated and non-authenticated users)
+# Customer betting interface - clean URL
 @clean_multitenant_bp.route('/<subdomain>')
 @clean_multitenant_bp.route('/<subdomain>/')
 def sportsbook_home(subdomain):
     """Serve the customer betting interface for a specific sportsbook"""
     from src.routes.branding import get_operator_branding, generate_custom_css, generate_custom_js
+    
+    # Simple authentication check using Flask-Session
+    from flask import session
+    
+    # Check if user is authenticated
+    if not session.get('user_id'):
+        print(f"❌ Auth failed: user not authenticated")
+        return redirect(f'/{subdomain}/login', code=302)
+    
+    # Check if user belongs to this operator (normalized comparison)
+    want = (subdomain or "").strip().lower()
+    have = (session.get("operator_subdomain") or "").strip().lower()
+    
+    if have and have != want:
+        print(f"❌ Tenant mismatch: want='{want}', have='{have}'")
+        nxt = quote(request.full_path or request.path, safe="")
+        return redirect(f"/{want}/login?next={nxt}", code=302)
+    
+    # Debug: Log session data
+    print(f"🔒 Sportsbook home auth check for '{subdomain}': session data = {dict(session)}")
+    
+    # Check for session conflicts - ensure no superadmin session is active
+    from src.auth.session_utils import is_superadmin_logged_in
+    if is_superadmin_logged_in():
+        print(f"⚠️ Session conflict detected: superadmin session active, clearing...")
+        from src.auth.session_utils import log_out_superadmin
+        log_out_superadmin()
+    
+    # Log session structure for debugging
+    print(f"🔍 Session structure: {dict(session)}")
+    print(f"✅ Auth successful for '{subdomain}': user_id={session.get('user_id')}")
     
     # Get operator branding
     branding = get_operator_branding(subdomain)
@@ -84,8 +115,11 @@ def sportsbook_home(subdomain):
         content = content.replace('GoalServe Sports Betting Platform', f"{operator['name']} - Sports Betting")
         content = content.replace('GoalServe', operator['name'])
         
-        # Note: Removed hardcoded login redirects to allow public betting page to work
-        # The public betting page handles authentication via bootstrapAuth() function
+        # Fix hardcoded login redirects to maintain operator context
+        content = content.replace('window.location.href = \'/login\'', f'window.location.href = \'/{subdomain}/login\'')
+        content = content.replace('window.location.href = "/login"', f'window.location.href = "/{subdomain}/login"')
+        content = content.replace('window.location.href = \'/login\';', f'window.location.href = \'/{subdomain}/login\';')
+        content = content.replace('window.location.href = "/login";', f'window.location.href = "/{subdomain}/login";')
         
         # Inject custom CSS
         custom_css = generate_custom_css(branding)
@@ -148,24 +182,26 @@ def sportsbook_login(subdomain):
                 padding: 2rem;
                 width: 100%;
                 max-width: 400px;
-                text-align: center;
+                box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
             }}
             .logo {{
-                font-size: 2rem;
-                font-weight: bold;
-                margin-bottom: 1rem;
+                text-align: center;
+                margin-bottom: 2rem;
+            }}
+            .logo h1 {{
                 color: #4ade80;
+                font-size: 1.5rem;
+                margin: 0;
             }}
             .form-group {{
                 margin-bottom: 1rem;
-                text-align: left;
             }}
-            label {{
+            .form-group label {{
                 display: block;
                 margin-bottom: 0.5rem;
-                color: #e2e8f0;
+                color: #e5e7eb;
             }}
-            input {{
+            .form-group input {{
                 width: 100%;
                 padding: 0.75rem;
                 border: 1px solid rgba(255, 255, 255, 0.2);
@@ -173,56 +209,139 @@ def sportsbook_login(subdomain):
                 background: rgba(255, 255, 255, 0.1);
                 color: #ffffff;
                 font-size: 1rem;
+                box-sizing: border-box;
             }}
-            input:focus {{
+            .form-group input:focus {{
                 outline: none;
                 border-color: #4ade80;
-                box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1);
             }}
-            button {{
+            .btn {{
                 width: 100%;
                 padding: 0.75rem;
-                background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
-                color: #000000;
                 border: none;
                 border-radius: 8px;
                 font-size: 1rem;
-                font-weight: 600;
                 cursor: pointer;
                 transition: all 0.3s ease;
             }}
-            button:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 10px 25px rgba(74, 222, 128, 0.3);
+            .btn-primary {{
+                background: #4ade80;
+                color: #000;
             }}
-            .error {{
+            .btn-primary:hover {{
+                background: #22c55e;
+            }}
+            .toggle-form {{
+                text-align: center;
+                margin-top: 1rem;
+            }}
+            .toggle-form a {{
+                color: #4ade80;
+                text-decoration: none;
+            }}
+            .toggle-form a:hover {{
+                text-decoration: underline;
+            }}
+            .hidden {{
+                display: none;
+            }}
+            .message {{
+                padding: 0.75rem;
+                border-radius: 8px;
+                margin-bottom: 1rem;
+                text-align: center;
+            }}
+            .message.success {{
+                background: rgba(34, 197, 94, 0.2);
+                border: 1px solid #22c55e;
+                color: #22c55e;
+            }}
+            .message.error {{
+                background: rgba(239, 68, 68, 0.2);
+                border: 1px solid #ef4444;
                 color: #ef4444;
-                margin-top: 0.5rem;
-                font-size: 0.875rem;
             }}
         </style>
     </head>
     <body>
         <div class="login-container">
-            <div class="logo">{operator['sportsbook_name']}</div>
+            <div class="logo">
+                <h1>{operator['sportsbook_name']}</h1>
+                <p>Sports Betting Platform</p>
+            </div>
+            
+            <div id="message" class="message hidden"></div>
+            
+            <!-- Login Form -->
+            <div id="loginForm">
                 <h2>Login</h2>
-            <form id="loginForm">
+                <form onsubmit="handleLogin(event)">
                     <div class="form-group">
-                    <label for="loginUsername">Username</label>
+                        <label>Username or Email</label>
                         <input type="text" id="loginUsername" required>
                     </div>
                     <div class="form-group">
-                    <label for="loginPassword">Password</label>
+                        <label>Password</label>
                         <input type="password" id="loginPassword" required>
                     </div>
-                <button type="submit">Login</button>
-                <div id="errorMessage" class="error" style="display: none;"></div>
+                    <button type="submit" class="btn btn-primary">Login</button>
                 </form>
+                <div class="toggle-form">
+                    <p>Don't have an account? <a href="#" onclick="showRegisterForm()">Register here</a></p>
+                </div>
+            </div>
+            
+            <!-- Register Form -->
+            <div id="registerForm" class="hidden">
+                <h2>Register</h2>
+                <form onsubmit="handleRegister(event)">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="registerUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" id="registerEmail" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="registerPassword" required minlength="6">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Create Account</button>
+                </form>
+                <div class="toggle-form">
+                    <p>Already have an account? <a href="#" onclick="showLoginForm()">Login here</a></p>
+                </div>
+            </div>
         </div>
         
         <script>
-            document.getElementById('loginForm').addEventListener('submit', async function(e) {{
-                e.preventDefault();
+            const SUBDOMAIN = '{subdomain}';
+            const OPERATOR_ID = {operator['id']};
+            
+            function showMessage(text, type) {{
+                const messageEl = document.getElementById('message');
+                messageEl.textContent = text;
+                messageEl.className = `message ${{type}}`;
+                messageEl.classList.remove('hidden');
+                
+                setTimeout(() => {{
+                    messageEl.classList.add('hidden');
+                }}, 5000);
+            }}
+            
+            function showLoginForm() {{
+                document.getElementById('loginForm').classList.remove('hidden');
+                document.getElementById('registerForm').classList.add('hidden');
+            }}
+            
+            function showRegisterForm() {{
+                document.getElementById('loginForm').classList.add('hidden');
+                document.getElementById('registerForm').classList.remove('hidden');
+            }}
+            
+            async function handleLogin(event) {{
+                event.preventDefault();
                 
                 const username = document.getElementById('loginUsername').value;
                 const password = document.getElementById('loginPassword').value;
@@ -239,16 +358,49 @@ def sportsbook_login(subdomain):
                     const data = await response.json();
                     
                     if (data.success) {{
+                        localStorage.setItem('token', data.token);
+                        showMessage(data.message, 'success');
+                        setTimeout(() => {{
                             window.location.href = `/${{SUBDOMAIN}}`;
+                        }}, 1000);
                     }} else {{
-                        document.getElementById('errorMessage').textContent = data.error || 'Login failed';
-                        document.getElementById('errorMessage').style.display = 'block';
+                        showMessage(data.error || 'Login failed', 'error');
                     }}
                 }} catch (error) {{
-                    document.getElementById('errorMessage').textContent = 'Network error. Please try again.';
-                    document.getElementById('errorMessage').style.display = 'block';
+                    showMessage('Login failed: ' + error.message, 'error');
                 }}
-            }});
+            }}
+            
+            async function handleRegister(event) {{
+                event.preventDefault();
+                
+                const username = document.getElementById('registerUsername').value;
+                const email = document.getElementById('registerEmail').value;
+                const password = document.getElementById('registerPassword').value;
+                
+                try {{
+                    const response = await fetch(`/api/auth/${{SUBDOMAIN}}/register`, {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{ username, email, password }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        showMessage(data.message, 'success');
+                        setTimeout(() => {{
+                            showLoginForm();
+                        }}, 2000);
+                    }} else {{
+                        showMessage(data.error || 'Registration failed', 'error');
+                    }}
+                }} catch (error) {{
+                    showMessage('Registration failed: ' + error.message, 'error');
+                }}
+            }}
         </script>
     </body>
     </html>
@@ -256,8 +408,9 @@ def sportsbook_login(subdomain):
     
     return login_html
 
-# Admin interface route
+# Admin interface - serve directly at /<subdomain>/admin
 @clean_multitenant_bp.route('/<subdomain>/admin')
+@clean_multitenant_bp.route('/<subdomain>/admin/')
 def sportsbook_admin(subdomain):
     """Serve rich admin interface directly at /<subdomain>/admin"""
     # Check if admin is authenticated using the correct session keys
@@ -268,6 +421,226 @@ def sportsbook_admin(subdomain):
     # Serve the rich admin interface directly
     from src.routes.rich_admin_interface import serve_rich_admin_template
     return serve_rich_admin_template(subdomain)
+
+# Admin login page
+@clean_multitenant_bp.route('/<subdomain>/admin/login')
+def sportsbook_admin_login(subdomain):
+    """Serve admin login page"""
+    operator, error = validate_subdomain(subdomain)
+    if not operator:
+        return f"Error: {error}", 404
+    
+    # Create branded admin login page
+    admin_login_html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{operator['sportsbook_name']} - Admin Login</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+                color: #ffffff;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0;
+            }}
+            .login-container {{
+                background: rgba(26, 26, 46, 0.95);
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 16px;
+                padding: 2rem;
+                width: 100%;
+                max-width: 400px;
+                box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            }}
+            .logo {{
+                text-align: center;
+                margin-bottom: 2rem;
+            }}
+            .logo h1 {{
+                color: #f39c12;
+                font-size: 1.5rem;
+                margin: 0;
+            }}
+            .form-group {{
+                margin-bottom: 1rem;
+            }}
+            .form-group label {{
+                display: block;
+                margin-bottom: 0.5rem;
+                color: #e5e7eb;
+            }}
+            .form-group input {{
+                width: 100%;
+                padding: 0.75rem;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+                font-size: 1rem;
+                box-sizing: border-box;
+            }}
+            .form-group input:focus {{
+                outline: none;
+                border-color: #f39c12;
+            }}
+            .btn {{
+                width: 100%;
+                padding: 0.75rem;
+                border: none;
+                border-radius: 8px;
+                font-size: 1rem;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                background: #f39c12;
+                color: #000;
+            }}
+            .btn:hover {{
+                background: #e67e22;
+            }}
+            .message {{
+                padding: 0.75rem;
+                border-radius: 8px;
+                margin-bottom: 1rem;
+                text-align: center;
+            }}
+            .message.error {{
+                background: rgba(239, 68, 68, 0.2);
+                border: 1px solid #ef4444;
+                color: #ef4444;
+            }}
+            .hidden {{
+                display: none;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="login-container">
+            <div class="logo">
+                <h1>{operator['sportsbook_name']}</h1>
+                <p>Admin Panel</p>
+            </div>
+            
+            <div id="message" class="message hidden"></div>
+            
+            <form onsubmit="handleAdminLogin(event)">
+                <div class="form-group">
+                    <label>Admin Username</label>
+                    <input type="text" id="adminUsername" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="adminPassword" required>
+                </div>
+                <button type="submit" class="btn">Sign In</button>
+            </form>
+        </div>
+        
+        <script>
+            const SUBDOMAIN = '{subdomain}';
+            
+            function showMessage(text, type) {{
+                const messageEl = document.getElementById('message');
+                messageEl.textContent = text;
+                messageEl.className = `message ${{type}}`;
+                messageEl.classList.remove('hidden');
+                
+                setTimeout(() => {{
+                    messageEl.classList.add('hidden');
+                }}, 5000);
+            }}
+            
+            async function handleAdminLogin(event) {{
+                event.preventDefault();
+                
+                const username = document.getElementById('adminUsername').value;
+                const password = document.getElementById('adminPassword').value;
+                
+                try {{
+                    const response = await fetch(`/${{SUBDOMAIN}}/admin/api/login`, {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{ username, password }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        window.location.href = `/${{SUBDOMAIN}}/admin`;
+                    }} else {{
+                        showMessage(data.error || 'Login failed', 'error');
+                    }}
+                }} catch (error) {{
+                    showMessage('Login failed: ' + error.message, 'error');
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    
+    return admin_login_html
+
+# Admin login API
+@clean_multitenant_bp.route('/<subdomain>/admin/api/login', methods=['POST'])
+def admin_login_api(subdomain):
+    """Handle admin login"""
+    from flask import request, session, jsonify
+    
+    operator, error = validate_subdomain(subdomain)
+    if not operator:
+        return jsonify({'success': False, 'error': error}), 404
+    
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    
+    # Verify admin credentials
+    if username == operator['login'] and password:  # Need to add password verification
+        # Use admin-specific session keys to prevent superadmin interference
+        session['admin_operator_id'] = operator['id']
+        session['admin_subdomain'] = subdomain
+        session['admin_username'] = username
+        session['sportsbook_name'] = operator['sportsbook_name']
+        
+        # Clear any superadmin session data to prevent conflicts
+        from src.auth.session_utils import log_out_superadmin
+        log_out_superadmin()
+        
+        session.permanent = True  # Make session persistent
+        
+        return jsonify({'success': True, 'message': 'Login successful'})
+    else:
+        return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
+
+# Admin logout route
+@clean_multitenant_bp.route('/<subdomain>/admin/logout')
+def admin_logout(subdomain):
+    """Handle admin logout and redirect to admin login"""
+    from flask import session, redirect
+    
+    # Clear admin-specific session data
+    session.pop('admin_operator_id', None)
+    session.pop('admin_subdomain', None)
+    session.pop('admin_username', None)
+    session.pop('sportsbook_name', None)
+    
+    # Clear any legacy session keys
+    session.pop('operator_id', None)
+    session.pop('operator_subdomain', None)
+    session.pop('admin_id', None)
+    session.pop('admin_subdomain', None)
+    
+    # Redirect to admin login page for this subdomain
+    return redirect(f'/{subdomain}/admin/login')
 
 # Theme customizer for specific operator
 @clean_multitenant_bp.route('/<subdomain>/admin/theme-customizer')
@@ -535,6 +908,7 @@ def load_theme_for_operator(subdomain):
         print(f"Error loading theme for operator {subdomain}: {e}")
         return jsonify({'error': 'Failed to load theme'}), 500
 
+
 @clean_multitenant_bp.route('/<subdomain>/api/public/load-theme', methods=['GET'])
 def load_public_theme_for_operator(subdomain):
     """Load theme customization for specific operator (PUBLIC - no auth required)"""
@@ -784,204 +1158,3 @@ body {{
         resp.headers["Content-Type"] = "text/css; charset=utf-8"
         return resp
 
-# Admin login page
-@clean_multitenant_bp.route('/<subdomain>/admin/login')
-def sportsbook_admin_login(subdomain):
-    """Serve admin login page"""
-    operator, error = validate_subdomain(subdomain)
-    if not operator:
-        return f"Error: {error}", 404
-    
-    # Simple admin login page
-    admin_login_html = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{operator['sportsbook_name']} - Admin Login</title>
-        <style>
-body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-                color: #ffffff;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin: 0;
-            }}
-            .login-container {{
-                background: rgba(26, 26, 46, 0.95);
-                backdrop-filter: blur(10px);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 16px;
-                padding: 2rem;
-                width: 100%;
-                max-width: 400px;
-                text-align: center;
-            }}
-            .logo {{
-                font-size: 2rem;
-                font-weight: bold;
-                margin-bottom: 1rem;
-                color: #4ade80;
-            }}
-            .form-group {{
-                margin-bottom: 1rem;
-                text-align: left;
-            }}
-            label {{
-                display: block;
-                margin-bottom: 0.5rem;
-                color: #e2e8f0;
-            }}
-            input {{
-                width: 100%;
-                padding: 0.75rem;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                border-radius: 8px;
-                background: rgba(255, 255, 255, 0.1);
-                color: #ffffff;
-                font-size: 1rem;
-            }}
-            input:focus {{
-                outline: none;
-                border-color: #4ade80;
-                box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1);
-            }}
-            button {{
-                width: 100%;
-                padding: 0.75rem;
-                background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
-                color: #000000;
-                border: none;
-                border-radius: 8px;
-                font-size: 1rem;
-                font-weight: 600;
-                cursor: pointer;
-                transition: all 0.3s ease;
-            }}
-            button:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 10px 25px rgba(74, 222, 128, 0.3);
-            }}
-            .error {{
-                color: #ef4444;
-                margin-top: 0.5rem;
-                font-size: 0.875rem;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="login-container">
-            <div class="logo">{operator['sportsbook_name']}</div>
-            <h2>Admin Login</h2>
-            <form id="adminLoginForm">
-                <div class="form-group">
-                    <label for="adminUsername">Username</label>
-                    <input type="text" id="adminUsername" required>
-                </div>
-                <div class="form-group">
-                    <label for="adminPassword">Password</label>
-                    <input type="password" id="adminPassword" required>
-                </div>
-                <button type="submit">Login</button>
-                <div id="errorMessage" class="error" style="display: none;"></div>
-            </form>
-        </div>
-        
-        <script>
-            document.getElementById('adminLoginForm').addEventListener('submit', async function(e) {{
-                e.preventDefault();
-                
-                const username = document.getElementById('adminUsername').value;
-                const password = document.getElementById('adminPassword').value;
-                
-                try {{
-                    const response = await fetch(`/{subdomain}/admin/api/login`, {{
-                        method: 'POST',
-                        headers: {{
-                            'Content-Type': 'application/json'
-                        }},
-                        body: JSON.stringify({{ username, password }})
-                    }});
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {{
-                        window.location.href = `/{subdomain}/admin`;
-                    }} else {{
-                        document.getElementById('errorMessage').textContent = data.error || 'Login failed';
-                        document.getElementById('errorMessage').style.display = 'block';
-                    }}
-                }} catch (error) {{
-                    document.getElementById('errorMessage').textContent = 'Network error. Please try again.';
-                    document.getElementById('errorMessage').style.display = 'block';
-                }}
-            }});
-        </script>
-    </body>
-    </html>
-    """
-    
-    return admin_login_html
-
-# Admin login API
-@clean_multitenant_bp.route('/<subdomain>/admin/api/login', methods=['POST'])
-def admin_login_api(subdomain):
-    """Handle admin login"""
-    from flask import request, session, jsonify
-    
-    operator, error = validate_subdomain(subdomain)
-    if not operator:
-        return jsonify({'success': False, 'error': 'Operator not found'}), 404
-    
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        password = data.get('password')
-        
-        if not username or not password:
-            return jsonify({'success': False, 'error': 'Username and password required'}), 400
-        
-        # Check admin credentials using password hash
-        from werkzeug.security import check_password_hash
-        if username == operator['login'] and check_password_hash(operator['password_hash'], password):
-            # Clear any existing session to avoid conflicts
-            session.clear()
-            
-            # Set admin session with correct keys for /api/auth/me
-            session['admin_id'] = f"{operator['id']}:{username}"
-            session['operator_id'] = operator['id']
-            session['operator_name'] = subdomain
-            session['role'] = 'admin'
-            
-            # Legacy keys for backward compatibility
-            session['operator_subdomain'] = subdomain
-            session['admin_operator_id'] = operator['id']
-            session['admin_subdomain'] = subdomain
-            
-            session.permanent = True  # Make session persistent
-            
-            return jsonify({'success': True, 'message': 'Login successful'})
-        else:
-            return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
-            
-    except Exception as e:
-        return jsonify({'success': False, 'error': 'Login failed'}), 500
-
-# Admin logout route
-@clean_multitenant_bp.route('/<subdomain>/admin/logout')
-def admin_logout(subdomain):
-    """Handle admin logout"""
-    from flask import session, redirect
-    
-    # Clear admin session
-    session.pop('operator_id', None)
-    session.pop('operator_subdomain', None)
-    session.pop('admin_operator_id', None)
-    session.pop('admin_subdomain', None)
-    
-    # Redirect to admin login page for this subdomain
-    return redirect(f'/{subdomain}/admin/login')
