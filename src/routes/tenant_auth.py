@@ -379,15 +379,21 @@ def tenant_logout_redirect(subdomain):
         # Clear only tenant session data, leaving superadmin intact
         log_out_tenant(subdomain)
         
-        logger.info(f"User logged out from subdomain '{subdomain}' and redirected to login")
+        # Also clear main user session data
+        session.pop('user_id', None)
+        session.pop('username', None)
+        session.pop('email', None)
+        session.pop('balance', None)
         
-        # Redirect to the login page for this subdomain
-        return redirect(f'/{subdomain}/login')
+        logger.info(f"User logged out from subdomain '{subdomain}' and redirected to main page")
+        
+        # Redirect to the main betting page to show public interface with Google sign-in
+        return redirect(f'/{subdomain}')
         
     except Exception as e:
         logger.error(f"Logout redirect error for {subdomain}: {e}")
-        # Fallback redirect
-        return redirect(f'/{subdomain}/login')
+        # Fallback redirect to main page
+        return redirect(f'/{subdomain}')
 
 
 @tenant_auth_bp.route('/api/auth/debug/sessions', methods=['GET'])
@@ -472,8 +478,8 @@ def get_current_user_profile():
     try:
         from flask import session
         
-        # Check if user is authenticated
-        if not session.get('user_id') or not session.get('operator_id'):
+        # Check if user is authenticated (user_id only - operator is context, not identity)
+        if not session.get('user_id'):
             return jsonify({
                 'success': False,
                 'error': 'Authentication required'
@@ -488,15 +494,22 @@ def get_current_user_profile():
         
         # 2) Get user details from database using the SAME SQLAlchemy session
         user_id = session['user_id']
-        operator_id = session['operator_id']
+        operator_id = session.get('operator_id')  # Optional - may be missing after OAuth
         
         # ✅ Use ONLY the ORM session - no raw database fallbacks, no db_compat
         user = current_app.db.session.get(User, user_id)
         
-        if not user or user.sportsbook_operator_id != operator_id:
+        if not user:
             return jsonify({
                 'success': False,
                 'error': 'User not found'
+            }), 404
+            
+        # Only check operator_id if it exists in session
+        if operator_id and user.sportsbook_operator_id != operator_id:
+            return jsonify({
+                'success': False,
+                'error': 'User not found for this operator'
             }), 404
         
         # 3) Use the build_session_user function for consistency
@@ -517,7 +530,11 @@ def get_current_user_profile():
         
         # Return in the format expected by the frontend
         # Always return fresh user_data (never cached balance)
-        response = jsonify(user_data)
+        response_data = {
+            **user_data,
+            'operator_required': operator_id is None
+        }
+        response = jsonify(response_data)
         
         # Add cache control headers to prevent caching of balance data
         response.headers['Cache-Control'] = 'no-store, private, must-revalidate'
@@ -531,6 +548,45 @@ def get_current_user_profile():
         return jsonify({
             'success': False,
             'error': 'Failed to get profile'
+        }), 500
+
+@tenant_auth_bp.route('/api/auth/admin/me', methods=['GET'])
+def get_admin_profile():
+    """Get admin profile from session"""
+    try:
+        from flask import session
+        
+        # Superadmin (global)
+        if session.get('admin_id') and session.get('is_superadmin'):
+            return jsonify({
+                'success': True,
+                'authenticated': True,
+                'role': 'superadmin',
+                'admin_id': session['admin_id'],
+                'operator_id': None
+            }), 200
+        
+        # Tenant admin
+        if session.get('admin_id') and session.get('operator_id'):
+            return jsonify({
+                'success': True,
+                'authenticated': True,
+                'role': 'admin',
+                'admin_id': session['admin_id'],
+                'operator_id': session['operator_id'],
+                'operator_name': session.get('operator_name')
+            }), 200
+        
+        return jsonify({
+            'success': False,
+            'error': 'Admin authentication required'
+        }), 401
+        
+    except Exception as e:
+        logger.error(f"Get admin profile error: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get admin profile'
         }), 500
 
 @tenant_auth_bp.route('/api/auth/force-refresh', methods=['POST'])

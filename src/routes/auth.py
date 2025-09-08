@@ -2,7 +2,7 @@
 Authentication routes for sports betting platform
 """
 
-from flask import Blueprint, request, jsonify, g, redirect, make_response, current_app
+from flask import Blueprint, request, jsonify, g, redirect, make_response, current_app, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from src.models.betting import User
 import jwt
@@ -13,6 +13,9 @@ import os
 import urllib.parse
 
 import requests
+
+# Make sure .env / env.local are loaded on import (no circulars here; env_loader has no app deps)
+import src.config.env_loader  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -80,27 +83,62 @@ def token_required(f):
 # -----------------------------
 # Google OAuth configuration
 # -----------------------------
-GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:5000/auth/google/callback')
-GOOGLE_AUTH_URI = 'https://accounts.google.com/o/oauth2/auth'
-GOOGLE_TOKEN_URI = 'https://oauth2.googleapis.com/token'
-GOOGLE_USERINFO_URI = 'https://openidconnect.googleapis.com/v1/userinfo'
+def _google_oauth_cfg():
+    """Read Google OAuth config at call time to avoid import-time None values."""
+    return {
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+        "redirect_uri": os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:5000/auth/google/callback"),
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "userinfo_uri": "https://openidconnect.googleapis.com/v1/userinfo",
+        "scope": "openid email profile",
+    }
 
 
 @auth_bp.route('/google/login', methods=['GET'])
 def google_login():
     """Start Google OAuth login by redirecting to Google's consent screen"""
+    cfg = _google_oauth_cfg()
+    
+    # Get redirect URI from query parameter or use default
+    redirect_uri = request.args.get('redirect_uri', cfg["redirect_uri"])
+    
+    # Hard guard to avoid "client_id=None"
+    if not cfg["client_id"] or not cfg["client_secret"]:
+        current_app.logger.error("Google OAuth env missing: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET")
+        # For XHR/API, return JSON; for browser nav you can redirect to a friendly error/login
+        if request.headers.get("Accept", "").find("application/json") >= 0 or request.path.startswith("/api"):
+            return jsonify({"success": False, "error": "Google OAuth not configured"}), 500
+        return redirect('/login', code=302)
+    
+    # Store the tenant context in session for redirect after OAuth
+    referrer = request.headers.get('Referer', '')
+    if '/megabook' in referrer or '/megabook/' in referrer:
+        session['original_tenant'] = 'megabook'
+    elif '/kr00' in referrer or '/kr00/' in referrer:
+        session['original_tenant'] = 'kr00'
+    else:
+        # Try to extract tenant from referrer
+        import re
+        tenant_match = re.search(r'/([^/]+)/', referrer)
+        if tenant_match:
+            session['original_tenant'] = tenant_match.group(1)
+        else:
+            session['original_tenant'] = 'megabook'  # Default
+    
+    logger.info(f"Google OAuth login - Storing tenant: {session.get('original_tenant')}")
+    
     params = {
-        'client_id': GOOGLE_CLIENT_ID,
-        'redirect_uri': GOOGLE_REDIRECT_URI,
+        'client_id': cfg["client_id"],
+        'redirect_uri': redirect_uri,
         'response_type': 'code',
-        'scope': 'openid email profile',
+        'scope': cfg["scope"],
         'access_type': 'offline',
         'include_granted_scopes': 'true',
         'prompt': 'consent'
     }
-    url = f"{GOOGLE_AUTH_URI}?{urllib.parse.urlencode(params)}"
+    url = f'{cfg["auth_uri"]}?{urllib.parse.urlencode(params)}'
     return redirect(url, code=302)
 
 
@@ -108,19 +146,28 @@ def google_login():
 def google_callback():
     """Handle Google's callback, exchange code for tokens, create/login user, return JWT and redirect to app"""
     try:
+        cfg = _google_oauth_cfg()
+        
         code = request.args.get('code')
         if not code:
             return jsonify({'success': False, 'error': 'Missing authorization code'}), 400
 
+        # Get redirect URI from query parameter or use default
+        redirect_uri = request.args.get('redirect_uri', cfg["redirect_uri"])
+        
+        if not cfg["client_id"] or not cfg["client_secret"]:
+            current_app.logger.error("Google OAuth env missing on callback")
+            return jsonify({'success': False, 'error': 'Google OAuth not configured'}), 500
+        
         # Exchange authorization code for tokens
         token_payload = {
             'code': code,
-            'client_id': GOOGLE_CLIENT_ID,
-            'client_secret': GOOGLE_CLIENT_SECRET,
-            'redirect_uri': GOOGLE_REDIRECT_URI,
+            'client_id': cfg["client_id"],
+            'client_secret': cfg["client_secret"],
+            'redirect_uri': redirect_uri,
             'grant_type': 'authorization_code'
         }
-        token_resp = requests.post(GOOGLE_TOKEN_URI, data=token_payload, timeout=10)
+        token_resp = requests.post(cfg["token_uri"], data=token_payload, timeout=10)
         if not token_resp.ok:
             return jsonify({'success': False, 'error': 'Failed to exchange code for token'}), 400
         tokens = token_resp.json()
@@ -131,7 +178,7 @@ def google_callback():
 
         # Fetch user info
         userinfo_resp = requests.get(
-            GOOGLE_USERINFO_URI,
+            cfg["userinfo_uri"],
             headers={'Authorization': f'Bearer {access_token}'},
             timeout=10
         )
@@ -145,48 +192,122 @@ def google_callback():
         if not email:
             return jsonify({'success': False, 'error': 'Email not available from Google'}), 400
 
-        # Find or create user
-        user = User.query.filter_by(email=email).first()
+        # Find or create user using raw SQL (compatible with existing database)
+        from src.db_compat import connect
+        conn = connect()
+        
+        user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         if not user:
             # Ensure unique username
-            base_username = (name or email.split('@')[0]).replace(' ', '').lower()
+            base_username = (name or email.split('@')[0]).replace(' ', '').lower()[:15]
             username = base_username
             suffix = 1
-            while User.query.filter_by(username=username).first() is not None:
+            while conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone():
                 suffix += 1
                 username = f"{base_username}{suffix}"
 
-            user = User(
-                username=username,
-                email=email,
-                password_hash=generate_password_hash(f"google:{sub}"),
-                balance=1000.0
-            )
-            db.session.add(user)
-            db.session.commit()
+            # Create new user
+            conn.execute("""
+                INSERT INTO users (username, email, password_hash, balance, is_active, created_at, last_login)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (username, email, generate_password_hash(f"google:{sub}"), 1000.0, 1, 
+                  datetime.datetime.utcnow(), datetime.datetime.utcnow()))
+            conn.commit()
+            
+            # Get the created user
+            user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        else:
+            # Update last_login
+            conn.execute("UPDATE users SET last_login = ? WHERE id = ?", 
+                        (datetime.datetime.utcnow(), user['id']))
+            conn.commit()
 
-        # Update last_login
-        user.last_login = datetime.datetime.utcnow()
-        db.session.commit()
+        conn.close()
 
-        # Issue our JWT
-        payload = {
-            'user_id': user.id,
-            'username': user.username,
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
-        }
-        app_token = jwt.encode(payload, JWT_SECRET_KEY, algorithm='HS256')
+        # Set session data for the user
+        from flask import session
+        session['user_id'] = user['id']
+        session['username'] = user['username']
+        session['email'] = user['email']
+        session['balance'] = user['balance']
+        session['role'] = 'user'
+        
+        # Set operator context for tenant compatibility
+        session_tenant = session.get('original_tenant', 'megabook')
+        if session_tenant == 'megabook':
+            # Get the megabook operator ID from database
+            from src.db_compat import connect
+            conn = connect()
+            operator = conn.execute("SELECT id FROM sportsbook_operators WHERE subdomain = 'megabook'").fetchone()
+            if operator:
+                session['operator_id'] = operator['id']
+                session['operator_name'] = 'megabook'
+            conn.close()
+        
+        session.permanent = True
 
-        # Redirect back to frontend root with token in hash and also set a short-lived cookie so JS can pick it up
-        redirect_url = f"/#token={urllib.parse.quote(app_token)}"
-        resp = make_response(redirect(redirect_url, code=302))
-        # Not HttpOnly so that client JS can read and migrate it into localStorage, then clear
-        resp.set_cookie('app_token', app_token, max_age=600, samesite='Lax', secure=False, httponly=False)
-        return resp
+        # Determine redirect URL based on referrer or default
+        referrer = request.headers.get('Referer', '')
+        logger.info(f"Google OAuth callback - Referrer: {referrer}")
+        
+        # Check if we have a redirect_uri parameter from the login request
+        redirect_uri_param = request.args.get('redirect_uri', '')
+        logger.info(f"Google OAuth callback - Redirect URI param: {redirect_uri_param}")
+        
+        # Check session for the original tenant context
+        session_tenant = session.get('original_tenant', '')
+        logger.info(f"Google OAuth callback - Session tenant: {session_tenant}")
+        
+        if '/kr00' in referrer or '/kr00/' in referrer or session_tenant == 'kr00':
+            redirect_url = '/kr00'
+        elif '/megabook' in referrer or '/megabook/' in referrer or session_tenant == 'megabook':
+            redirect_url = '/megabook'
+        elif redirect_uri_param and 'megabook' in redirect_uri_param:
+            redirect_url = '/megabook'
+        elif redirect_uri_param and 'kr00' in redirect_uri_param:
+            redirect_url = '/kr00'
+        else:
+            # Default to megabook since that's what we're testing
+            redirect_url = '/megabook'
+
+        logger.info(f"Google OAuth callback - Redirecting to: {redirect_url}")
+        
+        # Redirect back to the betting page
+        return redirect(redirect_url, code=302)
 
     except Exception as e:
         logger.error(f"Google OAuth callback error: {e}")
         return jsonify({'success': False, 'error': 'OAuth process failed'}), 500
+
+@auth_bp.route('/me', methods=['GET'])
+def get_user_profile():
+    """Get current user profile from session"""
+    from flask import session
+    from src.db_compat import connect
+    
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            return jsonify({'error': 'Not authenticated'}), 401
+        
+        conn = connect()
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        conn.close()
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        return jsonify({
+            'id': user['id'],
+            'username': user['username'],
+            'email': user['email'],
+            'balance': user['balance'],
+            'last_login': user['last_login'].isoformat() if user['last_login'] else None
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting user profile: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 @auth_bp.route('/register', methods=['POST'])
 def register():

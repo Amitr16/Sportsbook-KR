@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kryzel Sports Betting Platform</title>
     
-    <!-- REDIRECT TRAP - Catches any code trying to redirect to login -->
+    <!-- Public betting page - no authentication required -->
     <script>
       (function() {
         // Tenant helper
@@ -13,52 +13,10 @@
           const seg = (location.pathname.split("/")[1] || "").trim();
           return seg && !["api","static","superadmin","login"].includes(seg) ? seg : "";
         }
-        function escapeRegex(str) {
-          return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        }
         
-        const tenantName = tenant();
-        const LOGIN_RX = new RegExp(
-        `^/(?:${tenantName ? escapeRegex(tenantName) + '|' : ''})login(?:\\b|/)`
-        );
-        console.log("LOGIN_RX is", LOGIN_RX);
-                // 1) Trap all programmatic navigations
-        const _assign = window.location.assign.bind(window.location);
-        const _replace = window.location.replace.bind(window.location);
-
-        function logAndMaybeBlock(target, how) {
-          try { console.warn(`[NAV] ${how} ->`, target); console.trace(); } catch {}
-          // If we've already confirmed auth OK, block any later move to /login
-          if (window.__AUTH_OK && typeof target === "string" && LOGIN_RX.test(new URL(target, location.origin).pathname)) {
-            console.warn("[NAV] blocked redirect to login after successful auth:", target);
-            return true; // blocked
-          }
-          return false;
-        }
-
-        window.location.assign = function(url) {
-          if (!logAndMaybeBlock(url, "assign")) _assign(url);
-        };
-        window.location.replace = function(url) {
-          if (!logAndMaybeBlock(url, "replace")) _replace(url);
-        };
-        
-        // No href redefinition - just log that we're monitoring
-        console.log("[NAV] Navigation monitoring enabled (assign/replace/click)");
-
-        // 2) Trap user-triggered navigations also
-        window.addEventListener('click', (e) => {
-          const a = e.target.closest && e.target.closest('a[href]');
-          if (!a) return;
-          const to = a.getAttribute('href') || '';
-          if (LOGIN_RX.test(to) && window.__AUTH_OK) {
-            e.preventDefault();
-            console.warn("[NAV] blocked <a> to login after auth:", to);
-          }
-        }, true);
-
         // Expose tenant globally for other snippets
         window.__TENANT__ = tenant();
+        console.log("[PUBLIC] Public betting page loaded for tenant:", window.__TENANT__);
       })();
     </script>
     
@@ -359,6 +317,33 @@
 
         .user-menu:hover {
             background: rgba(255, 255, 255, 0.2);
+        }
+
+        .google-signin-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #fff;
+            color: #333;
+            border: 1px solid #dadce0;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .google-signin-btn:hover {
+            background: #f8f9fa;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            transform: translateY(-1px);
+        }
+
+        .google-signin-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         .user-dropdown {
@@ -1495,8 +1480,7 @@
           if (!ctype.includes('application/json')) {
             // It's likely an HTML redirect page; treat as unauth
             console.warn('🚨 Non-JSON response received, treating as unauthorized');
-            const t = window.__TENANT__ || '';
-            location.href = t ? `/${t}/login` : `/login`;
+            showPublicMode();
             return;
           }
 
@@ -1504,36 +1488,12 @@
             // Auth OK — set global flag and lock redirects
             window.__AUTH_OK = true;
             
-            // From now on, don't allow any redirect-to-login code to run
-            window.redirectToTenantLogin = function(){ console.warn("redirectToTenantLogin() blocked after auth"); };
-            window.showLogin = window.redirectToTenantLogin;
-            window.showRegister = window.redirectToTenantLogin;
-
             // Hydrate UI and show app
             const data = await me.json().catch(() => ({}));
             window.AUTH = data;
 
-            // Update user menu if present
-            const userMenu = document.getElementById('userMenu');
-            if (userMenu && (data.username || data.email)) {
-              userMenu.textContent = `${data.username || data.email} ▼`;
-            }
-
-            // Update balance immediately after login
-            const balanceElement = document.getElementById('userBalance');
-            if (balanceElement && data.balance !== undefined) {
-              balanceElement.textContent = `$${parseFloat(data.balance).toFixed(2)}`;
-              console.log('✅ Balance updated immediately after login:', data.balance);
-            }
-
-            // Unhide main app container
-            const root = document.getElementById('mainApp');
-            if (root) root.style.display = 'block';
-
-            // Start periodic refreshes
-            if (typeof startBalanceAutoRefresh === 'function') {
-              startBalanceAutoRefresh();
-            }
+            // Show authenticated user UI
+            showAuthenticatedMode(data);
             
             // Initialize the app after successful authentication
             if (typeof initializeAppAfterLogin === 'function') {
@@ -1547,21 +1507,107 @@
           }
 
           if (me.status === 401 || me.status === 403) {
-            // only here, allow redirect
-            const t = window.__TENANT__ || '';
-            location.href = t ? `/${t}/login` : `/login`;
+            // User not authenticated - show public mode
+            console.log('🔓 User not authenticated, showing public mode');
+            showPublicMode();
             return;
           }
 
           console.warn("[auth] unexpected status", me.status);
-          // do not redirect on 404/5xx/network errors
+          // Show public mode on other errors
+          showPublicMode();
         } catch (err) {
           console.warn("[auth] probe failed:", err);
-          // do not redirect on network hicups; let user stay
+          // Show public mode on network errors
+          showPublicMode();
         } finally {
           bootstrapAuthInProgress = false;
         }
       })();
+
+      // Function to show authenticated user mode
+      function showAuthenticatedMode(userData) {
+        console.log('✅ Showing authenticated mode for user:', userData);
+        
+        // Hide non-authenticated UI
+        const nonAuthUser = document.getElementById('nonAuthenticatedUser');
+        if (nonAuthUser) {
+          nonAuthUser.style.display = 'none';
+        }
+        
+        // Show authenticated UI
+        const authUser = document.getElementById('authenticatedUser');
+        if (authUser) {
+          authUser.style.display = 'flex';
+        }
+
+        // Update user menu if present
+        const userMenu = document.getElementById('userMenu');
+        if (userMenu && (userData.username || userData.email)) {
+          userMenu.textContent = `${userData.username || userData.email} ▼`;
+        }
+
+        // Update balance immediately after login
+        const balanceElement = document.getElementById('userBalance');
+        if (balanceElement && userData.balance !== undefined) {
+          balanceElement.textContent = `$${parseFloat(userData.balance).toFixed(2)}`;
+          console.log('✅ Balance updated immediately after login:', userData.balance);
+        }
+
+        // Unhide main app container
+        const root = document.getElementById('mainApp');
+        if (root) root.style.display = 'block';
+
+        // Start periodic refreshes
+        if (typeof startBalanceAutoRefresh === 'function') {
+          startBalanceAutoRefresh();
+        }
+        
+        // Show bet history in sidebar for authenticated users
+        const betHistoryItems = document.querySelectorAll('.filter-item');
+        betHistoryItems.forEach(item => {
+            if (item.textContent.includes('Bet History')) {
+                item.style.display = 'block';
+            }
+        });
+      }
+
+      // Function to show public (non-authenticated) mode
+      function showPublicMode() {
+        console.log('🔓 Showing public mode - user not authenticated');
+        
+        // Hide authenticated UI
+        const authUser = document.getElementById('authenticatedUser');
+        if (authUser) {
+          authUser.style.display = 'none';
+        }
+        
+        // Show non-authenticated UI
+        const nonAuthUser = document.getElementById('nonAuthenticatedUser');
+        if (nonAuthUser) {
+          nonAuthUser.style.display = 'block';
+        }
+
+        // Unhide main app container (but with limited functionality)
+        const root = document.getElementById('mainApp');
+        if (root) root.style.display = 'block';
+
+        // Initialize public app (view-only mode)
+        if (typeof initializePublicApp === 'function') {
+          console.log('🚀 Initializing public app...');
+          initializePublicApp();
+        } else {
+          console.warn('⚠️ initializePublicApp function not found');
+        }
+      }
+
+      // Google Sign-In function
+      function initiateGoogleSignIn() {
+        console.log('🔐 Initiating Google sign-in...');
+        // Use the redirect URI that matches Google Console configuration
+        const redirectUrl = 'http://localhost:5000/auth/google/callback';
+        window.location.href = `/auth/google/login?redirect_uri=${encodeURIComponent(redirectUrl)}`;
+      }
       
       // CONSOLIDATED INITIALIZATION: Single entry point to prevent refresh loops
       let isInitialized = false;
@@ -1720,6 +1766,119 @@
           // Mark as initialized to prevent duplicate calls
           window.appInitialized = true;
           console.log('✅ App initialization completed');
+        }
+
+        // Public app initialization (for non-authenticated users)
+        async function initializePublicApp() {
+          if (window.publicAppInitialized) {
+              console.log('🚫 Public app already initialized, skipping...');
+              return;
+          }
+          
+          console.log('🚀 Initializing public app (view-only mode)...');
+          
+          // Show the main app with smooth transition
+          const mainApp = document.getElementById('mainApp');
+          if (mainApp) {
+              mainApp.classList.add('loading');
+              // Use requestAnimationFrame to ensure smooth transition
+              requestAnimationFrame(() => {
+                  mainApp.classList.add('visible');
+                  // Remove loading state after transition
+                  setTimeout(() => {
+                      mainApp.classList.remove('loading');
+                  }, 300);
+              });
+          }
+          
+          // Start loading sports data immediately (view-only)
+          if (typeof loadSports === 'function') {
+              console.log('🚀 Starting immediate sports loading (public mode)...');
+              await loadSports();
+          }
+          
+          // Initialize other components (view-only)
+          if (typeof updateBettingMarkets === 'function') {
+              updateBettingMarkets();
+          }
+          if (typeof updateBetModeDisplay === 'function') {
+              updateBetModeDisplay();
+          }
+          
+          // Initialize WebSocket connection (view-only)
+          if (typeof initWebSocket === 'function') {
+              console.log('🔌 Initializing WebSocket connection (public mode)...');
+              initWebSocket();
+          }
+          
+          // Initialize live odds update system (view-only)
+          if (typeof initializeLiveOddsSystem === 'function') {
+              console.log('🎯 Initializing Live Odds Update System (public mode)...');
+              initializeLiveOddsSystem();
+          }
+          
+          // Disable betting functionality for public users
+          disableBettingForPublicUsers();
+          
+          // Mark as initialized to prevent duplicate calls
+          window.publicAppInitialized = true;
+          console.log('✅ Public app initialization completed');
+        }
+
+        // Function to disable betting functionality for public users
+        function disableBettingForPublicUsers() {
+          console.log('🔒 Disabling betting functionality for public users...');
+          
+          // Disable all bet buttons
+          const betButtons = document.querySelectorAll('.bet-button, .odds-button, [onclick*="addToBetSlip"]');
+          betButtons.forEach(button => {
+              button.disabled = true;
+              button.style.opacity = '0.5';
+              button.style.cursor = 'not-allowed';
+              button.title = 'Sign in to place bets';
+          });
+          
+          // Disable bet slip functionality
+          const betSlip = document.querySelector('.bet-slip');
+          if (betSlip) {
+              betSlip.style.opacity = '0.5';
+              betSlip.style.pointerEvents = 'none';
+          }
+          
+          // Hide bet history in sidebar for public users
+          const betHistoryItems = document.querySelectorAll('.filter-item');
+          betHistoryItems.forEach(item => {
+              if (item.textContent.includes('Bet History')) {
+                  item.style.display = 'none';
+              }
+          });
+          
+          // Add overlay to bet slip with sign-in message
+          const betSlipHeader = document.querySelector('.bet-slip-header');
+          if (betSlipHeader) {
+              const signInOverlay = document.createElement('div');
+              signInOverlay.style.cssText = `
+                  position: absolute;
+                  top: 0;
+                  left: 0;
+                  right: 0;
+                  bottom: 0;
+                  background: rgba(0, 0, 0, 0.8);
+                  color: white;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  text-align: center;
+                  font-size: 14px;
+                  z-index: 10;
+                  border-radius: 8px;
+              `;
+              signInOverlay.innerHTML = '🔐 Sign in with Google to place bets';
+              betSlipHeader.style.position = 'relative';
+              betSlipHeader.appendChild(signInOverlay);
+          }
+          
+          console.log('✅ Betting functionality disabled for public users');
         }
     </script>
 
@@ -1935,12 +2094,27 @@
                     <div id="loadingIndicator" class="loading-indicator" style="display: none;">
                         <i class="fas fa-spinner fa-spin"></i>
                     </div>
-                    <div class="balance" id="userBalance">$1000.00</div>
-                    <div class="user-menu" id="userMenu" onclick="toggleUserMenu()">Loading... ▼</div>
-                <div class="user-dropdown" id="userDropdown" style="display: none;">
-                    <div class="dropdown-item" onclick="showBetHistory()">📊 Bet History</div>
-                    <div class="dropdown-item" onclick="logout()">🚪 Logout</div>
-                </div>
+                    <!-- Authenticated user section -->
+                    <div id="authenticatedUser" style="display: none;">
+                        <div class="balance" id="userBalance">$1000.00</div>
+                        <div class="user-menu" id="userMenu" onclick="toggleUserMenu()">Loading... ▼</div>
+                        <div class="user-dropdown" id="userDropdown" style="display: none;">
+                            <div class="dropdown-item" onclick="showBetHistory()">📊 Bet History</div>
+                            <div class="dropdown-item" onclick="logout()">🚪 Logout</div>
+                        </div>
+                    </div>
+                    <!-- Non-authenticated user section -->
+                    <div id="nonAuthenticatedUser" style="display: block;">
+                        <button id="googleSignInBtn" class="google-signin-btn" onclick="initiateGoogleSignIn()">
+                            <svg width="18" height="18" viewBox="0 0 24 24">
+                                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                            </svg>
+                            Sign in with Google
+                        </button>
+                    </div>
             </div>
         </div>
     </header>
@@ -5805,6 +5979,12 @@
 
         // Page navigation functions
         async function showBetHistory() {
+            // Check if user is authenticated
+            if (!window.__AUTH_OK) {
+                alert('Please sign in to view your bet history');
+                return;
+            }
+            
             try {
                 const response = await fetch(`${API_BASE}/api/betting/bets`, {
                     credentials: 'include' // Include cookies for session

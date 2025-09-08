@@ -265,7 +265,7 @@ app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 
 # Import sportsbook registration routes
 from src.routes.sportsbook_registration import sportsbook_bp
-from src.routes.multitenant_routing import multitenant_bp
+# from src.routes.multitenant_routing import multitenant_bp  # Disabled - causes redirect issues
 from src.routes.clean_multitenant_routing import clean_multitenant_bp
 from src.routes.superadmin import superadmin_bp
 from src.routes.tenant_admin import tenant_admin_bp
@@ -280,12 +280,14 @@ from src.routes.rich_superadmin_interface1 import rich_superadmin_bp
 
 # Import theme customization blueprint
 from src.routes.theme_customization import theme_bp
+from src.routes.public_apis import public_apis_bp
 
 # Register blueprints in correct order - tenant_auth first to avoid conflicts
 app.register_blueprint(tenant_auth_bp)  # Tenant auth routes first (more specific)
 app.register_blueprint(rich_admin_bp)  # Rich admin interface
 app.register_blueprint(rich_superadmin_bp)
 app.register_blueprint(theme_bp, url_prefix='/api')  # Theme customization routes
+app.register_blueprint(public_apis_bp)  # Public APIs for non-authenticated users
 app.register_blueprint(auth_bp, url_prefix='/api/auth')  # General auth routes (less specific)
 app.register_blueprint(json_sports_bp, url_prefix='/api/sports')
 app.register_blueprint(sports_bp, url_prefix='/api/sports')  # Fix: should be /api/sports not /api
@@ -826,6 +828,16 @@ def internal_error(error):
 @app.errorhandler(UnicodeDecodeError)
 def unicode_decode_error(error):
     return {'error': f'Unicode decoding error: {str(error)}'}, 500
+
+# Proxy route for Google OAuth login to match Google console redirect URI
+@app.route('/auth/google/login', methods=['GET'])
+def google_oauth_login_proxy():
+    # Forward all query params to the actual API login under the blueprint
+    query_string = request.query_string.decode() if request.query_string else ''
+    target = '/api/auth/google/login'
+    if query_string:
+        target = f"{target}?{query_string}"
+    return redirect(target, code=302)
 
 # Proxy route for Google OAuth callback to match Google console redirect URI
 @app.route('/auth/google/callback', methods=['GET'])
