@@ -242,9 +242,9 @@ def get_global_users():
                so.sportsbook_name, so.subdomain,
                COUNT(b.id) as total_bets,
                COALESCE(SUM(b.stake), 0) as total_staked,
-               COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) as total_payout,
-               COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return - b.stake 
-                               WHEN b.status = 'lost' THEN -b.stake ELSE 0 END), 0) as cumulative_profit
+               COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) as total_payout,
+               COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) - 
+               COALESCE(SUM(b.stake), 0) as cumulative_profit
         FROM users u
         JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
         LEFT JOIN bets b ON u.id = b.user_id

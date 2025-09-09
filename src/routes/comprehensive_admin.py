@@ -303,8 +303,8 @@ def get_users(subdomain):
                COUNT(b.id) as total_bets,
                COALESCE(SUM(b.stake), 0) as total_staked,
                COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) as total_payout,
-               COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake 
-                               WHEN b.status = 'lost' THEN -b.stake ELSE 0 END), 0) as cumulative_profit
+               COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) - 
+               COALESCE(SUM(b.stake), 0) as cumulative_profit
         FROM users u
         LEFT JOIN bets b ON u.id = b.user_id
         WHERE u.sportsbook_operator_id = ?
