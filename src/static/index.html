@@ -1697,8 +1697,8 @@
       // Google Sign-In function
       function initiateGoogleSignIn() {
         console.log('🔐 Initiating Google sign-in...');
-        // Use the redirect URI that matches Google Console configuration
-        const redirectUrl = 'http://localhost:5000/auth/google/callback';
+        // Use dynamic redirect URI that works for both localhost and production
+        const redirectUrl = location.origin + '/auth/google/callback';
         window.location.href = `/auth/google/login?redirect_uri=${encodeURIComponent(redirectUrl)}`;
       }
       

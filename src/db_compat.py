@@ -179,6 +179,8 @@ class CompatCursor:
 class CompatConnection:
     def __init__(self, conn: psycopg.Connection):
         self._conn = conn
+        self._pool = None
+        self._closed = False
         self.row_factory = None
     
     def cursor(self):
@@ -202,8 +204,24 @@ class CompatConnection:
     def rollback(self): 
         return self._conn.rollback()
     
-    def close(self): 
-        return self._conn.close()
+    def close(self):
+        if self._closed:
+            return
+        pool, raw = self._pool, self._conn
+        # Detach first so later __del__/__exit__ cannot close a pooled conn
+        self._pool = None
+        self._conn = None
+        self._closed = True
+        try:
+            if pool is not None:
+                pool.putconn(raw)
+            else:
+                raw.close()
+        except Exception:
+            try:
+                raw.close()
+            except Exception:
+                pass
     
     def __enter__(self):
         """Support for context manager protocol"""
@@ -233,6 +251,12 @@ def _normalize_dsn(dsn: str) -> str:
         dsn = dsn.replace('postgres://', 'postgresql://', 1)
     return dsn
 
+def _pool_is_closed(p):
+    try:
+        return bool(getattr(p, "closed", False))
+    except Exception:
+        return True
+
 def get_global_pool(dsn: str = None, **kwargs) -> 'CompatPool':
     """Get or create global connection pool with PgBouncer-optimized settings"""
     global _global_pool
@@ -244,8 +268,10 @@ def get_global_pool(dsn: str = None, **kwargs) -> 'CompatPool':
     # Normalize the DSN for psycopg compatibility
     normalized_dsn = _normalize_dsn(dsn)
     
-    # Always create new pool if DSN changes or pool doesn't exist
-    if _global_pool is None or _global_pool._dsn != normalized_dsn:
+    # Always create new pool if DSN changes, pool doesn't exist, or pool is closed
+    if (_global_pool is None or 
+        _global_pool._dsn != normalized_dsn or 
+        _pool_is_closed(_global_pool._pool)):
         if _global_pool:
             _global_pool.close()  # Close old pool
         
@@ -312,8 +338,15 @@ def connect(dsn: Optional[str] = None, *, autocommit: bool = False, use_pool: bo
     print(f"🔌 db_compat connecting via host: {host}")
     
     if use_pool:
+        global _global_pool
         try:
             pool = get_global_pool(normalized_dsn)  # Use conservative PgBouncer settings
+            # Check if pool is closed before getting connection
+            if _pool_is_closed(pool._pool):
+                print("⚠️ Pool is closed, recreating...")
+                # Force recreation of pool
+                _global_pool = None
+                pool = get_global_pool(normalized_dsn)
             raw = pool.getconn()
             conn = CompatConnection(raw)
             # Store pool reference for later return
@@ -323,7 +356,6 @@ def connect(dsn: Optional[str] = None, *, autocommit: bool = False, use_pool: bo
             if "PoolClosed" in str(e):
                 print(f"⚠️ Pool closed, recreating pool...")
                 # Force pool recreation
-                global _global_pool
                 if _global_pool:
                     try:
                         _global_pool.close()
@@ -354,25 +386,33 @@ class CompatPool:
         )
     
     def getconn(self) -> CompatConnection:
+        if _pool_is_closed(self._pool):
+            new = _make_pool()
+            globals()["_GLOBAL_POOL"] = new
+            return new.getconn()
         raw = self._pool.getconn()
-        return CompatConnection(raw)
+        cc = CompatConnection(raw)
+        cc._pool = self
+        return cc
     
     def putconn(self, conn: CompatConnection):
         try:
-            if hasattr(conn, '_pool') and conn._pool:
-                # Return to the pool
-                self._pool.putconn(conn._conn)
-                # Clear the pool reference to prevent double-return
-                conn._pool = None
-            else:
-                # Close the connection if no pool
-                conn.close()
+            raw = conn if not isinstance(conn, CompatConnection) else getattr(conn, "_conn", None)
+            if raw is None or getattr(raw, "closed", False):
+                return
+            if _pool_is_closed(self._pool):
+                try:
+                    raw.close()
+                finally:
+                    return
+            self._pool.putconn(raw)
         except Exception as e:
             # Log error and force close connection
             import logging
             logging.error(f"Error returning connection to pool: {e}")
             try:
-                conn.close()
+                if hasattr(conn, 'close'):
+                    conn.close()
             except:
                 pass
     

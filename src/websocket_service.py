@@ -106,20 +106,29 @@ def init_websocket_handlers(socketio: SocketIO, live_odds_service: LiveOddsWebSo
     @socketio.on('connect')
     def handle_connect():
         """Handle client connection"""
-        logger.info(f"Client connected. Total clients: {live_odds_service.get_connected_clients_count()}")
-        emit('connection_status', {'status': 'connected'})
+        try:
+            logger.info(f"Client connected. Total clients: {live_odds_service.get_connected_clients_count()}")
+            emit('connection_status', {'status': 'connected'})
+        except Exception as e:
+            logger.error(f"Error in connect handler: {e}")
     
     @socketio.on('disconnect')
     def handle_disconnect():
         """Handle client disconnection"""
-        logger.info(f"Client disconnected. Total clients: {live_odds_service.get_connected_clients_count()}")
+        try:
+            logger.info(f"Client disconnected. Total clients: {live_odds_service.get_connected_clients_count()}")
+        except Exception as e:
+            logger.error(f"Error in disconnect handler: {e}")
     
     @socketio.on('subscribe_live_odds')
     def handle_subscribe_live_odds(data):
         """Handle live odds subscription"""
-        sport = data.get('sport', 'soccer')
-        logger.info(f"Client subscribed to live odds for {sport}")
-        emit('subscription_confirmed', {'sport': sport, 'status': 'subscribed'})
+        try:
+            sport = data.get('sport', 'soccer')
+            logger.info(f"Client subscribed to live odds for {sport}")
+            emit('subscription_confirmed', {'sport': sport, 'status': 'subscribed'})
+        except Exception as e:
+            logger.error(f"Error in subscribe handler: {e}")
     
     @socketio.on('request_live_odds')
     def handle_request_live_odds(data):

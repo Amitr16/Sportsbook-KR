@@ -446,13 +446,20 @@ def debug_current_session():
 
 def build_session_user(user):
     """Build session user DTO from ORM User object - pure data transfer, no ORM mapping"""
+    from flask import session
+    
+    # Get sportsbook_operator_id from user, fallback to session
+    sportsbook_operator_id = getattr(user, 'sportsbook_operator_id', None)
+    if not sportsbook_operator_id:
+        sportsbook_operator_id = session.get('operator_id')
+    
     return {
         'id': user.id,
         'username': user.username,
         'email': user.email,
         'balance': float(user.balance or 0),
         'is_active': getattr(user, 'is_active', True),
-        'sportsbook_operator_id': getattr(user, 'sportsbook_operator_id', None),
+        'sportsbook_operator_id': sportsbook_operator_id,
         'created_at': user.created_at.isoformat() if user.created_at else None,
         'last_login': user.last_login.isoformat() if user.last_login else None
     }
@@ -476,10 +483,18 @@ def ensure_user_data_complete(user_data):
 def get_current_user_profile():
     """Get current user profile from session (compatibility endpoint)"""
     try:
-        from flask import session
+        from flask import session, request
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info("=" * 50)
+        logger.info("🔍 tenant_auth /api/auth/me endpoint hit")
+        logger.info(f"🔍 Request URL: {request.url}")
+        logger.info(f"🔍 Session data: {dict(session)}")
         
         # Check if user is authenticated (user_id only - operator is context, not identity)
         if not session.get('user_id'):
+            logger.warning("❌ No user_id in session - user not authenticated")
             return jsonify({
                 'success': False,
                 'error': 'Authentication required'
@@ -496,24 +511,51 @@ def get_current_user_profile():
         user_id = session['user_id']
         operator_id = session.get('operator_id')  # Optional - may be missing after OAuth
         
-        # ✅ Use ONLY the ORM session - no raw database fallbacks, no db_compat
-        user = current_app.db.session.get(User, user_id)
+        logger.info(f"🔍 Looking up user_id: {user_id}, operator_id: {operator_id}")
+        
+        # ✅ Use db_compat for consistency with OAuth callback
+        try:
+            from src.db_compat import connect
+            with connect() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT id, username, email, balance, is_active, created_at, last_login, sportsbook_operator_id FROM users WHERE id = %s", (user_id,))
+                    user = cursor.fetchone()
+            logger.info(f"🔍 Database query result: {user}")
+        except Exception as e:
+            logger.error(f"❌ Database query failed: {e}")
+            return jsonify({
+                'success': False,
+                'error': 'Database error'
+            }), 500
         
         if not user:
+            logger.warning(f"❌ User not found in database for user_id: {user_id}")
             return jsonify({
                 'success': False,
                 'error': 'User not found'
             }), 404
             
         # Only check operator_id if it exists in session
-        if operator_id and user.sportsbook_operator_id != operator_id:
+        # Note: user is now a tuple from db_compat, not a SQLAlchemy object
+        if operator_id and user[7] != operator_id:
             return jsonify({
                 'success': False,
                 'error': 'User not found for this operator'
             }), 404
         
-        # 3) Use the build_session_user function for consistency
-        user_data = build_session_user(user)
+        # 3) Build user data from raw database result
+        logger.info(f"✅ User found: {user}")
+        user_data = {
+            'id': user[0],
+            'username': user[1], 
+            'email': user[2],
+            'balance': float(user[3]) if user[3] else 0.0,
+            'is_active': bool(user[4]) if user[4] is not None else True,
+            'created_at': user[5].isoformat() if user[5] else None,
+            'last_login': user[6].isoformat() if user[6] else None,
+            'sportsbook_operator_id': user[7] if user[7] else None
+        }
+        logger.info(f"✅ User data built: {user_data}")
         
         # Cache non-sensitive user data (username, email, etc.) but NEVER balance
         # Balance must always be fetched fresh from database
@@ -522,8 +564,8 @@ def get_current_user_profile():
             'username': user_data.get('username'),
             'email': user_data.get('email'),
             'is_active': user_data.get('is_active'),
-            'sportsbook_operator_id': user_data.get('sportsbook_operator_id'),  # Fixed: use correct field name
-            'operator_subdomain': user_data.get('operator_subdomain')
+            'created_at': user_data.get('created_at'),
+            'last_login': user_data.get('last_login')
             # Balance is intentionally NOT cached - always fresh
         }
         session['user_data'] = safe_cache_data
@@ -589,6 +631,25 @@ def get_admin_profile():
             'error': 'Failed to get admin profile'
         }), 500
 
+@tenant_auth_bp.route('/api/debug/session', methods=['GET'])
+def debug_session():
+    """Debug endpoint to check session data"""
+    from flask import session, g
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info("🔍 DEBUG SESSION ENDPOINT")
+    logger.info(f"🔍 Session data: {dict(session)}")
+    logger.info(f"🔍 g.current_user: {getattr(g, 'current_user', 'Not set')}")
+    
+    return jsonify({
+        'session_data': dict(session),
+        'g_current_user': str(getattr(g, 'current_user', 'Not set')),
+        'user_id': session.get('user_id'),
+        'operator_id': session.get('operator_id'),
+        'user_data': session.get('user_data')
+    })
+
 @tenant_auth_bp.route('/api/auth/force-refresh', methods=['POST'])
 def force_refresh_user_data():
     """Force refresh user data by clearing session cache"""
@@ -640,6 +701,13 @@ def session_required(f):
         # Check if we already have user data cached in session
         if 'user_data' in session:
             user_data = session['user_data']
+            
+            # Fix: Ensure sportsbook_operator_id is present
+            if 'sportsbook_operator_id' not in user_data and session.get('operator_id'):
+                user_data['sportsbook_operator_id'] = session.get('operator_id')
+                session['user_data'] = user_data
+                logger.info(f"✅ Fixed user_data: added sportsbook_operator_id = {session.get('operator_id')}")
+            
             # ✅ Ensure all required attributes are present before creating SimpleNamespace
             complete_user_data = ensure_user_data_complete(user_data)
             g.current_user = SimpleNamespace(**complete_user_data)
@@ -650,10 +718,26 @@ def session_required(f):
             from flask import current_app
             user = current_app.db.session.get(User, session['user_id'])
             
-            if not user or user.sportsbook_operator_id != session['operator_id']:
+            # Debug logging
+            logger.info(f"🔍 session_required - user: {user}")
+            logger.info(f"🔍 session_required - user.sportsbook_operator_id: {getattr(user, 'sportsbook_operator_id', None) if user else None}")
+            logger.info(f"🔍 session_required - session['operator_id']: {session.get('operator_id')}")
+            
+            if not user:
                 return jsonify({
                     'success': False,
                     'error': 'User not found'
+                }), 404
+            
+            # Only check operator_id if both exist and don't match
+            session_operator_id = session.get('operator_id')
+            user_operator_id = getattr(user, 'sportsbook_operator_id', None)
+            
+            if session_operator_id and user_operator_id and user_operator_id != session_operator_id:
+                logger.warning(f"⚠️ Operator mismatch: user has {user_operator_id}, session has {session_operator_id}")
+                return jsonify({
+                    'success': False,
+                    'error': 'User not found for this operator'
                 }), 404
             
             # Check if user is blocked by admin

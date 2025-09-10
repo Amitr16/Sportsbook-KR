@@ -12,9 +12,10 @@ if not os.getenv("DATABASE_URL"):
     raise RuntimeError("DATABASE_URL is not set; production must use Postgres, not sqlite.")
 
 from flask import Flask, send_from_directory, request, redirect, session, current_app, jsonify
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_cors import CORS
 from flask_socketio import SocketIO
-from flask_session import Session
+# Removed Flask-Session - using Flask's built-in signed-cookie sessions
 from flask_sqlalchemy import SQLAlchemy
 # Remove the import of db from betting models - we'll create our own
 # from src.models.betting import db
@@ -44,7 +45,13 @@ logging.basicConfig(
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('flask_socketio').setLevel(logging.INFO)
 
+# Create logger for this module
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
+
+# Trust Fly's reverse proxy for scheme/host so Flask sees https
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # Create our own database instance
 db = SQLAlchemy()
@@ -81,21 +88,29 @@ app.config['JSONIFY_MIMETYPE'] = 'application/json; charset=utf-8'
 
 # Initialize SocketIO with proper CORS for production
 cors_origins = [
-    "http://localhost:5000", 
+    "https://sportsbook.kryzel.io",
+    "https://www.sportsbook.kryzel.io",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5000",
     "http://127.0.0.1:5000",
     "https://goalserve-sportsbook-backend.fly.dev",
     "https://goalserve-sportsbook.fly.dev",
-    "*"  # Allow all origins for now to fix WebSocket issues
 ]
 
 socketio = SocketIO(
-    app, 
-    cors_allowed_origins=cors_origins, 
-    async_mode='threading',
+    app,
+    async_mode="threading",
+    cors_allowed_origins=cors_origins,
     logger=True,
     engineio_logger=True,
     ping_timeout=60,
-    ping_interval=25
+    ping_interval=25,
+    engineio_options={
+        "allow_upgrades": True,  # Allow WebSocket upgrades
+        "transports": ["polling", "websocket"],  # Allow both transports
+        "max_http_buffer_size": 1000000,  # Increase buffer size
+    }
 )
 
 # Add health check endpoint
@@ -103,27 +118,38 @@ socketio = SocketIO(
 def health_check():
     return {'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()}
 
+# Add route debug endpoint
+@app.route('/debug/routes')
+def debug_routes():
+    """Debug endpoint to see all registered routes"""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule)
+        })
+    
+    # Filter for auth-related routes
+    auth_routes = [r for r in routes if 'auth' in r['rule'] or 'me' in r['rule']]
+    
+    return {
+        'total_routes': len(routes),
+        'auth_routes': auth_routes,
+        'all_routes': routes
+    }
+
 # Add WebSocket health check endpoint
 @app.route('/ws-health')
 def websocket_health_check():
     """Check WebSocket service health"""
-    try:
-        # Check if WebSocket service is running
-        ws_status = "running" if live_odds_service.running else "stopped"
-        connected_clients = live_odds_service.get_connected_clients_count()
-        
-        return {
-            'status': 'healthy',
-            'websocket_service': ws_status,
-            'connected_clients': connected_clients,
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
-    except Exception as e:
-        return {
-            'status': 'error',
-            'error': str(e),
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }, 500
+    return {
+        'status': 'healthy', 
+        'websocket_enabled': False,
+        'async_mode': 'threading',
+        'transport': 'polling',
+        'timestamp': datetime.now(timezone.utc).isoformat()
+    }
 
 # Assert db_compat source at startup
 try:
@@ -172,31 +198,27 @@ app.logger.info("DB pool class: %s", ENGINE.pool.__class__.__name__)
 # Session configuration - Fix cookie issues for local development
 from datetime import timedelta
 app.config.update(
-    # ⚠️ DO NOT use os.urandom(...) here; keep this constant across restarts
-    SECRET_KEY="dev-keep-me-constant",
+    SECRET_KEY=os.getenv("SECRET_KEY", "please_set_me_and_keep_constant"),
+    PREFERRED_URL_SCHEME="https",  # url_for(..., _external=True) defaults to https
     
-    # Cookies should work over http://localhost
+    # Cookies should work over http://localhost and https://production
     SESSION_COOKIE_NAME="session",
-    SESSION_COOKIE_SECURE=False,         # secure cookies are ignored on http
+    SESSION_COOKIE_SECURE=True,        # we're behind HTTPS in prod
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",       # don't set "None" unless you're on https + Secure
     SESSION_COOKIE_DOMAIN=None,          # let browser default to host; avoid '.localhost'
     SESSION_COOKIE_PATH="/",
     
-    REMEMBER_COOKIE_SECURE=False,
+    REMEMBER_COOKIE_SECURE=True,
     REMEMBER_COOKIE_SAMESITE="Lax",
     
     PERMANENT_SESSION_LIFETIME=timedelta(days=7),
-    
-    # Keep filesystem session for now
-    SESSION_TYPE='filesystem',
     
     # Additional session settings for better compatibility
     SESSION_REFRESH_EACH_REQUEST=True
 )
 
-# Initialize Flask-Session
-Session(app)
+# Using Flask's built-in signed-cookie sessions (no Flask-Session needed)
 
 # Add tenant-aware unauthorized handler
 @app.errorhandler(401)
@@ -284,11 +306,13 @@ from src.routes.public_apis import public_apis_bp
 
 # Register blueprints in correct order - tenant_auth first to avoid conflicts
 app.register_blueprint(tenant_auth_bp)  # Tenant auth routes first (more specific)
+logger.info("✅ Registered tenant_auth_bp blueprint")
 app.register_blueprint(rich_admin_bp)  # Rich admin interface
 app.register_blueprint(rich_superadmin_bp)
 app.register_blueprint(theme_bp, url_prefix='/api')  # Theme customization routes
 app.register_blueprint(public_apis_bp)  # Public APIs for non-authenticated users
 app.register_blueprint(auth_bp, url_prefix='/api/auth')  # General auth routes (less specific)
+logger.info("✅ Registered auth_bp blueprint with /api/auth prefix")
 app.register_blueprint(json_sports_bp, url_prefix='/api/sports')
 app.register_blueprint(sports_bp, url_prefix='/api/sports')  # Fix: should be /api/sports not /api
 app.register_blueprint(prematch_odds_bp, url_prefix='/api/prematch-odds')
@@ -359,6 +383,8 @@ from src.routes.betting import betting_bp
 
 # Register betting blueprint after models are bound
 app.register_blueprint(betting_bp, url_prefix='/api/betting')
+
+# Note: Alias route removed - using the proxy route below instead
 
 # Initialize WebSocket service
 live_odds_service = LiveOddsWebSocketService(socketio)

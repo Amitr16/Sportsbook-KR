@@ -778,7 +778,9 @@ body {{
         return resp
         
     except Exception as e:
-        print(f"Error generating theme CSS for operator {subdomain}: {e}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error generating theme CSS for operator {subdomain}: {e}")
         # Always return valid CSS with headers to prevent write() before start_response
         resp = make_response("/* theme error; using defaults */", 200)
         resp.headers["Content-Type"] = "text/css; charset=utf-8"
