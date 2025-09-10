@@ -952,7 +952,7 @@ def load_public_theme_for_operator(subdomain):
                 'cardStyle': theme[8] or 'shadow',
                 'logoType': theme[9] or 'default',
                 'logoUrl': theme[10] or '',
-                'sportsbookName': theme[11] or 'megabook'
+                'sportsbookName': theme[11] or subdomain
             })
         else:
             print(f"ℹ️ No saved theme found for operator: {subdomain}, returning defaults")
@@ -968,7 +968,7 @@ def load_public_theme_for_operator(subdomain):
                 'cardStyle': 'shadow',
                 'logoType': 'default',
                 'logoUrl': '',
-                'sportsbookName': 'megabook'
+                'sportsbookName': subdomain
             })
         
     except Exception as e:

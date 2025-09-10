@@ -5569,7 +5569,8 @@
             localStorage.removeItem('token');
             localStorage.removeItem('user');
             // Redirect to logout which will clear session and redirect to login
-            window.location.href = '/megabook/logout';
+            const tenant = getTenant();
+            window.location.href = `/${tenant}/logout`;
         }
 
         // Page navigation functions

@@ -51,7 +51,7 @@
         <div class="error" id="error"></div>
         <button id="submitBtn" type="submit">Login</button>
         <div class="divider">or</div>
-        <a class="google-btn" id="googleBtn" href="/api/auth/google/login">
+        <a class="google-btn" id="googleBtn" href="/api/auth/google/login" onclick="addTenantParam(this); return true;">
           <svg class="google-icon" viewBox="0 0 533.5 544.3" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="#EA4335" d="M533.5 278.4c0-18.6-1.6-37-4.7-54.8H272v103.8h147.3c-6.4 34.7-25.9 64.1-55 83.8v69.7h88.9c52 47.9 80.3 118.6 80.3 197.5 0 21.7-2.1 42.9-6 63.4h-1.1V278.4z"/><path fill="#34A853" d="M272 544.3c73.8 0 135.6-24.4 180.7-66.2l-88.9-69.7c-24.7 16.5-56.2 26.3-91.8 26.3-70.6 0-130.4-47.6-151.9-111.4H28.2v69.9C73 500.2 166.6 544.3 272 544.3z"/><path fill="#4A90E2" d="M120.1 323.3c-5.3-15.7-8.2-32.4-8.2-49.6 0-17.2 2.9-33.9 8.2-49.6v-69.9H28.2C10.2 177.1 0 214 0 256s10.2 78.9 28.2 112.4l91.9-69.1z"/><path fill="#FBBC05" d="M272 141.9c40.1 0 76.1 13.8 104.5 40.9l78.4-78.4C407.6 44.1 345.8 19.9 272 19.9 166.6 19.9 73 63.8 28.2 143.8l91.9 69.1C141.6 189.5 201.4 141.9 272 141.9z"/></svg>
           Continue with Google
         </a>
@@ -64,6 +64,22 @@
   </div>
 
   <script>
+    // Get tenant from current URL
+    function getTenant() {
+      const seg = (location.pathname.split("/")[1] || "").trim();
+      return seg && !["api","static","superadmin","login"].includes(seg) ? seg : "";
+    }
+    
+    // Add tenant parameter to Google OAuth link
+    function addTenantParam(link) {
+      const tenant = getTenant();
+      if (tenant) {
+        const url = new URL(link.href, window.location.origin);
+        url.searchParams.set('tenant', tenant);
+        link.href = url.toString();
+      }
+    }
+
     const API_BASE = '';
 
     function setMode(mode) {

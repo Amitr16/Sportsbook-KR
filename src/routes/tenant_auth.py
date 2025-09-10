@@ -77,23 +77,24 @@ def tenant_register(subdomain):
                 'error': 'Password must be at least 6 characters long'
             }), 400
         
-        # Check if user already exists using ORM
+        # Check if user already exists for this specific operator
         existing_user = current_app.db.session.execute(
             select(User).where(
-                (User.username == username) | (User.email == email)
-            )
+                (User.username == username) | 
+                (User.email == email)
+            ).where(User.sportsbook_operator_id == operator['id'])
         ).scalar_one_or_none()
         
         if existing_user:
             if existing_user.username == username:
                 return jsonify({
                     'success': False,
-                    'error': 'Username already exists'
+                    'error': 'Username already exists for this sportsbook'
                 }), 400
             else:
                 return jsonify({
                     'success': False,
-                    'error': 'Email already exists'
+                    'error': 'Email already exists for this sportsbook'
                 }), 400
         
         # Create new user with operator association

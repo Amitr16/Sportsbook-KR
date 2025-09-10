@@ -119,18 +119,57 @@ def google_login():
     
     # Store the tenant context in session for redirect after OAuth
     referrer = request.headers.get('Referer', '')
-    if '/megabook' in referrer or '/megabook/' in referrer:
-        session['original_tenant'] = 'megabook'
-    elif '/kr00' in referrer or '/kr00/' in referrer:
-        session['original_tenant'] = 'kr00'
-    else:
-        # Try to extract tenant from referrer
-        import re
-        tenant_match = re.search(r'/([^/]+)/', referrer)
+    
+    # Extract tenant from various sources
+    import re
+    tenant = None
+    
+    # 1. First try to get tenant from explicit parameter
+    tenant = request.args.get('tenant')
+    if tenant:
+        logger.info(f"Google OAuth login - Tenant from parameter: {tenant}")
+    
+    # 2. If no tenant parameter, try to extract from referrer
+    if not tenant and referrer:
+        tenant_match = re.search(r'/([^/?]+)(?:/|$|\?)', referrer)
         if tenant_match:
-            session['original_tenant'] = tenant_match.group(1)
-        else:
-            session['original_tenant'] = 'megabook'  # Default
+            potential_tenant = tenant_match.group(1)
+            # Filter out common non-tenant paths
+            if potential_tenant not in ['auth', 'api', 'static', 'favicon.ico', 'login', 'logout', 'register', 'localhost:5000']:
+                tenant = potential_tenant
+                logger.info(f"Google OAuth login - Tenant from referrer: {tenant}")
+    
+    # 3. If no tenant found in referrer, try to get it from the redirect_uri parameter
+    if not tenant:
+        redirect_uri = request.args.get('redirect_uri', '')
+        if redirect_uri:
+            # Extract tenant from redirect_uri like http://localhost:5000/{tenant}/...
+            tenant_match = re.search(r'/([^/?]+)(?:/|$|\?)', redirect_uri)
+            if tenant_match:
+                potential_tenant = tenant_match.group(1)
+                if potential_tenant not in ['auth', 'api', 'static', 'favicon.ico', 'login', 'logout', 'register', 'localhost:5000']:
+                    tenant = potential_tenant
+                    logger.info(f"Google OAuth login - Tenant from redirect_uri: {tenant}")
+    
+    # Validate that it's a known tenant by checking if it exists in database
+    if tenant:
+        try:
+            from src.db_compat import connect
+            with connect() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT id FROM sportsbook_operators WHERE subdomain = %s", (tenant,))
+                    if cursor.fetchone():
+                        session['original_tenant'] = tenant
+                        logger.info(f"Google OAuth login - Valid tenant found: {tenant}")
+                    else:
+                        logger.error(f"Google OAuth login - Unknown tenant '{tenant}', cannot proceed")
+                        return jsonify({'success': False, 'error': f'Unknown tenant: {tenant}'}), 400
+        except Exception as e:
+            logger.error(f"Google OAuth login - Error validating tenant: {e}")
+            return jsonify({'success': False, 'error': f'Tenant validation failed: {str(e)}'}), 400
+    else:
+        logger.error("Google OAuth login - No tenant found in referrer URL or redirect_uri")
+        return jsonify({'success': False, 'error': 'No tenant found in URL'}), 400
     
     logger.info(f"Google OAuth login - Storing tenant: {session.get('original_tenant')}")
     
@@ -212,7 +251,10 @@ def google_callback():
             return jsonify({'success': False, 'error': 'Email not available from Google'}), 400
 
         # 4) Get operator_id from tenant stored in session
-        tenant = session.get('original_tenant', 'megabook')
+        tenant = session.get('original_tenant')
+        if not tenant:
+            logger.error("❌ No tenant found in session, cannot proceed with OAuth")
+            return jsonify({'success': False, 'error': 'No tenant context found'}), 400
         logger.info(f"🔍 Google OAuth callback - Tenant: {tenant}")
         
         # Get operator_id from subdomain
@@ -233,35 +275,26 @@ def google_callback():
         from src.db_compat import connect
         conn = connect()
         try:
-            logger.info(f"🔍 Looking for existing user with email: {email}")
+            logger.info(f"🔍 Looking for existing user with email: {email} and operator_id: {operator_id}")
             user = conn.execute(
-                "SELECT id, username, email, balance, sportsbook_operator_id FROM users WHERE email = %s",
-                (email,)
+                "SELECT id, username, email, balance, sportsbook_operator_id FROM users WHERE email = %s AND sportsbook_operator_id = %s",
+                (email, operator_id)
             ).fetchone()
             
-            # Check if user exists with different or missing operator_id
+            # Check if user exists for this specific operator
             if user and user.get('sportsbook_operator_id') != operator_id:
-                logger.warning(f"⚠️ User {email} exists with operator_id: {user.get('sportsbook_operator_id')} vs current: {operator_id}")
-                # Update the user's operator_id to match the current tenant
-                conn.execute(
-                    "UPDATE users SET sportsbook_operator_id = %s WHERE email = %s",
-                    (operator_id, email)
-                )
-                conn.commit()
-                logger.info(f"✅ Updated user's operator_id from {user.get('sportsbook_operator_id')} to {operator_id}")
-                # Re-fetch the user
-                user = conn.execute(
-                    "SELECT id, username, email, balance, sportsbook_operator_id FROM users WHERE email = %s",
-                    (email,)
-                ).fetchone()
+                logger.info(f"🔍 User {email} exists for operator {user.get('sportsbook_operator_id')} but logging into operator {operator_id}")
+                logger.info(f"🔍 Creating separate account for this tenant...")
+                # Don't update existing user, we'll create a new one below
+                user = None
             
             if not user:
                 logger.info(f"🔍 No existing user found, creating new user for email: {email}")
                 base = (name or email.split("@")[0]).replace(" ", "").lower()[:15]
                 username, n = base, 1
                 
-                # Check for username conflicts
-                while conn.execute("SELECT 1 FROM users WHERE username = %s", (username,)).fetchone():
+                # Check for username conflicts within this operator
+                while conn.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone():
                     n += 1
                     username = f"{base}{n}"
                 
@@ -287,9 +320,10 @@ def google_callback():
                     conn.commit()
                     logger.info(f"✅ Successfully created new user with operator_id: {operator_id}")
                     
-                    # Verify user was created
+                    # Verify user was created and fetch the complete user data
                     user = conn.execute(
-                        "SELECT id, username, email, balance FROM users WHERE email = %s", (email,)
+                        "SELECT id, username, email, balance, sportsbook_operator_id FROM users WHERE email = %s AND sportsbook_operator_id = %s", 
+                        (email, operator_id)
                     ).fetchone()
                     if user:
                         logger.info(f"✅ Verified user creation: {user}")
@@ -334,39 +368,23 @@ def google_callback():
         logger.info(f"✅ Session modified: {session.modified}")
         logger.info("=" * 50)
 
-        # 6) Optional: set operator context (tenant)
-        session_tenant = session.get('original_tenant', 'megabook')
-        if session_tenant == 'megabook':
-            try:
-                conn2 = connect()
-                try:
-                    op = conn2.execute(
-                        "SELECT id FROM sportsbook_operators WHERE subdomain = %s",
-                        ('megabook',)
-                    ).fetchone()
-                    if op:
-                        session['operator_id'] = op['id']
-                        session['operator_name'] = 'megabook'
-                finally:
-                    conn2.close()
-            except Exception as e:
-                logger.warning("Operator lookup failed (non-fatal): %s", e)
+        # 6) Set operator context (tenant) - already set above
+        # No need for additional operator lookup since we already have operator_id
 
         # 7) Persist the session with the redirect response
         session.permanent = True
         session.modified = True
 
-        # 8) Compute redirect target
+        # 8) Compute redirect target based on the tenant from session
         referrer = request.headers.get('Referer', '') or ''
-        session_tenant = session.get('original_tenant', 'megabook')
+        session_tenant = session.get('original_tenant')
         logger.info("Google OAuth callback - Referrer: %s", referrer)
         logger.info("Google OAuth callback - Session tenant: %s", session_tenant)
 
-        if '/kr00' in referrer or session_tenant == 'kr00':
-            redirect_url = '/kr00'
-        else:
-            redirect_url = '/megabook'
-
+        # Use the tenant from session to determine redirect URL
+        # This ensures we redirect back to the correct tenant subdomain
+        redirect_url = f'/{session_tenant}'
+        
         logger.info("Google OAuth callback - Redirecting to: %s", redirect_url)
         
         # Flask's built-in sessions automatically save to response

@@ -1547,11 +1547,22 @@
           return;
         }
         
+        // Check if we just came back from OAuth callback
+        const urlParams = new URLSearchParams(window.location.search);
+        const fromOAuth = urlParams.get('code') || urlParams.get('state');
+        
         // Post-login race guard (prevents split-second 401 → redirect loop on slower disks)
-        if (sessionStorage.getItem('justLoggedIn')) {
-          console.log('⏳ Just logged in, giving cookie a beat to settle...');
-          await new Promise(r => setTimeout(r, 120));
+        if (sessionStorage.getItem('justLoggedIn') || fromOAuth) {
+          console.log('⏳ Just logged in or returned from OAuth, giving cookie a beat to settle...');
+          await new Promise(r => setTimeout(r, 500)); // Increased delay for OAuth
           sessionStorage.removeItem('justLoggedIn');
+          
+          // Clean URL parameters if we came from OAuth
+          if (fromOAuth) {
+            const cleanUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, cleanUrl);
+            console.log('🧹 Cleaned OAuth parameters from URL');
+          }
         }
         
         bootstrapAuthInProgress = true;
@@ -1699,7 +1710,9 @@
         console.log('🔐 Initiating Google sign-in...');
         // Use dynamic redirect URI that works for both localhost and production
         const redirectUrl = location.origin + '/auth/google/callback';
-        window.location.href = `/auth/google/login?redirect_uri=${encodeURIComponent(redirectUrl)}`;
+        const tenant = getTenant();
+        const tenantParam = tenant ? `&tenant=${encodeURIComponent(tenant)}` : '';
+        window.location.href = `/auth/google/login?redirect_uri=${encodeURIComponent(redirectUrl)}${tenantParam}`;
       }
       
       // CONSOLIDATED INITIALIZATION: Single entry point to prevent refresh loops
@@ -6070,7 +6083,8 @@
             localStorage.removeItem('token');
             localStorage.removeItem('user');
             // Redirect to logout which will clear session and redirect to login
-            window.location.href = '/megabook/logout';
+            const tenant = getTenant();
+            window.location.href = `/${tenant}/logout`;
         }
 
         // Page navigation functions
