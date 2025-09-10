@@ -810,10 +810,10 @@ def get_tenant_users(subdomain):
         users_query = """
         SELECT id, username, email, balance, created_at, is_active,
                (SELECT COUNT(*) FROM bets WHERE user_id = users.id) as total_bets,
-               (SELECT COALESCE(SUM(stake), 0) FROM bets WHERE user_id = users.id) as total_staked,
+               (SELECT COALESCE(SUM(stake), 0) FROM bets WHERE user_id = users.id AND status IN ('won', 'lost', 'void')) as total_staked,
                (SELECT COALESCE(SUM(actual_return), 0) FROM bets WHERE user_id = users.id AND status = 'won') as total_payout,
                (SELECT COALESCE(SUM(CASE WHEN status = 'won' THEN actual_return ELSE 0 END), 0) - 
-                       COALESCE(SUM(stake), 0) FROM bets WHERE user_id = users.id) as profit
+                       COALESCE(SUM(CASE WHEN status IN ('won', 'lost', 'void') THEN stake ELSE 0 END), 0) FROM bets WHERE user_id = users.id) as profit
         FROM users 
         WHERE sportsbook_operator_id = ?
         ORDER BY created_at DESC

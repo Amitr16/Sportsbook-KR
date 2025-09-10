@@ -277,6 +277,19 @@ def place_bet():
                 'message': 'Match ID and selection are required'
             }), 400
         
+        # Validate stake amount - must be positive integer
+        if stake <= 0:
+            return jsonify({
+                'success': False,
+                'message': 'Betting amount must be greater than zero'
+            }), 400
+        
+        if not isinstance(stake, (int, float)) or stake != int(stake):
+            return jsonify({
+                'success': False,
+                'message': 'Betting amount must be a whole number'
+            }), 400
+        
         # Check if this specific bet event is blocked by admin
         blocked_bet = db.query(Bet).filter_by(
             match_id=match_id,
@@ -415,6 +428,19 @@ def place_combo_bet():
         bet_type = data.get('bet_type', 'combo')
         sport_name = data.get('sport_name')  # Sport from odds data metadata
         bet_timing = data.get('bet_timing', 'pregame')  # Default to pregame
+        
+        # Validate total stake amount - must be positive integer
+        if total_stake <= 0:
+            return jsonify({
+                'success': False,
+                'message': 'Betting amount must be greater than zero'
+            }), 400
+        
+        if not isinstance(total_stake, (int, float)) or total_stake != int(total_stake):
+            return jsonify({
+                'success': False,
+                'message': 'Betting amount must be a whole number'
+            }), 400
         
         # For combo bets, create concatenated timing string (timing1_timing2_timing3)
         if selections:

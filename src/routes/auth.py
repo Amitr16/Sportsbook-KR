@@ -268,12 +268,20 @@ def google_callback():
                 logger.info(f"🔍 Generated username: {username} for email: {email}")
                 
                 try:
+                    # Get default balance for this operator
+                    try:
+                        from src.routes.rich_admin_interface import get_default_user_balance
+                        default_balance = get_default_user_balance(operator_id)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not get default balance for operator {operator_id}: {e}")
+                        default_balance = 1000.0  # Fall back to default
+                    
                     conn.execute(
                         """
                         INSERT INTO users (username, email, password_hash, balance, is_active, created_at, last_login, sportsbook_operator_id)
                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                         """,
-                        (username, email, generate_password_hash(f"google:{sub}"), 1000.0, True,
+                        (username, email, generate_password_hash(f"google:{sub}"), default_balance, True,
                          datetime.datetime.utcnow(), datetime.datetime.utcnow(), operator_id),
                     )
                     conn.commit()
@@ -473,11 +481,20 @@ def register():
         # Create new user
         password_hash = generate_password_hash(password)
         
+        # Get default balance (for global registration, use default operator or fallback)
+        try:
+            from src.routes.rich_admin_interface import get_default_user_balance
+            # For global registration, try to get balance from operator 1 (default) or use fallback
+            default_balance = get_default_user_balance(1) if hasattr(current_app, 'db') else 1000.0
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get default balance for global registration: {e}")
+            default_balance = 1000.0  # Fall back to default
+        
         user = User(
             username=username,
             email=email,
             password_hash=password_hash,
-            balance=1000.0  # Starting balance
+            balance=default_balance  # Configurable starting balance
         )
         
         db.session.add(user)

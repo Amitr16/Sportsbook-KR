@@ -7009,22 +7009,47 @@
                 if (window.oddsUpdateInterval) clearInterval(window.oddsUpdateInterval);
             }
             
-                        // Check for odds updates every 30 seconds for ALL SPORTS
+            // Check for odds updates every 30 seconds for ALL SPORTS
             oddsUpdateInterval = setInterval(async () => {
                 const now = new Date().toISOString();
                 console.log(`🔍 PERIODIC CHECK [${now}]: Starting periodic check...`);
                 
                 // Get all available sports from window.eventsData (global cache)
-                const allSports = Object.keys(window.eventsData || {});
+                let allSports = Object.keys(window.eventsData || {});
                 
                 console.log('🔍 PERIODIC CHECK: window.eventsData keys:', Object.keys(window.eventsData || {}));
                 console.log('🔍 PERIODIC CHECK: window.eventsData content:', window.eventsData);
                 console.log('🔍 PERIODIC CHECK: allSports array:', allSports);
                 console.log('🔍 PERIODIC CHECK: allSports length:', allSports.length);
                 
+                // If no sports in memory cache, get them from backend
                 if (allSports.length === 0) {
-                    console.log('🔍 PERIODIC CHECK: No sports data available yet, skipping...');
-                    return;
+                    console.log('🔍 PERIODIC CHECK: No sports in memory cache, fetching from backend...');
+                    try {
+                        const sportsResponse = await fetch(`${API_BASE}/api/sports`, { credentials: 'include' });
+                        if (sportsResponse.ok) {
+                            const sportsData = await sportsResponse.json();
+                            allSports = Object.keys(sportsData);
+                            console.log('🔍 PERIODIC CHECK: Fetched sports from backend:', allSports);
+                        } else {
+                            console.log('🔍 PERIODIC CHECK: Failed to fetch sports from backend, skipping...');
+                            return;
+                        }
+                    } catch (error) {
+                        console.log('🔍 PERIODIC CHECK: Error fetching sports from backend:', error);
+                        return;
+                    }
+                }
+                
+                if (allSports.length === 0) {
+                    // Last resort: check current sport if available
+                    if (currentSport) {
+                        console.log(`🔍 PERIODIC CHECK: No sports data available, checking current sport: ${currentSport}`);
+                        allSports = [currentSport];
+                    } else {
+                        console.log('🔍 PERIODIC CHECK: No sports data available and no current sport, skipping...');
+                        return;
+                    }
                 }
                 
                 console.log(`🔍 PERIODIC CHECK: Checking odds updates for ${allSports.length} sports: ${allSports.join(', ')}`);
@@ -7121,6 +7146,24 @@
             console.log('🔍 DEBUG: First periodic check will run in 30 seconds');
             console.log('🔍 DEBUG: Current window.eventsData state:', Object.keys(window.eventsData || {}));
         }
+        
+        // Debug function to manually test periodic checker
+        function testPeriodicChecker() {
+            console.log('🧪 MANUAL TEST: Testing periodic checker...');
+            console.log('🧪 Current window.eventsData:', window.eventsData);
+            console.log('🧪 Current currentSport:', currentSport);
+            console.log('🧪 Current oddsUpdateInterval:', !!oddsUpdateInterval);
+            console.log('🧪 Current window.oddsUpdateInterval:', !!window.oddsUpdateInterval);
+            
+            // Force run the periodic check
+            if (typeof startOddsUpdateChecker === 'function') {
+                console.log('🧪 Restarting periodic checker...');
+                startOddsUpdateChecker();
+            }
+        }
+        
+        // Make test function available globally
+        window.testPeriodicChecker = testPeriodicChecker;
         
         function stopOddsUpdateChecker() {
             if (oddsUpdateInterval) {

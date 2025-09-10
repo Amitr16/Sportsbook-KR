@@ -511,9 +511,10 @@ def get_global_users():
         SELECT u.id, u.username, u.email, u.balance, u.created_at, u.is_active,
                so.sportsbook_name as operator_name,
                (SELECT COUNT(*) FROM bets WHERE user_id = u.id) as total_bets,
-               (SELECT COALESCE(SUM(stake), 0) FROM bets WHERE user_id = u.id) as total_staked,
+               (SELECT COALESCE(SUM(stake), 0) FROM bets WHERE user_id = u.id AND status IN ('won', 'lost', 'void')) as total_staked,
                (SELECT COALESCE(SUM(potential_return), 0) FROM bets WHERE user_id = u.id AND status = 'won') as total_payout,
-               (SELECT COALESCE(SUM(stake), 0) - COALESCE(SUM(potential_return), 0) FROM bets WHERE user_id = u.id AND status IN ('won', 'lost')) as profit
+               (SELECT COALESCE(SUM(CASE WHEN status IN ('won', 'lost', 'void') THEN stake ELSE 0 END), 0) - 
+                COALESCE(SUM(CASE WHEN status = 'won' THEN potential_return ELSE 0 END), 0) FROM bets WHERE user_id = u.id) as profit
         FROM users u
         LEFT JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
         ORDER BY u.created_at DESC

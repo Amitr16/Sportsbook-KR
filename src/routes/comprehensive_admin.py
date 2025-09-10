@@ -301,10 +301,10 @@ def get_users(subdomain):
         users_query = """
         SELECT u.id, u.username, u.email, u.balance, u.is_active, u.created_at, u.last_login,
                COUNT(b.id) as total_bets,
-               COALESCE(SUM(b.stake), 0) as total_staked,
+               COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost', 'void') THEN b.stake ELSE 0 END), 0) as total_staked,
                COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) as total_payout,
                COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.actual_return ELSE 0 END), 0) - 
-               COALESCE(SUM(b.stake), 0) as cumulative_profit
+               COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost', 'void') THEN b.stake ELSE 0 END), 0) as cumulative_profit
         FROM users u
         LEFT JOIN bets b ON u.id = b.user_id
         WHERE u.sportsbook_operator_id = ?

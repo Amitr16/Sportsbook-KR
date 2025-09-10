@@ -230,7 +230,7 @@ def get_user_details(subdomain, user_id):
                 COUNT(CASE WHEN status = 'won' THEN 1 END) as won_bets,
                 COUNT(CASE WHEN status = 'lost' THEN 1 END) as lost_bets,
                 COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_bets,
-                SUM(stake) as total_staked,
+                SUM(CASE WHEN status IN ('won', 'lost', 'void') THEN stake ELSE 0 END) as total_staked,
                 SUM(CASE WHEN status = 'won' THEN actual_return ELSE 0 END) as total_winnings,
                 SUM(CASE WHEN status = 'lost' THEN stake ELSE 0 END) as total_losses
             FROM bets 
