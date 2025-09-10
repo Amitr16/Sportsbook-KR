@@ -426,8 +426,10 @@ def place_combo_bet():
                 else:
                     timings.append('pregame')  # Default fallback
             
-            # Create concatenated timing string
+            # Create concatenated timing string, but limit length
             bet_timing = '_'.join(timings)
+            if len(bet_timing) > 100:
+                bet_timing = bet_timing[:97] + '...'  # Truncate if too long
             logger.info(f"Created combo bet_timing: {bet_timing} from timings: {timings}")
         else:
             bet_timing = 'pregame'  # Default fallback
@@ -445,8 +447,10 @@ def place_combo_bet():
                 else:
                     sports.append('soccer')  # Default fallback
             
-            # Create concatenated sport string
+            # Create concatenated sport string, but limit length
             sport_name = '_'.join(sports)
+            if len(sport_name) > 200:
+                sport_name = sport_name[:197] + '...'  # Truncate if too long
             logger.info(f"Created combo sport_name: {sport_name} from sports: {sports}")
         else:
             sport_name = 'soccer'  # Default fallback
