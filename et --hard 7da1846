@@ -1,0 +1,5 @@
+[33mad91895[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m Add CSV upload feature for bet settlement in superadmin interface
+[33m7da1846[m[33m ([m[1;31morigin/master[m[33m)[m Fix syntax error in daily_revenue_calculator.py - remove stray comment
+[33meb3980a[m Add Bet ID column to Manual Settlement table in superadmin interface
+[33maf0a819[m Implement multi-tenant OAuth system with separate accounts per tenant - Add tenant parameter support to Google OAuth login - Update OAuth callback to create separate accounts for each tenant - Fix hardcoded logout redirects to use current tenant - Update database schema to allow same email across different tenants - Make all tenant detection logic generic for any subdomain - Remove all hardcoded megabook/kr00 references
+[33mab8c66d[m Fix betting validation and admin staked calculations - Add positive integer validation for betting amounts - Update admin staked columns to only show settled bets - Make all registration methods use get_default_user_balance - Update documentation for user wallet balance changes

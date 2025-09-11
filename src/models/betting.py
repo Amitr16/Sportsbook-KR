@@ -96,6 +96,9 @@ class Bet:
     # Combo bet fields
     combo_selections = None  # JSON string for combo bet selections
     
+    # Event timing
+    event_time = None  # UTC time when the event is scheduled
+    
     # Metadata
     created_at = None
     updated_at = None
@@ -120,6 +123,7 @@ class Bet:
             'is_active': self.is_active,
             'actual_return': self.actual_return,
             'settled_at': self.settled_at.isoformat() if self.settled_at else None,
+            'event_time': self.event_time.isoformat() if self.event_time else None,
             'combo_selections': self.combo_selections,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None

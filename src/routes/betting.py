@@ -3,7 +3,7 @@ Betting API routes for sports betting platform
 """
 
 from flask import Blueprint, request, jsonify, g, current_app, session
-from src.models.betting import User, Bet, Transaction, BetSlip, Event, Outcome, BetStatus
+from src.models.multitenant_models import User, Bet, Transaction, BetSlip, BetStatus
 from src.routes.tenant_auth import session_required
 from datetime import datetime
 import logging
@@ -270,6 +270,7 @@ def place_bet():
         sport_name = data.get('sport_name')
         bet_timing = data.get('bet_timing', 'pregame')
         market_id = data.get('market_id', 'unknown')
+        event_time = data.get('event_time')  # UTC time when the event is scheduled
         
         if not match_id or not selection:
             return jsonify({
@@ -324,7 +325,8 @@ def place_bet():
             bet_timing=bet_timing,
             market=market_id,
             sportsbook_operator_id=user.sportsbook_operator_id,  # Use ID, not the user object
-            is_active=True
+            is_active=True,
+            event_time=event_time  # UTC time when the event is scheduled
         )
         
         # Deduct balance on the ORM user object
@@ -428,6 +430,7 @@ def place_combo_bet():
         bet_type = data.get('bet_type', 'combo')
         sport_name = data.get('sport_name')  # Sport from odds data metadata
         bet_timing = data.get('bet_timing', 'pregame')  # Default to pregame
+        event_time = data.get('event_time')  # UTC time when the event is scheduled
         
         # Validate total stake amount - must be positive integer
         if total_stake <= 0:
@@ -516,7 +519,8 @@ def place_combo_bet():
             bet_timing=bet_timing,  # Store bet timing (pregame/ingame)
             market='combo',  # Set market for combo bets
             sportsbook_operator_id=getattr(user, 'sportsbook_operator_id', None),  # Safely get operator ID
-            combo_selections=json.dumps(selections)  # Store selections as JSON string
+            combo_selections=json.dumps(selections),  # Store selections as JSON string
+            event_time=event_time  # UTC time when the event is scheduled
         )
         
         # Deduct balance

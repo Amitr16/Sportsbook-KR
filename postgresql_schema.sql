@@ -71,6 +71,7 @@ CREATE TABLE bets (
     actual_return DECIMAL(10,2) DEFAULT 0.0,
     settled_at TIMESTAMP,
     combo_selections TEXT,
+    event_time TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),

@@ -128,6 +128,7 @@ def setup_database():
                 actual_return FLOAT DEFAULT 0.0,
                 settled_at DATETIME,
                 combo_selections TEXT,
+                event_time DATETIME,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id),

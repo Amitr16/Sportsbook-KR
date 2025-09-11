@@ -103,6 +103,7 @@ CREATE TABLE public.bets (
     actual_return double precision,
     settled_at timestamp without time zone,
     combo_selections text,
+    event_time timestamp without time zone,
     created_at timestamp without time zone,
     updated_at timestamp without time zone,
     sport_name character varying(50),

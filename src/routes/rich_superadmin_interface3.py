@@ -121,7 +121,12 @@ def check_superadmin_auth(f):
 @check_superadmin_auth
 def rich_superadmin_dashboard():
     """Rich super admin dashboard with same interface as original admin_app.py"""
-    return render_template_string(RICH_SUPERADMIN_TEMPLATE)
+    from flask import make_response
+    response = make_response(render_template_string(RICH_SUPERADMIN_TEMPLATE))
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @rich_superadmin_bp.route('/test-toggle-status', methods=['POST'])
 def test_toggle_status():
@@ -1551,7 +1556,6 @@ def export_pending_bets():
         conn = get_db_connection()
         
         # Query pending bets with user information using SQLite3
-        # Only include bets where event_time is in the past (event has occurred)
         query = """
         SELECT 
             b.id,
@@ -1563,16 +1567,13 @@ def export_pending_bets():
             b.stake,
             b.odds,
             b.combo_selections,
-            b.event_time,
             b.created_at,
             b.updated_at,
             u.username,
             u.email
         FROM bets b
         LEFT JOIN users u ON b.user_id = u.id
-        WHERE b.status = 'pending' 
-        AND b.event_time IS NOT NULL 
-        AND b.event_time < NOW() AT TIME ZONE 'UTC'
+        WHERE b.status = 'pending'
         ORDER BY b.created_at DESC
         """
         
@@ -1582,7 +1583,7 @@ def export_pending_bets():
         if not pending_bets:
             return jsonify({
                 'success': False,
-                'error': 'No pending bets found with past event times'
+                'error': 'No pending bets found'
             }), 404
         
         # Create CSV content
@@ -1602,7 +1603,6 @@ def export_pending_bets():
             'Stake',
             'Odds',
             'Combo Selections',
-            'Event Time',
             'Created At',
             'Updated At'
         ]
@@ -1631,7 +1631,6 @@ def export_pending_bets():
                 bet['stake'] or 0,
                 bet['odds'] or 0,
                 combo_selections_str,
-                bet['event_time'] or 'N/A',
                 bet['created_at'] or 'N/A',
                 bet['updated_at'] or 'N/A'
             ]
@@ -1729,88 +1728,45 @@ def process_csv_settlement():
                     errors.append(f"Row {row_num}: Bet ID {bet_id} not found or already settled")
                     continue
                 
-                # Update bet status and handle wallet based on result
-                if result == 'WON':
-                    # Update bet status to won
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'won', actual_return = ?, settled_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """, (bet['potential_return'], datetime.now(), datetime.now(), bet_id))
-                    
-                    # Add full winnings to user wallet
-                    conn.execute("""
-                    UPDATE users 
-                    SET balance = balance + ?
-                    WHERE id = ?
-                    """, (bet['potential_return'], bet['user_id']))
-                    
-                    # Create transaction record
-                    conn.execute("""
-                    INSERT INTO transactions (user_id, bet_id, amount, transaction_type, description, balance_before, balance_after, created_at)
-                    VALUES (?, ?, ?, 'win', ?, ?, ?, ?)
-                    """, (
-                        bet['user_id'], 
-                        bet_id, 
-                        bet['potential_return'],
-                        f'Bet win - {bet["match_name"]} ({bet["selection"]})',
-                        bet['potential_return'],  # balance_before (simplified)
-                        bet['potential_return'] * 2,  # balance_after (simplified)
-                        datetime.now()
-                    ))
-                    
-                    won_count += 1
-                    
-                elif result == 'LOST':
-                    # Update bet status to lost
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'lost', actual_return = 0, settled_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """, (datetime.now(), datetime.now(), bet_id))
-                    
-                    # No wallet update needed for lost bets (stake already deducted)
-                    lost_count += 1
-                    
+                # Update bet status based on result
+                new_status = 'settled'
+                if result == 'Results Pending':
+                    new_status = 'pending'
                 elif result == 'No Results':
-                    # Update bet status to voided
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'voided', actual_return = ?, settled_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """, (bet['stake'], datetime.now(), datetime.now(), bet_id))
-                    
-                    # Refund stake to user wallet
+                    new_status = 'voided'
+                
+                # Update the bet
+                update_query = """
+                UPDATE bets 
+                SET status = ?, updated_at = ?
+                WHERE id = ?
+                """
+                
+                conn.execute(update_query, (new_status, datetime.now(), bet_id))
+                
+                # Handle wallet updates for settled bets
+                if new_status == 'settled':
+                    if result == 'WON':
+                        # Add winnings to user wallet
+                        winnings = bet['potential_return'] - bet['stake']  # Net winnings
+                        conn.execute("""
+                        UPDATE users 
+                        SET wallet_balance = wallet_balance + ?
+                        WHERE id = ?
+                        """, (winnings, bet['user_id']))
+                        won_count += 1
+                    elif result == 'LOST':
+                        # No wallet update needed for lost bets (stake already deducted)
+                        lost_count += 1
+                elif new_status == 'voided':
+                    # Refund stake for voided bets
                     conn.execute("""
                     UPDATE users 
-                    SET balance = balance + ?
+                    SET wallet_balance = wallet_balance + ?
                     WHERE id = ?
                     """, (bet['stake'], bet['user_id']))
-                    
-                    # Create transaction record for refund
-                    conn.execute("""
-                    INSERT INTO transactions (user_id, bet_id, amount, transaction_type, description, balance_before, balance_after, created_at)
-                    VALUES (?, ?, ?, 'refund', ?, ?, ?, ?)
-                    """, (
-                        bet['user_id'], 
-                        bet_id, 
-                        bet['stake'],
-                        f'Bet cancelled - {bet["match_name"]} (No Result)',
-                        bet['stake'],  # balance_before (simplified)
-                        bet['stake'] * 2,  # balance_after (simplified)
-                        datetime.now()
-                    ))
-                    
                     no_results_count += 1
-                    
-                elif result == 'Results Pending':
-                    # Update bet status to pending (no other changes)
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'pending', updated_at = ?
-                    WHERE id = ?
-                    """, (datetime.now(), bet_id))
-                    
+                else:  # Results Pending
                     pending_count += 1
                 
                 processed_count += 1
@@ -2963,6 +2919,9 @@ RICH_SUPERADMIN_TEMPLATE = '''
     </div>
     
     <script>
+        // Version: 2025-09-11-event-time-fix
+        console.log('🚀 Loading Rich Superadmin Interface v2025-09-11-event-time-fix');
+        
         function showSection(sectionId) {
             // Hide all sections
             document.querySelectorAll('.section, .content-section').forEach(section => {
@@ -3029,7 +2988,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 // Update table
                 const tbody = document.getElementById('global-events-tbody');
                 if (data.events.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="loading">No events found</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="9" class="loading">No events found</td></tr>`;
                 } else {
                     tbody.innerHTML = data.events.map(event => `
                         <tr>
@@ -3124,7 +3083,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
                 const tbody = document.getElementById('global-users-tbody');
                 if (data.users.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="12" class="loading">No users found</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="12" class="loading">No users found</td></tr>`;
                 } else {
                     console.log('🎯 Rendering users table with', data.users.length, 'users');
                     const userRows = data.users.map(user => `
@@ -3401,7 +3360,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
                 const tbody = document.getElementById('operators-tbody');
                 if (data.operators.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="11" class="loading">No operators found</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="11" class="loading">No operators found</td></tr>`;
                 } else {
                     tbody.innerHTML = data.operators.map(op => `
                         <tr>
@@ -3461,7 +3420,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                         </tr>
                     `).join('');
                 } else {
-                    tbody.innerHTML = '<tr><td colspan="5" class="loading">No report data available</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="5" class="loading">No report data available</td></tr>`;
                 }
                 
             } catch (error) {
@@ -3560,7 +3519,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
             
             // Create body rows
             if (data.length === 0) {
-                body.innerHTML = '<tr><td colspan="' + headers.length + '" class="loading">No data available for selected criteria</td></tr>';
+                body.innerHTML = `<tr><td colspan="${headers.length}" class="loading">No data available for selected criteria</td></tr>`;
             } else {
                 body.innerHTML = data.map(row => {
                     const cells = headers.map(header => {
@@ -3699,7 +3658,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
             const showBetsOnly = document.getElementById('global-show-bets-only').checked;
 
                          // Show loading state
-             document.getElementById('global-events-tbody').innerHTML = '<tr><td colspan="9" class="loading">Loading global events...</td></tr>';
+             document.getElementById('global-events-tbody').innerHTML = `<tr><td colspan="9" class="loading">Loading global events...</td></tr>`;
 
             fetch('/superadmin/api/global-betting-events', {
                 method: 'POST',
@@ -3724,12 +3683,12 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     loadGlobalSportsFilter(data.filters.sports);
                     loadGlobalMarketsFilter(data.filters.markets);
                 } else {
-                    document.getElementById('global-events-tbody').innerHTML = '<tr><td colspan="9" class="error">Error loading events: ' + data.error + '</td></tr>';
+                    document.getElementById('global-events-tbody').innerHTML = `<tr><td colspan="9" class="error">Error loading events: ${data.error}</td></tr>`;
                 }
             })
             .catch(error => {
                 console.error('Error:', error);
-                document.getElementById('global-events-tbody').innerHTML = '<tr><td colspan="9" class="error">Failed to load events</td></tr>';
+                document.getElementById('global-events-tbody').innerHTML = `<tr><td colspan="9" class="error">Failed to load events</td></tr>`;
             });
         }
 
@@ -3793,7 +3752,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
             tbody.innerHTML = '';
 
             if (events.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="no-data">No events found</td></tr>';
+                tbody.innerHTML = `<tr><td colspan="9" class="no-data">No events found</td></tr>`;
                 return;
             }
 
@@ -3942,88 +3901,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
 
                     // Load initial global stats (since global overview is the default active tab)
         loadGlobalStats();
-        
-        // CSV Upload Functionality
-        const processBtn = document.getElementById('processSettlementBtn');
-        const downloadTemplateBtn = document.getElementById('downloadTemplateBtn');
-        const csvFileInput = document.getElementById('csvFile');
-        
-        // Download Template functionality
-        if (downloadTemplateBtn) {
-            downloadTemplateBtn.addEventListener('click', function() {
-                const csvContent = 'Bet ID,Result\\n54,WON\\n53,LOST\\n52,Results Pending\\n51,No Results';
-                const blob = new Blob([csvContent], { type: 'text/csv' });
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'bet_settlement_template.csv';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-            });
-        }
-        
-        // Process Settlement functionality
-        if (processBtn) {
-            processBtn.addEventListener('click', async function() {
-                const file = csvFileInput.files[0];
-                if (!file) {
-                    alert('Please select a CSV file first');
-                    return;
-                }
-                
-                const btn = this;
-                const btnText = btn.querySelector('.btn-text');
-                const btnLoading = btn.querySelector('.btn-loading');
-                const statusDiv = document.getElementById('uploadStatus');
-                
-                // Show loading state
-                btn.disabled = true;
-                btnText.style.display = 'none';
-                btnLoading.style.display = 'inline';
-                statusDiv.style.display = 'none';
-                
-                try {
-                    const formData = new FormData();
-                    formData.append('csv_file', file);
-                    
-                    const response = await fetch('/api/superadmin/process-csv-settlement', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        // Show success message
-                        statusDiv.className = 'upload-status success';
-                        statusDiv.innerHTML = '✅ Successfully processed ' + result.processed_count + ' bets. ' + result.won_count + ' won, ' + result.lost_count + ' lost, ' + result.pending_count + ' pending, ' + result.no_results_count + ' no results.';
-                        statusDiv.style.display = 'block';
-                        
-                        // Reload settlement data to reflect changes
-                        if (typeof loadSettlementData === 'function') {
-                            loadSettlementData();
-                        }
-                    } else {
-                        // Show error message
-                        statusDiv.className = 'upload-status error';
-                        statusDiv.innerHTML = '❌ Error: ' + result.error;
-                        statusDiv.style.display = 'block';
-                    }
-                } catch (error) {
-                    console.error('Upload error:', error);
-                    statusDiv.className = 'upload-status error';
-                    statusDiv.innerHTML = '❌ Network error occurred while processing CSV';
-                    statusDiv.style.display = 'block';
-                } finally {
-                    // Reset button state
-                    btn.disabled = false;
-                    btnText.style.display = 'inline';
-                    btnLoading.style.display = 'none';
-                }
-            });
-        }
     });
     
     // Tab switching function
@@ -4094,6 +3971,9 @@ RICH_SUPERADMIN_TEMPLATE = '''
         }
     }
     
+    // Make showSection globally accessible
+    window.showSection = showSection;
+    
 
 
         // Debounce function for search input
@@ -4108,6 +3988,11 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 timeout = setTimeout(later, wait);
             };
         }
+        
+        // Console banner for debugging
+        console.log('🎯 Rich Superadmin Interface loaded successfully');
+        console.log('🔧 Debounce function:', debounce.toString());
+        console.log('✅ showSection function:', typeof showSection);
         
         // Manual Settlement Functions
         async function loadSettlementData() {
@@ -4137,7 +4022,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 // Update table
                 const tbody = document.getElementById('settlement-tbody');
                 if (settlementData.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="loading">No pending bets to settle</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="7" class="loading">No pending bets to settle</td></tr>`;
                 } else {
                     tbody.innerHTML = settlementData.map(item => `
                         <tr>
@@ -4284,6 +4169,89 @@ RICH_SUPERADMIN_TEMPLATE = '''
             }
         });
 
+        // CSV Upload Functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const processBtn = document.getElementById('processSettlementBtn');
+            const downloadTemplateBtn = document.getElementById('downloadTemplateBtn');
+            const csvFileInput = document.getElementById('csvFile');
+            
+            // Download Template functionality
+            if (downloadTemplateBtn) {
+                downloadTemplateBtn.addEventListener('click', function() {
+                    const csvContent = 'Bet ID,Result\n54,WON\n53,LOST\n52,Results Pending\n51,No Results';
+                    const blob = new Blob([csvContent], { type: 'text/csv' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'bet_settlement_template.csv';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                });
+            }
+            
+            // Process Settlement functionality
+            if (processBtn) {
+                processBtn.addEventListener('click', async function() {
+                    const file = csvFileInput.files[0];
+                    if (!file) {
+                        alert('Please select a CSV file first');
+                        return;
+                    }
+                    
+                    const btn = this;
+                    const btnText = btn.querySelector('.btn-text');
+                    const btnLoading = btn.querySelector('.btn-loading');
+                    const statusDiv = document.getElementById('uploadStatus');
+                    
+                    // Show loading state
+                    btn.disabled = true;
+                    btnText.style.display = 'none';
+                    btnLoading.style.display = 'inline';
+                    statusDiv.style.display = 'none';
+                    
+                    try {
+                        const formData = new FormData();
+                        formData.append('csv_file', file);
+                        
+                        const response = await fetch('/api/superadmin/process-csv-settlement', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            // Show success message
+                            statusDiv.className = 'upload-status success';
+                            statusDiv.innerHTML = `✅ Successfully processed ${result.processed_count} bets. ${result.won_count} won, ${result.lost_count} lost, ${result.pending_count} pending, ${result.no_results_count} no results.`;
+                            statusDiv.style.display = 'block';
+                            
+                            // Reload settlement data to reflect changes
+                            if (typeof loadSettlementData === 'function') {
+                                loadSettlementData();
+                            }
+                        } else {
+                            // Show error message
+                            statusDiv.className = 'upload-status error';
+                            statusDiv.innerHTML = `❌ Error: ${result.error}`;
+                            statusDiv.style.display = 'block';
+                        }
+                    } catch (error) {
+                        console.error('Upload error:', error);
+                        statusDiv.className = 'upload-status error';
+                        statusDiv.innerHTML = '❌ Network error occurred while processing CSV';
+                        statusDiv.style.display = 'block';
+                    } finally {
+                        // Reset button state
+                        btn.disabled = false;
+                        btnText.style.display = 'inline';
+                        btnLoading.style.display = 'none';
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>

@@ -1551,7 +1551,6 @@ def export_pending_bets():
         conn = get_db_connection()
         
         # Query pending bets with user information using SQLite3
-        # Only include bets where event_time is in the past (event has occurred)
         query = """
         SELECT 
             b.id,
@@ -1563,16 +1562,13 @@ def export_pending_bets():
             b.stake,
             b.odds,
             b.combo_selections,
-            b.event_time,
             b.created_at,
             b.updated_at,
             u.username,
             u.email
         FROM bets b
         LEFT JOIN users u ON b.user_id = u.id
-        WHERE b.status = 'pending' 
-        AND b.event_time IS NOT NULL 
-        AND b.event_time < NOW() AT TIME ZONE 'UTC'
+        WHERE b.status = 'pending'
         ORDER BY b.created_at DESC
         """
         
@@ -1582,7 +1578,7 @@ def export_pending_bets():
         if not pending_bets:
             return jsonify({
                 'success': False,
-                'error': 'No pending bets found with past event times'
+                'error': 'No pending bets found'
             }), 404
         
         # Create CSV content
@@ -1602,7 +1598,6 @@ def export_pending_bets():
             'Stake',
             'Odds',
             'Combo Selections',
-            'Event Time',
             'Created At',
             'Updated At'
         ]
@@ -1631,7 +1626,6 @@ def export_pending_bets():
                 bet['stake'] or 0,
                 bet['odds'] or 0,
                 combo_selections_str,
-                bet['event_time'] or 'N/A',
                 bet['created_at'] or 'N/A',
                 bet['updated_at'] or 'N/A'
             ]
@@ -1655,193 +1649,6 @@ def export_pending_bets():
         return jsonify({
             'success': False,
             'error': f'Error exporting pending bets: {str(e)}'
-        }), 500
-
-@rich_superadmin_bp.route('/api/superadmin/process-csv-settlement', methods=['POST'])
-@check_superadmin_auth
-def process_csv_settlement():
-    """Process CSV file with bet results and update settlements"""
-    try:
-        from werkzeug.utils import secure_filename
-        import csv
-        import io
-        from datetime import datetime
-        
-        # Check if file was uploaded
-        if 'csv_file' not in request.files:
-            return jsonify({'success': False, 'error': 'No CSV file uploaded'}), 400
-        
-        file = request.files['csv_file']
-        if file.filename == '':
-            return jsonify({'success': False, 'error': 'No file selected'}), 400
-        
-        if not file.filename.lower().endswith('.csv'):
-            return jsonify({'success': False, 'error': 'File must be a CSV'}), 400
-        
-        # Read and parse CSV
-        csv_content = file.read().decode('utf-8')
-        csv_reader = csv.DictReader(io.StringIO(csv_content))
-        
-        # Validate CSV format
-        if 'Bet ID' not in csv_reader.fieldnames or 'Result' not in csv_reader.fieldnames:
-            return jsonify({'success': False, 'error': 'CSV must contain "Bet ID" and "Result" columns'}), 400
-        
-        # Valid result values
-        valid_results = ['WON', 'LOST', 'Results Pending', 'No Results']
-        
-        # Process each row
-        conn = get_db_connection()
-        processed_count = 0
-        won_count = 0
-        lost_count = 0
-        pending_count = 0
-        no_results_count = 0
-        errors = []
-        
-        try:
-            for row_num, row in enumerate(csv_reader, start=2):  # Start at 2 because header is row 1
-                bet_id = row.get('Bet ID', '').strip()
-                result = row.get('Result', '').strip()
-                
-                # Validate bet ID
-                if not bet_id or not bet_id.isdigit():
-                    errors.append(f"Row {row_num}: Invalid Bet ID '{bet_id}'")
-                    continue
-                
-                bet_id = int(bet_id)
-                
-                # Validate result
-                if result not in valid_results:
-                    errors.append(f"Row {row_num}: Invalid Result '{result}'. Must be one of: {', '.join(valid_results)}")
-                    continue
-                
-                # Get the bet from database
-                bet_query = """
-                SELECT b.*, u.username, u.sportsbook_operator_id
-                FROM bets b
-                JOIN users u ON b.user_id = u.id
-                WHERE b.id = ? AND b.status = 'pending'
-                """
-                
-                bet = conn.execute(bet_query, (bet_id,)).fetchone()
-                
-                if not bet:
-                    errors.append(f"Row {row_num}: Bet ID {bet_id} not found or already settled")
-                    continue
-                
-                # Update bet status and handle wallet based on result
-                if result == 'WON':
-                    # Update bet status to won
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'won', actual_return = ?, settled_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """, (bet['potential_return'], datetime.now(), datetime.now(), bet_id))
-                    
-                    # Add full winnings to user wallet
-                    conn.execute("""
-                    UPDATE users 
-                    SET balance = balance + ?
-                    WHERE id = ?
-                    """, (bet['potential_return'], bet['user_id']))
-                    
-                    # Create transaction record
-                    conn.execute("""
-                    INSERT INTO transactions (user_id, bet_id, amount, transaction_type, description, balance_before, balance_after, created_at)
-                    VALUES (?, ?, ?, 'win', ?, ?, ?, ?)
-                    """, (
-                        bet['user_id'], 
-                        bet_id, 
-                        bet['potential_return'],
-                        f'Bet win - {bet["match_name"]} ({bet["selection"]})',
-                        bet['potential_return'],  # balance_before (simplified)
-                        bet['potential_return'] * 2,  # balance_after (simplified)
-                        datetime.now()
-                    ))
-                    
-                    won_count += 1
-                    
-                elif result == 'LOST':
-                    # Update bet status to lost
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'lost', actual_return = 0, settled_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """, (datetime.now(), datetime.now(), bet_id))
-                    
-                    # No wallet update needed for lost bets (stake already deducted)
-                    lost_count += 1
-                    
-                elif result == 'No Results':
-                    # Update bet status to voided
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'voided', actual_return = ?, settled_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """, (bet['stake'], datetime.now(), datetime.now(), bet_id))
-                    
-                    # Refund stake to user wallet
-                    conn.execute("""
-                    UPDATE users 
-                    SET balance = balance + ?
-                    WHERE id = ?
-                    """, (bet['stake'], bet['user_id']))
-                    
-                    # Create transaction record for refund
-                    conn.execute("""
-                    INSERT INTO transactions (user_id, bet_id, amount, transaction_type, description, balance_before, balance_after, created_at)
-                    VALUES (?, ?, ?, 'refund', ?, ?, ?, ?)
-                    """, (
-                        bet['user_id'], 
-                        bet_id, 
-                        bet['stake'],
-                        f'Bet cancelled - {bet["match_name"]} (No Result)',
-                        bet['stake'],  # balance_before (simplified)
-                        bet['stake'] * 2,  # balance_after (simplified)
-                        datetime.now()
-                    ))
-                    
-                    no_results_count += 1
-                    
-                elif result == 'Results Pending':
-                    # Update bet status to pending (no other changes)
-                    conn.execute("""
-                    UPDATE bets 
-                    SET status = 'pending', updated_at = ?
-                    WHERE id = ?
-                    """, (datetime.now(), bet_id))
-                    
-                    pending_count += 1
-                
-                processed_count += 1
-            
-            # Commit all changes
-            conn.commit()
-            
-            # Prepare response
-            response_data = {
-                'success': True,
-                'processed_count': processed_count,
-                'won_count': won_count,
-                'lost_count': lost_count,
-                'pending_count': pending_count,
-                'no_results_count': no_results_count
-            }
-            
-            if errors:
-                response_data['warnings'] = errors[:10]  # Limit to first 10 errors
-                if len(errors) > 10:
-                    response_data['warnings'].append(f"... and {len(errors) - 10} more errors")
-            
-            return jsonify(response_data)
-            
-        finally:
-            conn.close()
-            
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': f'Error processing CSV: {str(e)}'
         }), 500
 
 # Rich Super Admin Template (same rich interface as original admin_app.py but global)
@@ -2446,24 +2253,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
             border: 1px solid #bee5eb;
             color: #0c5460;
         }
-
-        .upload-status.success {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            color: #155724;
-        }
-
-        .upload-status.error {
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            color: #721c24;
-        }
-
-        .upload-status.info {
-            background: #d1ecf1;
-            border: 1px solid #bee5eb;
-            color: #0c5460;
-        }
     </style>
 </head>
 <body>
@@ -2656,40 +2445,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     <span class="btn-loading" style="display: none;">⏳ Exporting...</span>
                 </button>
                 <div id="exportStatus" class="export-status" style="margin-top: 1rem; padding: 1rem; border-radius: 8px; font-weight: 500; display: none;"></div>
-            </div>
-            
-            <!-- CSV Upload Section -->
-            <div class="csv-upload-section" style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 12px; padding: 1.5rem; margin: 1rem 0;">
-                <h4 style="color: #856404; font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem;">📁 Upload Bet Results CSV</h4>
-                <p style="color: #856404; margin-bottom: 1rem; opacity: 0.8;">Upload a CSV file with bet results to process settlements automatically.</p>
-                
-                <div style="margin-bottom: 1rem;">
-                    <label for="csvFile" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #856404;">Select CSV File:</label>
-                    <input type="file" id="csvFile" accept=".csv" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; background: white;">
-                </div>
-                
-                <div style="margin-bottom: 1rem;">
-                    <h5 style="color: #856404; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Required CSV Format:</h5>
-                    <div style="background: #f8f9fa; padding: 0.75rem; border-radius: 4px; font-family: monospace; font-size: 0.8rem; color: #495057; white-space: pre-line;">Bet ID,Result
-54,WON
-53,LOST
-52,Results Pending
-51,No Results</div>
-                    <p style="font-size: 0.8rem; color: #856404; margin-top: 0.5rem;">
-                        <strong>Valid Results:</strong> WON, LOST, Results Pending, No Results
-                    </p>
-                </div>
-                
-                <button id="processSettlementBtn" class="btn btn-warning" style="background: #ffc107; color: #212529; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-weight: 600; cursor: pointer; margin-right: 0.5rem;">
-                    <span class="btn-text">⚡ Process Settlement</span>
-                    <span class="btn-loading" style="display: none;">⏳ Processing...</span>
-                </button>
-                
-                <button id="downloadTemplateBtn" class="btn btn-secondary" style="background: #6c757d; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-weight: 600; cursor: pointer;">
-                    📋 Download Template
-                </button>
-                
-                <div id="uploadStatus" class="upload-status" style="margin-top: 1rem; padding: 1rem; border-radius: 8px; font-weight: 500; display: none;"></div>
             </div>
             
             <div class="table-container">
@@ -3942,88 +3697,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
 
                     // Load initial global stats (since global overview is the default active tab)
         loadGlobalStats();
-        
-        // CSV Upload Functionality
-        const processBtn = document.getElementById('processSettlementBtn');
-        const downloadTemplateBtn = document.getElementById('downloadTemplateBtn');
-        const csvFileInput = document.getElementById('csvFile');
-        
-        // Download Template functionality
-        if (downloadTemplateBtn) {
-            downloadTemplateBtn.addEventListener('click', function() {
-                const csvContent = 'Bet ID,Result\\n54,WON\\n53,LOST\\n52,Results Pending\\n51,No Results';
-                const blob = new Blob([csvContent], { type: 'text/csv' });
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'bet_settlement_template.csv';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-            });
-        }
-        
-        // Process Settlement functionality
-        if (processBtn) {
-            processBtn.addEventListener('click', async function() {
-                const file = csvFileInput.files[0];
-                if (!file) {
-                    alert('Please select a CSV file first');
-                    return;
-                }
-                
-                const btn = this;
-                const btnText = btn.querySelector('.btn-text');
-                const btnLoading = btn.querySelector('.btn-loading');
-                const statusDiv = document.getElementById('uploadStatus');
-                
-                // Show loading state
-                btn.disabled = true;
-                btnText.style.display = 'none';
-                btnLoading.style.display = 'inline';
-                statusDiv.style.display = 'none';
-                
-                try {
-                    const formData = new FormData();
-                    formData.append('csv_file', file);
-                    
-                    const response = await fetch('/api/superadmin/process-csv-settlement', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        // Show success message
-                        statusDiv.className = 'upload-status success';
-                        statusDiv.innerHTML = '✅ Successfully processed ' + result.processed_count + ' bets. ' + result.won_count + ' won, ' + result.lost_count + ' lost, ' + result.pending_count + ' pending, ' + result.no_results_count + ' no results.';
-                        statusDiv.style.display = 'block';
-                        
-                        // Reload settlement data to reflect changes
-                        if (typeof loadSettlementData === 'function') {
-                            loadSettlementData();
-                        }
-                    } else {
-                        // Show error message
-                        statusDiv.className = 'upload-status error';
-                        statusDiv.innerHTML = '❌ Error: ' + result.error;
-                        statusDiv.style.display = 'block';
-                    }
-                } catch (error) {
-                    console.error('Upload error:', error);
-                    statusDiv.className = 'upload-status error';
-                    statusDiv.innerHTML = '❌ Network error occurred while processing CSV';
-                    statusDiv.style.display = 'block';
-                } finally {
-                    // Reset button state
-                    btn.disabled = false;
-                    btnText.style.display = 'inline';
-                    btnLoading.style.display = 'none';
-                }
-            });
-        }
     });
     
     // Tab switching function
@@ -4283,7 +3956,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 });
             }
         });
-
     </script>
 </body>
 </html>

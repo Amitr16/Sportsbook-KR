@@ -5569,12 +5569,27 @@
             const matchTime = actualEvent ? actualEvent.time : '';
             const sport = actualEvent ? actualEvent.sport : currentSport; // Get sport from event data
             const betTiming = 'pregame'; // Default to pregame for now, can be enhanced later
+            
+            // Calculate event_time in UTC format
+            let eventTime = null;
+            if (actualEvent && actualEvent.date && actualEvent.time) {
+                try {
+                    // Parse the event date and time to create a proper UTC datetime
+                    const eventDateTime = parseFlexibleEventDateTime(actualEvent.date, actualEvent.time);
+                    if (eventDateTime) {
+                        eventTime = eventDateTime.toISOString(); // Convert to UTC ISO string
+                    }
+                } catch (e) {
+                    console.warn('Failed to parse event time:', e);
+                }
+            }
 
             betSlip.push({
                 eventId,
                 matchId: matchId, // Store actual GoalServe match ID for settlement
                 matchName,
                 matchTime: matchTime, // Store match time for validation
+                eventTime: eventTime, // Store UTC event time for database
                 selection,
                 odds,
                 stake: 10,
@@ -5978,13 +5993,15 @@
                             match_id: bet.matchId || bet.eventId,
                             match_name: bet.matchName,
                             match_time: bet.matchTime,
+                            event_time: bet.eventTime, // Include UTC event time
                             selection: bet.selection,
                             odds: parseFloat(bet.odds.toFixed(2)),
                             sport_name: bet.sport || currentSport,  // Include sport from event data
                             bet_timing: bet.bet_timing || 'pregame'  // Include bet timing from event data
                         })),
                         total_odds: parseFloat(totalOdds.toFixed(2)),
-                        total_stake: totalStake
+                        total_stake: totalStake,
+                        event_time: betSlip[0]?.eventTime // Use first bet's event time for combo
                     };
                     
                     const response = await fetch(`${API_BASE}/api/betting/place-combo`, {
@@ -6020,6 +6037,7 @@
                                 match_id: bet.matchId || bet.eventId,
                                 match_name: bet.matchName,
                                 match_time: bet.matchTime,
+                                event_time: bet.eventTime, // Include UTC event time
                                 selection: bet.selection,
                                 odds: parseFloat(bet.odds.toFixed(2)),
                                 stake: bet.stake,
