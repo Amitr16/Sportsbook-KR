@@ -115,8 +115,8 @@ class OptimizedGoalServeClient:
                 'priority': 5
             },
             'cricket': {
-                'endpoint': 'soccer?cat=cricket_10',
-                'events_endpoint': 'soccer?cat=cricket_10',
+                'endpoint': 'cricket/livescore',
+                'events_endpoint': 'cricket/livescore',
                 'icon': '🏏',
                 'display_name': 'Cricket',
                 'has_draw': True,

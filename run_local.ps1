@@ -1,5 +1,5 @@
-# PowerShell script to run local development server
-
+t onA 0# PowerShell script to run local development server
+not 
 Write-Host "🚀 Starting local development server..." -ForegroundColor Green
 Write-Host ""
 

@@ -472,6 +472,100 @@ def reset_operator_password(operator_id):
             'error': str(e)
         }), 500
 
+@superadmin_bp.route('/api/superadmin/export-pending-bets')
+@require_superadmin_auth
+def export_pending_bets():
+    """Export all pending bets to CSV"""
+    try:
+        from src.models.betting import Bet, User
+        from src import db
+        import csv
+        import io
+        from datetime import datetime
+        
+        # Query pending bets with user information
+        pending_bets = db.session.query(Bet, User).join(
+            User, Bet.user_id == User.id
+        ).filter(
+            Bet.status == 'pending'
+        ).order_by(Bet.created_at.desc()).all()
+        
+        if not pending_bets:
+            return jsonify({
+                'success': False,
+                'error': 'No pending bets found'
+            }), 404
+        
+        # Create CSV content
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        headers = [
+            'Bet ID',
+            'User ID', 
+            'Username',
+            'Email',
+            'Match ID',
+            'Match Name',
+            'Selection',
+            'Bet Selection',
+            'Stake',
+            'Odds',
+            'Combo Selections',
+            'Created At',
+            'Updated At'
+        ]
+        writer.writerow(headers)
+        
+        # Write data rows
+        for bet, user in pending_bets:
+            # Parse combo_selections if it's JSON
+            combo_selections_str = ""
+            if bet.combo_selections:
+                try:
+                    combo_data = json.loads(bet.combo_selections)
+                    combo_selections_str = json.dumps(combo_data, indent=2)
+                except:
+                    combo_selections_str = str(bet.combo_selections)
+            
+            row = [
+                bet.id,
+                bet.user_id,
+                user.username or 'N/A',
+                user.email or 'N/A',
+                bet.match_id or 'N/A',
+                bet.match_name or 'N/A',
+                bet.selection or 'N/A',
+                bet.bet_selection or 'N/A',
+                bet.stake or 0,
+                bet.odds or 0,
+                combo_selections_str,
+                bet.created_at.isoformat() if bet.created_at else 'N/A',
+                bet.updated_at.isoformat() if bet.updated_at else 'N/A'
+            ]
+            writer.writerow(row)
+        
+        csv_content = output.getvalue()
+        output.close()
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"pending_bets_export_{timestamp}.csv"
+        
+        return jsonify({
+            'success': True,
+            'csv_content': csv_content,
+            'filename': filename,
+            'count': len(pending_bets)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Error exporting pending bets: {str(e)}'
+        }), 500
+
 @superadmin_bp.route('/api/superadmin/revenue-by-operator')
 @require_superadmin_auth
 def get_revenue_by_operator():
@@ -507,6 +601,12 @@ def get_revenue_by_operator():
             'success': False,
             'error': str(e)
         }), 500
+
+@superadmin_bp.route('/superadmin/rich-dashboard')
+@require_superadmin_auth
+def rich_dashboard():
+    """Rich dashboard with manual settlement functionality"""
+    return render_template_string(RICH_DASHBOARD_TEMPLATE)
 
 # Super Admin Login Template
 SUPERADMIN_LOGIN_TEMPLATE = """
@@ -1094,6 +1194,57 @@ SUPERADMIN_DASHBOARD_TEMPLATE = """
             color: #dc2626;
         }
 
+        /* Manual Settlement Styles */
+        .settlement-controls {
+            padding: 1rem 0;
+        }
+
+        .export-section {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .export-section h3 {
+            color: #1e293b;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .export-section p {
+            color: #64748b;
+            margin-bottom: 1.5rem;
+            line-height: 1.5;
+        }
+
+        .export-status {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+
+        .export-status.success {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            color: #059669;
+        }
+
+        .export-status.error {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #dc2626;
+        }
+
+        .export-status.info {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #2563eb;
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding: 1rem;
@@ -1149,6 +1300,23 @@ SUPERADMIN_DASHBOARD_TEMPLATE = """
                     <h2 class="section-title">Revenue by Operator</h2>
                 </div>
                 <div id="revenueBreakdown" class="loading">Loading revenue data...</div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">
+                    <h2 class="section-title">Manual Settlement</h2>
+                </div>
+                <div class="settlement-controls">
+                    <div class="export-section">
+                        <h3>Export Pending Bets</h3>
+                        <p>Download all pending bets as a CSV file for manual review and settlement.</p>
+                        <button id="exportPendingBetsBtn" class="btn btn-primary">
+                            <span class="btn-text">📊 Export Pending Bets</span>
+                            <span class="btn-loading" style="display: none;">⏳ Exporting...</span>
+                        </button>
+                        <div id="exportStatus" class="export-status" style="display: none;"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -1380,8 +1548,550 @@ SUPERADMIN_DASHBOARD_TEMPLATE = """
             }
         }
 
+        // Export pending bets functionality
+        document.getElementById('exportPendingBetsBtn').addEventListener('click', async function() {
+            const btn = this;
+            const btnText = btn.querySelector('.btn-text');
+            const btnLoading = btn.querySelector('.btn-loading');
+            const statusDiv = document.getElementById('exportStatus');
+            
+            // Show loading state
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline';
+            statusDiv.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/superadmin/export-pending-bets');
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Create and download CSV file
+                    const blob = new Blob([result.csv_content], { type: 'text/csv' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = result.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    
+                    // Show success message
+                    statusDiv.className = 'export-status success';
+                    statusDiv.innerHTML = `✅ Successfully exported ${result.count} pending bets to ${result.filename}`;
+                    statusDiv.style.display = 'block';
+                } else {
+                    // Show error message
+                    statusDiv.className = 'export-status error';
+                    statusDiv.innerHTML = `❌ Error: ${result.error}`;
+                    statusDiv.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Export error:', error);
+                statusDiv.className = 'export-status error';
+                statusDiv.innerHTML = '❌ Network error occurred while exporting';
+                statusDiv.style.display = 'block';
+            } finally {
+                // Reset button state
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                btnLoading.style.display = 'none';
+            }
+        });
+
         // Load dashboard on page load
         loadDashboard();
+    </script>
+</body>
+</html>
+"""
+
+# Rich Dashboard Template with Manual Settlement
+RICH_DASHBOARD_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoalServe - Super Admin Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .header {
+            background: #ff6b35;
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+
+        .nav-bar {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 1rem 2rem;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .nav-btn {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            color: #495057;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .nav-btn:hover {
+            background: #e9ecef;
+            border-color: #dee2e6;
+        }
+
+        .nav-btn.active {
+            background: #ff6b35;
+            color: white;
+            border-color: #ff6b35;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+
+        .main-card {
+            background: white;
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .card-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+        }
+
+        .card-subtitle {
+            color: #7f8c8d;
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 1rem;
+            opacity: 0.9;
+        }
+
+        .action-section {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .action-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 1rem;
+        }
+
+        .btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .export-section {
+            background: #e8f5e8;
+            border: 2px solid #28a745;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .export-title {
+            color: #155724;
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .export-desc {
+            color: #155724;
+            margin-bottom: 1rem;
+            opacity: 0.8;
+        }
+
+        .export-status {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 8px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .export-status.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .export-status.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .export-status.info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+
+        .bets-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        .bets-table th,
+        .bets-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .bets-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .bets-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .settlement-dropdown {
+            padding: 0.5rem;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background: white;
+        }
+
+        .settle-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .settle-btn:hover {
+            background: #0056b3;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #6c757d;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 1rem;
+            }
+            
+            .nav-bar {
+                padding: 1rem;
+                flex-direction: column;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>GoalServe - Super Admin Dashboard</h1>
+    </div>
+
+    <div class="nav-bar">
+        <a href="#" class="nav-btn">Global Overview</a>
+        <a href="#" class="nav-btn">Global Betting Events</a>
+        <a href="#" class="nav-btn active">Manual Settlement</a>
+        <a href="#" class="nav-btn">Global User Management</a>
+        <a href="#" class="nav-btn">Global Reports</a>
+        <a href="#" class="nav-btn">Operator Management</a>
+    </div>
+
+    <div class="container">
+        <div class="main-card">
+            <h2 class="card-title">Global Manual Bet Settlement</h2>
+            <p class="card-subtitle">Manually settle pending bets across all operators by setting match outcomes</p>
+            
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalMatches">-</div>
+                    <div class="stat-label">Total Matches</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="totalLiability">-</div>
+                    <div class="stat-label">Total Liability</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="pendingBets">-</div>
+                    <div class="stat-label">Pending Bets</div>
+                </div>
+            </div>
+
+            <div class="action-section">
+                <h3 class="action-title">Settlement Actions</h3>
+                <button id="refreshBtn" class="btn">Refresh Settlement Data</button>
+                
+                <div class="export-section">
+                    <h4 class="export-title">📊 Export Pending Bets</h4>
+                    <p class="export-desc">Download all pending bets as a CSV file for manual review and settlement.</p>
+                    <button id="exportPendingBetsBtn" class="btn">
+                        <span class="btn-text">📊 Export Pending Bets</span>
+                        <span class="btn-loading" style="display: none;">⏳ Exporting...</span>
+                    </button>
+                    <div id="exportStatus" class="export-status" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div id="betsTable" class="loading">Loading pending bets...</div>
+        </div>
+    </div>
+
+    <script>
+        // Load settlement data
+        async function loadSettlementData() {
+            try {
+                // Load global stats
+                const statsResponse = await fetch('/api/superadmin/stats');
+                const statsData = await statsResponse.json();
+                
+                if (statsData.success) {
+                    document.getElementById('totalMatches').textContent = statsData.total_matches || 0;
+                    document.getElementById('totalLiability').textContent = `$${(statsData.total_liability || 0).toFixed(2)}`;
+                    document.getElementById('pendingBets').textContent = statsData.pending_bets || 0;
+                }
+                
+                // Load pending bets (mock data for now)
+                loadPendingBets();
+                
+            } catch (error) {
+                console.error('Error loading settlement data:', error);
+            }
+        }
+
+        // Load pending bets
+        function loadPendingBets() {
+            const tableContainer = document.getElementById('betsTable');
+            
+            // Mock data - replace with actual API call
+            const mockBets = [
+                {
+                    match: "Combo Bet (5 selections)",
+                    operator: "Default Sportsbook",
+                    stake: "$19.00",
+                    outcome: "Combo: 5 selections",
+                    liability: "$861.84"
+                },
+                {
+                    match: "Combo Bet (4 selections)",
+                    operator: "Default Sportsbook", 
+                    stake: "$10.00",
+                    outcome: "Combo: 4 selections",
+                    liability: "$141.70"
+                },
+                {
+                    match: "Combo Bet (2 selections)",
+                    operator: "Default Sportsbook",
+                    stake: "$10.00", 
+                    outcome: "Combo: 2 selections",
+                    liability: "$27.60"
+                },
+                {
+                    match: "San Diego Padres vs Cincinnati Reds",
+                    operator: "megabook",
+                    stake: "$10.00",
+                    outcome: "Cincinnati Reds", 
+                    liability: "$22.50"
+                }
+            ];
+
+            let tableHTML = `
+                <table class="bets-table">
+                    <thead>
+                        <tr>
+                            <th>Match & Market</th>
+                            <th>Operator</th>
+                            <th>Bet Summary</th>
+                            <th>Outcomes</th>
+                            <th>Total Liability</th>
+                            <th>Settlement</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            mockBets.forEach(bet => {
+                tableHTML += `
+                    <tr>
+                        <td>${bet.match}</td>
+                        <td>${bet.operator}</td>
+                        <td>1 bets<br>Total Stake: ${bet.stake}</td>
+                        <td>${bet.outcome}</td>
+                        <td>${bet.liability}</td>
+                        <td>
+                            <select class="settlement-dropdown">
+                                <option>No Result (Cancel & Refund)</option>
+                                <option>Won</option>
+                                <option>Lost</option>
+                            </select>
+                            <br><br>
+                            <button class="settle-btn">Settle</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tableHTML += `
+                    </tbody>
+                </table>
+            `;
+
+            tableContainer.innerHTML = tableHTML;
+        }
+
+        // Export pending bets functionality
+        document.getElementById('exportPendingBetsBtn').addEventListener('click', async function() {
+            const btn = this;
+            const btnText = btn.querySelector('.btn-text');
+            const btnLoading = btn.querySelector('.btn-loading');
+            const statusDiv = document.getElementById('exportStatus');
+            
+            // Show loading state
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline';
+            statusDiv.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/superadmin/export-pending-bets');
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Create and download CSV file
+                    const blob = new Blob([result.csv_content], { type: 'text/csv' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = result.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    
+                    // Show success message
+                    statusDiv.className = 'export-status success';
+                    statusDiv.innerHTML = `✅ Successfully exported ${result.count} pending bets to ${result.filename}`;
+                    statusDiv.style.display = 'block';
+                } else {
+                    // Show error message
+                    statusDiv.className = 'export-status error';
+                    statusDiv.innerHTML = `❌ Error: ${result.error}`;
+                    statusDiv.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Export error:', error);
+                statusDiv.className = 'export-status error';
+                statusDiv.innerHTML = '❌ Network error occurred while exporting';
+                statusDiv.style.display = 'block';
+            } finally {
+                // Reset button state
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                btnLoading.style.display = 'none';
+            }
+        });
+
+        // Refresh button
+        document.getElementById('refreshBtn').addEventListener('click', function() {
+            loadSettlementData();
+        });
+
+        // Load data on page load
+        loadSettlementData();
     </script>
 </body>
 </html>

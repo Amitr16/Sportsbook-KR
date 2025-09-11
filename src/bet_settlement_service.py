@@ -347,6 +347,16 @@ class BetSettlementService:
             logger.info(f"Checking historical data for sports: {sports_to_check}")
             
             for sport in sports_to_check:
+                # Special handling for cricket - use the cricket/livescore feed
+                if sport == 'cricket':
+                    try:
+                        logger.info("Checking cricket/livescore for historical data")
+                        cricket_events = self._get_cricket_historical_events()
+                        historical_events.extend(cricket_events)
+                    except Exception as e:
+                        logger.warning(f"Error fetching cricket data: {e}")
+                    continue
+                
                 # First check the /home endpoint for each sport
                 try:
                     # Use soccernew for soccer, otherwise use sport/home
@@ -455,6 +465,8 @@ class BetSettlementService:
                     sports_to_check.add('soccer')
                 elif any(team in match_name for team in ['patriots', 'cowboys', 'packers', 'steelers', '49ers', 'chiefs', 'bills', 'ravens', 'eagles', 'giants', 'jets']):
                     sports_to_check.add('football')
+                elif any(team in match_name for team in ['india', 'australia', 'england', 'pakistan', 'south africa', 'new zealand', 'west indies', 'sri lanka', 'bangladesh', 'afghanistan', 'ireland', 'zimbabwe']):
+                    sports_to_check.add('cricket')
                 else:
                     # Default to soccer for unknown teams
                     sports_to_check.add('soccer')
@@ -1144,6 +1156,24 @@ class BetSettlementService:
     def _determine_combo_selection_outcome(self, selection, match_event, home_score, away_score):
         """Determine if a combo bet selection won"""
         try:
+            # Use cricket-specific logic if this is a cricket match
+            if match_event.get('sport') == 'cricket':
+                winner = match_event.get('winner')
+                if not winner:
+                    return False
+                
+                selection_type = selection.get('selection', '').lower()
+                
+                # Map bet selections to winners
+                if selection_type in ['1', 'home', match_event['home_team'].lower()]:
+                    return winner == 'home'
+                elif selection_type in ['2', 'away', match_event['away_team'].lower()]:
+                    return winner == 'away'
+                elif selection_type in ['x', 'draw', 'tie']:
+                    return winner == 'draw'
+                else:
+                    return False
+            
             selection_type = selection.get('selection', '')
             match_event_id = match_event.get('id')
             
@@ -1182,6 +1212,10 @@ class BetSettlementService:
     def _determine_bet_outcome(self, bet, match_event, home_score, away_score):
         """Determine if a bet won based on match result"""
         try:
+            # Use cricket-specific logic if this is a cricket match
+            if match_event.get('sport') == 'cricket':
+                return self._determine_cricket_bet_outcome(bet, match_event)
+            
             selection = bet.selection.lower()
             home_team = match_event['home_team'].lower()
             away_team = match_event['away_team'].lower()
@@ -1470,4 +1504,186 @@ class BetSettlementService:
                 
         except Exception as e:
             logger.error(f"❌ Error updating operator {operator_id} revenue: {e}")
-            current_app.db.session.rollback() 
+            current_app.db.session.rollback()
+    
+    def _get_cricket_historical_events(self):
+        """Get cricket historical events from the cricket/livescore feed"""
+        try:
+            logger.info("🏏 Fetching cricket historical events from cricket/livescore feed")
+            
+            # Use the special cricket feed URL
+            cricket_url = f"{self.client.base_url}/{self.client.access_token}/cricket/livescore"
+            
+            response = self.client.session.get(cricket_url, timeout=self.client.timeout)
+            response.raise_for_status()
+            
+            # Parse the XML response
+            cricket_data = robust_goalserve_parse(response.text, response.headers.get('content-type', ''))
+            if not cricket_data:
+                logger.warning("Failed to parse cricket XML data")
+                return []
+            
+            events = []
+            
+            # Extract matches from cricket data structure
+            if 'scores' in cricket_data and 'category' in cricket_data['scores']:
+                categories = cricket_data['scores']['category']
+                if not isinstance(categories, list):
+                    categories = [categories]
+                
+                for category in categories:
+                    if 'match' in category:
+                        matches = category['match']
+                        if not isinstance(matches, list):
+                            matches = [matches]
+                        
+                        for match in matches:
+                            event = self._parse_cricket_match_for_settlement(match, category.get('@name', 'Unknown'))
+                            if event:
+                                events.append(event)
+            
+            logger.info(f"🏏 Found {len(events)} cricket events for settlement")
+            return events
+            
+        except Exception as e:
+            logger.error(f"Error fetching cricket historical events: {e}")
+            return []
+    
+    def _parse_cricket_match_for_settlement(self, match, category_name):
+        """Parse a cricket match from the cricket/livescore feed for settlement"""
+        try:
+            # Extract basic match info
+            match_id = match.get('@id', '')
+            home_team = match.get('localteam', {}).get('@name', 'Unknown Home')
+            away_team = match.get('visitorteam', {}).get('@name', 'Unknown Away')
+            status = match.get('@status', '')
+            match_type = match.get('@type', '')
+            venue = match.get('@venue', '')
+            
+            # Determine if match is completed
+            is_completed = status.lower() in ['finished', 'completed', 'result']
+            is_cancelled = status.lower() in ['cancelled', 'postponed', 'abandoned']
+            
+            # Extract scores from cricket-specific structure
+            home_score = self._extract_cricket_score(match.get('localteam', {}))
+            away_score = self._extract_cricket_score(match.get('visitorteam', {}))
+            
+            # Determine winner based on cricket rules
+            winner = self._determine_cricket_winner(match, home_score, away_score)
+            
+            # Create event object for settlement
+            event = {
+                'id': match_id,
+                'home_team': home_team,
+                'away_team': away_team,
+                'home_score': home_score,
+                'away_score': away_score,
+                'status': status,
+                'is_completed': is_completed,
+                'is_cancelled': is_cancelled,
+                'match_name': f"{home_team} vs {away_team}",
+                'sport': 'cricket',
+                'category': category_name,
+                'match_type': match_type,
+                'venue': venue,
+                'winner': winner,  # 'home', 'away', 'draw', or None
+                'raw_match_data': match  # Store raw data for detailed analysis
+            }
+            
+            logger.debug(f"🏏 Parsed cricket match: {home_team} vs {away_team} - Status: {status}, Winner: {winner}")
+            return event
+            
+        except Exception as e:
+            logger.error(f"Error parsing cricket match for settlement: {e}")
+            return None
+    
+    def _extract_cricket_score(self, team_data):
+        """Extract score from cricket team data"""
+        try:
+            # Try different score fields that might be present
+            score_fields = ['@totalscore', '@goals', 'totalscore', 'goals', 'runs', 'score']
+            
+            for field in score_fields:
+                score = team_data.get(field)
+                if score and score != '?':
+                    # Extract numeric part from score string (e.g., "607/7d" -> 607)
+                    if isinstance(score, str) and '/' in score:
+                        score = score.split('/')[0]
+                    try:
+                        return int(score)
+                    except (ValueError, TypeError):
+                        continue
+            
+            return 0
+        except Exception as e:
+            logger.debug(f"Error extracting cricket score: {e}")
+            return 0
+    
+    def _determine_cricket_winner(self, match, home_score, away_score):
+        """Determine winner of cricket match based on cricket rules"""
+        try:
+            status = match.get('@status', '').lower()
+            
+            # Check if match is finished
+            if status not in ['finished', 'completed', 'result']:
+                return None
+            
+            # Check for explicit winner in match data
+            localteam = match.get('localteam', {})
+            visitorteam = match.get('visitorteam', {})
+            
+            local_winner = localteam.get('@winner', '').lower()
+            visitor_winner = visitorteam.get('@winner', '').lower()
+            
+            if local_winner == 'true':
+                return 'home'
+            elif visitor_winner == 'true':
+                return 'away'
+            
+            # Check comment for winner info
+            comment = match.get('comment', {})
+            if isinstance(comment, dict):
+                comment_text = comment.get('@post', '').lower()
+                if home_score > away_score and 'won' in comment_text:
+                    return 'home'
+                elif away_score > home_score and 'won' in comment_text:
+                    return 'away'
+                elif 'draw' in comment_text or 'tie' in comment_text:
+                    return 'draw'
+            
+            # Fallback to score comparison (though this might not be accurate for cricket)
+            if home_score > away_score:
+                return 'home'
+            elif away_score > home_score:
+                return 'away'
+            else:
+                return 'draw'
+                
+        except Exception as e:
+            logger.error(f"Error determining cricket winner: {e}")
+            return None
+    
+    def _determine_cricket_bet_outcome(self, bet, match_event):
+        """Determine if a cricket bet won based on match result"""
+        try:
+            selection = bet.selection.lower()
+            winner = match_event.get('winner')
+            
+            if not winner:
+                logger.warning(f"Cricket match {match_event.get('id')} has no determined winner")
+                return False
+            
+            # Map bet selections to winners
+            if selection in ['1', 'home', match_event['home_team'].lower()]:
+                return winner == 'home'
+            elif selection in ['2', 'away', match_event['away_team'].lower()]:
+                return winner == 'away'
+            elif selection in ['x', 'draw', 'tie']:
+                return winner == 'draw'
+            else:
+                logger.warning(f"Unknown cricket bet selection: {selection}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error determining cricket bet outcome: {e}")
+            return False 

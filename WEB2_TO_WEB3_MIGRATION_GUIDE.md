@@ -17,7 +17,7 @@ This document provides a comprehensive guide for migrating the Kryzel Sports Bet
 
 ### Overview
 Operators register to create their own branded sportsbook with custom subdomain and admin access.
-
+  
 ### API Flow
 
 #### 1.1 Initial Registration Request
@@ -28,6 +28,7 @@ Operators register to create their own branded sportsbook with custom subdomain 
 ```python
 # Request Body
 {
+    
     "sportsbook_name": "Megabook Sports",
     "subdomain": "megabook",
     "admin_username": "admin",

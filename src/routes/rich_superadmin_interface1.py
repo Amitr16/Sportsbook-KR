@@ -1539,6 +1539,118 @@ def global_manual_settle_bets():
             'error': 'Failed to settle bets'
         }), 500
 
+@rich_superadmin_bp.route('/api/superadmin/export-pending-bets')
+@check_superadmin_auth
+def export_pending_bets():
+    """Export all pending bets to CSV"""
+    try:
+        import csv
+        import io
+        from datetime import datetime
+        
+        conn = get_db_connection()
+        
+        # Query pending bets with user information using SQLite3
+        query = """
+        SELECT 
+            b.id,
+            b.user_id,
+            b.match_id,
+            b.match_name,
+            b.selection,
+            b.bet_selection,
+            b.stake,
+            b.odds,
+            b.combo_selections,
+            b.created_at,
+            b.updated_at,
+            u.username,
+            u.email
+        FROM bets b
+        LEFT JOIN users u ON b.user_id = u.id
+        WHERE b.status = 'pending'
+        ORDER BY b.created_at DESC
+        """
+        
+        pending_bets = conn.execute(query).fetchall()
+        conn.close()
+        
+        if not pending_bets:
+            return jsonify({
+                'success': False,
+                'error': 'No pending bets found'
+            }), 404
+        
+        # Create CSV content
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        headers = [
+            'Bet ID',
+            'User ID', 
+            'Username',
+            'Email',
+            'Match ID',
+            'Match Name',
+            'Selection',
+            'Bet Selection',
+            'Stake',
+            'Odds',
+            'Combo Selections',
+            'Created At',
+            'Updated At'
+        ]
+        writer.writerow(headers)
+        
+        # Write data rows
+        for bet in pending_bets:
+            # Parse combo_selections if it's JSON
+            combo_selections_str = ""
+            if bet['combo_selections']:
+                try:
+                    combo_data = json.loads(bet['combo_selections'])
+                    combo_selections_str = json.dumps(combo_data, indent=2)
+                except:
+                    combo_selections_str = str(bet['combo_selections'])
+            
+            row = [
+                bet['id'],
+                bet['user_id'],
+                bet['username'] or 'N/A',
+                bet['email'] or 'N/A',
+                bet['match_id'] or 'N/A',
+                bet['match_name'] or 'N/A',
+                bet['selection'] or 'N/A',
+                bet['bet_selection'] or 'N/A',
+                bet['stake'] or 0,
+                bet['odds'] or 0,
+                combo_selections_str,
+                bet['created_at'] or 'N/A',
+                bet['updated_at'] or 'N/A'
+            ]
+            writer.writerow(row)
+        
+        csv_content = output.getvalue()
+        output.close()
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"pending_bets_export_{timestamp}.csv"
+        
+        return jsonify({
+            'success': True,
+            'csv_content': csv_content,
+            'filename': filename,
+            'count': len(pending_bets)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Error exporting pending bets: {str(e)}'
+        }), 500
+
 # Rich Super Admin Template (same rich interface as original admin_app.py but global)
 RICH_SUPERADMIN_TEMPLATE = '''
 <!DOCTYPE html>
@@ -2122,6 +2234,25 @@ RICH_SUPERADMIN_TEMPLATE = '''
         [class*="welcome"] {
             display: none !important;
         }
+
+        /* Export Status Styles */
+        .export-status.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .export-status.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .export-status.info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
     </style>
 </head>
 <body>
@@ -2305,10 +2436,22 @@ RICH_SUPERADMIN_TEMPLATE = '''
             
             <button class="btn btn-primary" onclick="loadSettlementData()">🔄 Refresh Settlement Data</button>
             
+            <!-- Export Section -->
+            <div class="export-section" style="background: #e8f5e8; border: 2px solid #28a745; border-radius: 12px; padding: 1.5rem; margin: 1rem 0;">
+                <h4 style="color: #155724; font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem;">📊 Export Pending Bets</h4>
+                <p style="color: #155724; margin-bottom: 1rem; opacity: 0.8;">Download all pending bets as a CSV file for manual review and settlement.</p>
+                <button id="exportPendingBetsBtn" class="btn btn-success" style="background: #28a745; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                    <span class="btn-text">📊 Export Pending Bets</span>
+                    <span class="btn-loading" style="display: none;">⏳ Exporting...</span>
+                </button>
+                <div id="exportStatus" class="export-status" style="margin-top: 1rem; padding: 1rem; border-radius: 8px; font-weight: 500; display: none;"></div>
+            </div>
+            
             <div class="table-container">
                 <table id="settlement-table">
                     <thead>
                         <tr>
+                            <th>Bet ID</th>
                             <th>Match & Market</th>
                             <th>Operator</th>
                             <th>Bet Summary</th>
@@ -2318,7 +2461,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                         </tr>
                     </thead>
                     <tbody id="settlement-tbody">
-                        <tr><td colspan="6" class="loading">Loading settlement data...</td></tr>
+                        <tr><td colspan="7" class="loading">Loading settlement data...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -3647,13 +3790,13 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
                 if (data.error) {
                     document.getElementById('settlement-tbody').innerHTML = 
-                        `<tr><td colspan="6" class="error">Error: ${data.error}</td></tr>`;
+                        `<tr><td colspan="7" class="error">Error: ${data.error}</td></tr>`;
                     return;
                 }
                 
                 if (!data.success) {
                     document.getElementById('settlement-tbody').innerHTML = 
-                        `<tr><td colspan="6" class="error">Error: ${data.error || 'Failed to load data'}</td></tr>`;
+                        `<tr><td colspan="7" class="error">Error: ${data.error || 'Failed to load data'}</td></tr>`;
                     return;
                 }
                 
@@ -3667,10 +3810,14 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 // Update table
                 const tbody = document.getElementById('settlement-tbody');
                 if (settlementData.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="loading">No pending bets to settle</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="loading">No pending bets to settle</td></tr>';
                 } else {
                     tbody.innerHTML = settlementData.map(item => `
                         <tr>
+                            <td>
+                                <div style="font-weight: 600; color: #007bff;">${item.bets.map(bet => bet.id).join(', ')}</div>
+                                <div style="font-size: 0.8rem; color: #666;">Bet ID${item.bets.length > 1 ? 's' : ''}</div>
+                            </td>
                             <td>
                                 <div style="font-weight: 600;">${item.match_name}</div>
                                 <div style="font-size: 0.9rem; color: #666;">${item.sport_name} • ${item.market}</div>
@@ -3698,7 +3845,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
             } catch (error) {
                 document.getElementById('settlement-tbody').innerHTML = 
-                    `<tr><td colspan="6" class="error">Error loading settlement data: ${error.message}</td></tr>`;
+                    `<tr><td colspan="7" class="error">Error loading settlement data: ${error.message}</td></tr>`;
             }
         }
         
@@ -3752,6 +3899,63 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 alert('Error settling bets: ' + error.message);
             }
         }
+
+        // Export Pending Bets Functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const exportBtn = document.getElementById('exportPendingBetsBtn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', async function() {
+                    const btn = this;
+                    const btnText = btn.querySelector('.btn-text');
+                    const btnLoading = btn.querySelector('.btn-loading');
+                    const statusDiv = document.getElementById('exportStatus');
+                    
+                    // Show loading state
+                    btn.disabled = true;
+                    btnText.style.display = 'none';
+                    btnLoading.style.display = 'inline';
+                    statusDiv.style.display = 'none';
+                    
+                    try {
+                        const response = await fetch('/api/superadmin/export-pending-bets');
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            // Create and download CSV file
+                            const blob = new Blob([result.csv_content], { type: 'text/csv' });
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = result.filename;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            window.URL.revokeObjectURL(url);
+                            
+                            // Show success message
+                            statusDiv.className = 'export-status success';
+                            statusDiv.innerHTML = `✅ Successfully exported ${result.count} pending bets to ${result.filename}`;
+                            statusDiv.style.display = 'block';
+                        } else {
+                            // Show error message
+                            statusDiv.className = 'export-status error';
+                            statusDiv.innerHTML = `❌ Error: ${result.error}`;
+                            statusDiv.style.display = 'block';
+                        }
+                    } catch (error) {
+                        console.error('Export error:', error);
+                        statusDiv.className = 'export-status error';
+                        statusDiv.innerHTML = '❌ Network error occurred while exporting';
+                        statusDiv.style.display = 'block';
+                    } finally {
+                        // Reset button state
+                        btn.disabled = false;
+                        btnText.style.display = 'inline';
+                        btnLoading.style.display = 'none';
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>
