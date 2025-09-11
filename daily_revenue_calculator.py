@@ -162,7 +162,6 @@ def update_daily_revenue_calculations():
                 bookmaker_net_own, community_share_30, remaining_profit, calculation_metadata, processed_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-            h.py missing? 
             conn.execute(insert_query, (
                 operator_id,
                 date.today(),
