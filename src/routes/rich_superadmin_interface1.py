@@ -371,13 +371,27 @@ def get_global_betting_events():
             
             all_events.append(betting_event)
         
-        conn.close()
-        
-        # Calculate summary
+        # Calculate summary from settled bets (not pending bets)
         total_events = len(all_events)
         active_events = len([e for e in all_events if e['status'] == 'active'])
-        total_liability = sum([e['liability'] for e in all_events])
-        total_revenue = sum([e['revenue'] for e in all_events])
+        
+        # Get actual settled bets data for summary
+        settled_stats_query = """
+        SELECT 
+            COUNT(*) as total_bets,
+            COALESCE(SUM(stake), 0) as total_stakes,
+            COALESCE(SUM(stake), 0) - COALESCE(SUM(actual_return), 0) as total_revenue
+        FROM bets b
+        JOIN users u ON b.user_id = u.id
+        JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+        WHERE op.is_active = TRUE AND b.status IN ('won', 'lost')
+        """
+        
+        settled_stats = conn.execute(settled_stats_query).fetchone()
+        total_liability = float(settled_stats['total_stakes'] or 0)  # Total stakes from settled bets
+        total_revenue = float(settled_stats['total_revenue'] or 0)   # Actual revenue from settled bets
+        
+        conn.close()
         
         return jsonify({
             'success': True,
@@ -722,20 +736,31 @@ def get_global_overview():
         # Get total users
         total_users = conn.execute("SELECT COUNT(*) as count FROM users").fetchone()['count']
         
-        # Get total bets
-        total_bets = conn.execute("SELECT COUNT(*) as count FROM bets").fetchone()['count']
+        # Get total bets (settled bets only for consistency with revenue)
+        total_bets = conn.execute("""
+            SELECT COUNT(*) as count 
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+            WHERE op.is_active = TRUE AND b.status IN ('won', 'lost')
+        """).fetchone()['count']
         
-        # Get total revenue
+        # Get total revenue from settled bets (actual revenue)
         total_revenue = conn.execute("""
-            SELECT COALESCE(SUM(total_revenue), 0) as total 
-            FROM sportsbook_operators
+            SELECT COALESCE(SUM(stake), 0) - COALESCE(SUM(actual_return), 0) as total
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+            WHERE op.is_active = TRUE AND b.status IN ('won', 'lost')
         """).fetchone()['total']
         
-        # Get active events (events with pending bets)
+        # Get active events (total count of pending bets)
         active_events = conn.execute("""
-            SELECT COUNT(DISTINCT match_id) as count 
-            FROM bets 
-            WHERE status = 'pending'
+            SELECT COUNT(*) as count 
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+            WHERE op.is_active = TRUE AND b.status = 'pending'
         """).fetchone()['count']
         
         # Get total liability (sum of all pending bet stakes)
@@ -773,7 +798,7 @@ def get_operators():
                so.created_at, so.is_active,
                (SELECT COUNT(*) FROM users WHERE sportsbook_operator_id = so.id) as user_count,
                (SELECT COUNT(*) FROM bets b JOIN users u ON b.user_id = u.id WHERE u.sportsbook_operator_id = so.id) as bet_count,
-               (SELECT COALESCE(SUM(stake), 0) - COALESCE(SUM(potential_return), 0) FROM bets b JOIN users u ON b.user_id = u.id WHERE u.sportsbook_operator_id = so.id AND b.status IN ('won', 'lost')) as revenue
+               (SELECT COALESCE(SUM(stake), 0) - COALESCE(SUM(actual_return), 0) FROM bets b JOIN users u ON b.user_id = u.id WHERE u.sportsbook_operator_id = so.id AND b.status IN ('won', 'lost')) as revenue
         FROM sportsbook_operators so
         ORDER BY so.created_at DESC
         """
