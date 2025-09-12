@@ -248,74 +248,196 @@ def get_tenant_betting_events(subdomain):
         search_query = request.args.get('search', '').lower()
         sort_by = request.args.get('sort_by', 'event_id')
         sort_order = request.args.get('sort_order', 'asc')
-        show_only_with_bets = request.args.get('show_only_with_bets', 'false', type=str).lower() == 'true'
         
         print(f"🔍 DEBUG: Query params - page: {page}, per_page: {per_page}, sort_by: {sort_by}, sort_order: {sort_order}")
         print(f"🔍 DEBUG: Filters - sport: {sport_filter}, market: {market_filter}, search: {search_query}")
-        print(f"🔍 DEBUG: show_only_with_bets: {show_only_with_bets}")
+        print(f"🔍 DEBUG: Always showing only events with bets")
         
-        # First, query the database to find which event_market combinations have bets for this operator
-        if show_only_with_bets:
-            print(f"🔍 DEBUG: Querying database for events with bets for operator {operator['id']}...")
-            # Get events with bets from database first - use the correct column names from bets table
-            bet_events_query = """
-                SELECT DISTINCT b.match_id, b.sport_name, b.market, COUNT(*) as bet_count,
-                       SUM(CASE WHEN b.status = 'pending' THEN b.stake ELSE 0 END) as total_liability,
-                       SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_revenue
-                FROM bets b 
-                JOIN users u ON b.user_id = u.id 
-                WHERE u.sportsbook_operator_id = ? AND b.status IN ('pending', 'won', 'lost')
-                GROUP BY b.match_id, b.sport_name, b.market
-                HAVING COUNT(*) > 0
-                ORDER BY bet_count DESC
-            """
-            print(f"🔍 DEBUG: Executing SQL query with operator_id: {operator['id']}")
-            bet_events_result = conn.execute(bet_events_query, (operator['id'],)).fetchall()
-            print(f"🔍 DEBUG: Found {len(bet_events_result)} event_market combinations with bets")
+        # Simple query: Get all pending bets grouped by event_id + market_id
+        bet_events_query = """
+            SELECT 
+                b.match_id,
+                b.sport_name,
+                b.market,
+                COUNT(*) as bet_count,
+                SUM(b.stake) as total_stake,
+                SUM(b.potential_return) as total_potential_return,
+                SUM(b.stake) as total_liability,
+                SUM(b.potential_return - b.stake) as total_revenue,
+                SUM(CASE WHEN b.is_active = TRUE THEN 1 ELSE 0 END) as active_bet_count,
+                COUNT(*) as total_bet_count
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            WHERE u.sportsbook_operator_id = ? AND b.status = 'pending'
+            GROUP BY b.match_id, b.sport_name, b.market
+            ORDER BY b.match_id, b.sport_name, b.market
+        """
+        
+        print(f"🔍 DEBUG: Executing SQL query for operator {operator['id']}")
+        bet_events_result = conn.execute(bet_events_query, (operator['id'],)).fetchall()
+        print(f"🔍 DEBUG: Found {len(bet_events_result)} event_market combinations with pending bets")
+        
+        all_events = []
+        all_sports = set()
+        all_markets = set()
+        
+        # Process each bet combination directly from database
+        for row in bet_events_result:
+            match_id = str(row['match_id'])
+            sport_name = str(row['sport_name'])
+            market_id = str(row['market'])
+            bet_count = row['bet_count']
+            total_liability = float(row['total_liability'] or 0)
+            total_revenue = float(row['total_revenue'] or 0)
+            active_bet_count = row['active_bet_count']
+            total_bet_count = row['total_bet_count']
             
-            # Debug: Print the actual results
-            for row in bet_events_result:
-                print(f"🔍 DEBUG: Bet event row: match_id={row['match_id']}, sport_name={row['sport_name']}, market={row['market']}, bet_count={row['bet_count']}, liability={row['total_liability']}, revenue={row['total_revenue']}")
+            # Determine if event is active based on active bets
+            is_event_active = active_bet_count > 0
+            event_status = 'active' if is_event_active else 'disabled'
             
-            # Create a set of events to load - convert all to strings for consistent matching
-            events_to_load = set()
-            bet_info_map = {}  # Store bet information for each event_market combination
+            # Apply sport filter if specified
+            if sport_filter and sport_name.lower() != sport_filter.lower():
+                continue
             
-            for row in bet_events_result:
-                match_id = str(row['match_id'])
-                sport_name = str(row['sport_name'])
-                market_id = str(row['market'])
-                events_to_load.add((match_id, sport_name, market_id))
-                
-                # Store bet information for this event_market combination
-                event_key = f"{match_id}_{market_id}"
-                bet_info_map[event_key] = {
-                    'bet_count': row['bet_count'],
-                    'total_liability': float(row['total_liability'] or 0),
-                    'total_revenue': float(row['total_revenue'] or 0)
-                }
-                
-                print(f"🔍 DEBUG: Added to events_to_load: ({match_id}, {sport_name}, {market_id}) with {row['bet_count']} bets")
-                print(f"🔍 DEBUG: Stored in bet_info_map[{event_key}]: {bet_info_map[event_key]}")
-        else:
-            # Load all events (slower)
-            events_to_load = set()
-            bet_info_map = {}
-            print(f"🔍 DEBUG: Loading all events (show_only_with_bets=False)")
+            # Apply market filter if specified
+            if market_filter and market_id.lower() != market_filter.lower():
+                continue
+            
+            # Apply search filter if specified
+            if search_query and search_query.lower() not in match_id.lower():
+                continue
+            
+            # Add to sports and markets filters
+            all_sports.add(sport_name)
+            all_markets.add(f"Market {market_id}")
+            
+            # Create betting event entry
+            betting_event = {
+                'id': f"{match_id}_{market_id}",
+                'unique_id': f"{match_id}_{market_id}",
+                'event_id': f"{match_id}_{market_id}",
+                'sport': sport_name,
+                'event_name': f"Event {match_id}",
+                'market': f"Market {market_id}",
+                'market_display': f"Market {market_id}",
+                'category': 'Unknown Category',
+                'odds_data': [],
+                'is_active': is_event_active,
+                'date': '',
+                'time': '',
+                'status': event_status,
+                'total_bets': bet_count,
+                'max_liability': total_liability,
+                'max_possible_gain': total_revenue,
+                'liability': total_liability,
+                'revenue': total_revenue,
+                'name': f"Event {match_id}"
+            }
+            
+            all_events.append(betting_event)
         
-        # Load sports and events data directly from JSON files to avoid HTTP loops
-        import os
-        import json
+        conn.close()
         
-        print(f"🔍 DEBUG: Looking for sports directory: {sports_dir}")
-        if not os.path.exists(sports_dir):
-            print(f"🔍 DEBUG: Sports directory not found: {sports_dir}")
-            return jsonify({'error': 'Sports directory not found'})
+        # Calculate summary
+        total_events = len(all_events)
+        active_events = len([e for e in all_events if e['status'] == 'active'])
+        total_liability = sum([e['liability'] for e in all_events])
+        total_revenue = sum([e['revenue'] for e in all_events])
         
-        print(f"🔍 DEBUG: Sports directory found, starting to load events...")
+        return jsonify({
+            'events': all_events,
+            'pagination': {
+                'page': 1,
+                'per_page': len(all_events),
+                'total': total_events,
+                'pages': 1
+            },
+            'summary': {
+                'total_events': total_events,
+                'active_events': active_events,
+                'total_liability': total_liability,
+                'total_revenue': total_revenue,
+                'max_liability': total_liability,
+                'max_possible_gain': total_revenue
+            },
+            'filters': {
+                'sports': sorted(all_sports),
+                'markets': sorted(all_markets)
+            }
+        })
         
-        # Get all sports
-        sports_data = {}
+    except Exception as e:
+        print(f"Error in get_tenant_betting_events: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@rich_admin_bp.route('/<subdomain>/admin/api/stats')
+def get_tenant_stats(subdomain):
+    """Get statistics for the tenant admin dashboard"""
+    operator = get_operator_from_session()
+    if not operator:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    try:
+        conn = get_db_connection()
+        
+        # Get basic stats
+        total_users = conn.execute("""
+            SELECT COUNT(*) as count FROM users u 
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
+            WHERE op.id = ?
+        """, (operator['id'],)).fetchone()['count']
+        
+        active_users = conn.execute("""
+            SELECT COUNT(*) as count FROM users u 
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
+            WHERE op.id = ? AND u.is_active = TRUE
+        """, (operator['id'],)).fetchone()['count']
+        
+        total_bets = conn.execute("""
+            SELECT COUNT(*) as count FROM bets b 
+            JOIN users u ON b.user_id = u.id 
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
+            WHERE op.id = ?
+        """, (operator['id'],)).fetchone()['count']
+        
+        pending_bets = conn.execute("""
+            SELECT COUNT(*) as count FROM bets b 
+            JOIN users u ON b.user_id = u.id 
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
+            WHERE op.id = ? AND b.status = 'pending'
+        """, (operator['id'],)).fetchone()['count']
+        
+        total_stake = conn.execute("""
+            SELECT COALESCE(SUM(stake), 0) as total FROM bets b 
+            JOIN users u ON b.user_id = u.id 
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
+            WHERE op.id = ?
+        """, (operator['id'],)).fetchone()['total']
+        
+        total_liability = conn.execute("""
+            SELECT COALESCE(SUM(stake), 0) as total FROM bets b 
+            JOIN users u ON b.user_id = u.id 
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
+            WHERE op.id = ? AND b.status = 'pending'
+        """, (operator['id'],)).fetchone()['total']
+        
+        conn.close()
+        
+        return jsonify({
+            'total_users': total_users,
+            'active_users': active_users,
+            'total_bets': total_bets,
+            'pending_bets': pending_bets,
+            'total_stake': float(total_stake),
+            'total_liability': float(total_liability),
+            'active_events': 0  # Will be calculated separately
+        })
+        
+    except Exception as e:
+        print(f"Error getting tenant stats: {e}")
+        return jsonify({'error': str(e)}), 500
         all_events = []
         all_sports = set()
         all_markets = set()
@@ -420,7 +542,7 @@ def get_tenant_betting_events(subdomain):
                                             
                                             # If we're only showing events with bets, check if this event_market has bets
                                             if show_only_with_bets:
-                                                event_key = (str(event_id), str(sport_folder), str(market_id))
+                                                event_key = (str(event_id), str(sport_folder).lower(), str(market_id))
                                                 if event_key not in events_to_load:
                                                     print(f"🔍 DEBUG: Skipping cricket event {event_id} market {market_id} - no bets found")
                                                     continue  # Skip this event_market combination
@@ -513,7 +635,7 @@ def get_tenant_betting_events(subdomain):
                                         
                                         # If we're only showing events with bets, check if this event_market has bets
                                         if show_only_with_bets:
-                                            event_key = (str(event_id), str(sport_folder), str(market_id))
+                                            event_key = (str(event_id), str(sport_folder).lower(), str(market_id))
                                             if event_key not in events_to_load:
                                                 print(f"🔍 DEBUG: Skipping standard event {event_id} market {market_id} - no bets found")
                                                 continue  # Skip this event_market combination
@@ -703,63 +825,6 @@ def get_tenant_betting_events(subdomain):
         
     except Exception as e:
         print(f"Error in get_tenant_betting_events: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-
-@rich_admin_bp.route('/<subdomain>/admin/api/stats')
-def get_tenant_stats(subdomain):
-    """Get statistics for the tenant admin dashboard"""
-    operator = get_operator_from_session()
-    if not operator:
-        return jsonify({'error': 'Unauthorized'}), 401
-    
-    try:
-        conn = get_db_connection()
-        
-        # Get user count
-        user_count = conn.execute(
-            "SELECT COUNT(*) as count FROM users WHERE sportsbook_operator_id = ?", 
-            (operator['id'],)
-        ).fetchone()['count']
-        
-        # Get bet count
-        bet_count = conn.execute("""
-            SELECT COUNT(*) as count 
-            FROM bets b 
-            JOIN users u ON b.user_id = u.id 
-            WHERE u.sportsbook_operator_id = ?
-        """, (operator['id'],)).fetchone()['count']
-        
-        # Get total revenue (from won bets)
-        revenue_result = conn.execute("""
-            SELECT COALESCE(SUM(b.actual_return - b.stake), 0) as revenue
-            FROM bets b 
-            JOIN users u ON b.user_id = u.id 
-            WHERE u.sportsbook_operator_id = ? AND b.status = 'won'
-        """, (operator['id'],)).fetchone()
-        total_revenue = float(revenue_result['revenue'] or 0)
-        
-        # Get active events count (events with pending bets)
-        active_events_result = conn.execute("""
-            SELECT COUNT(DISTINCT b.match_id) as count
-            FROM bets b 
-            JOIN users u ON b.user_id = u.id 
-            WHERE u.sportsbook_operator_id = ? AND b.status = 'pending'
-        """, (operator['id'],)).fetchone()
-        active_events = active_events_result['count']
-        
-        conn.close()
-        
-        return jsonify({
-            'total_users': user_count,
-            'total_bets': bet_count,
-            'total_revenue': total_revenue,
-            'active_events': active_events
-        })
-        
-    except Exception as e:
-        print(f"Error getting tenant stats: {e}")
         return jsonify({'error': str(e)}), 500
 
 @rich_admin_bp.route('/<subdomain>/admin/api/admin-check')
@@ -1001,75 +1066,96 @@ def reset_all_users(subdomain):
 
 @rich_admin_bp.route('/<subdomain>/admin/api/betting-events/<event_key>/toggle', methods=['POST'])
 def toggle_event_status(subdomain, event_key):
-    """Toggle event active status (tenant-filtered)"""
+    """Toggle event active status (tenant-filtered) - using bets.is_active approach"""
     operator = get_operator_from_session()
     if not operator:
         return jsonify({'error': 'Unauthorized'}), 401
     
     try:
+        data = request.get_json() or {}
+        new_status = data.get('status')
+        
+        # If no status provided, determine current status and toggle
+        if not new_status:
+            conn = get_db_connection()
+            # Check current status by looking at active bets
+            active_bets = conn.execute("""
+                SELECT COUNT(*) as active_count
+                FROM bets b
+                JOIN users u ON b.user_id = u.id
+                WHERE u.sportsbook_operator_id = ? 
+                AND b.match_id = ? AND b.market = ? 
+                AND b.is_active = TRUE AND b.status = 'pending'
+            """, (operator['id'], event_key.split('_')[0], event_key.split('_')[1] if '_' in event_key else '')).fetchone()
+            
+            new_status = 'disabled' if active_bets['active_count'] > 0 else 'active'
+            conn.close()
+        
         conn = get_db_connection()
         
-        # Check if event is currently disabled
-        # The table structure is: event_key (auto-increment), sport (actual event_key), event_name, market
-        disabled_event = conn.execute(
-            'SELECT * FROM disabled_events WHERE sport = ?', 
-            (event_key,)
-        ).fetchone()
-        
-        if disabled_event:
-            # Event is disabled, enable it by removing from disabled_events
-            conn.execute('DELETE FROM disabled_events WHERE sport = ?', (event_key,))
-            conn.commit()
-            conn.close()
-            return jsonify({'success': True, 'message': 'Event enabled successfully', 'status': 'enabled'})
+        # Extract match_id and market from event_key format "6200217_2"
+        if '_' in event_key:
+            base_event_id, market = event_key.split('_', 1)
         else:
-            # Event is enabled, disable it by adding to disabled_events
-            # Parse event_key to extract sport and market info
-            try:
-                # event_key format is "event_id_market_id" like "6220426_2"
-                parts = event_key.split('_')
-                if len(parts) >= 2:
-                    event_id = parts[0]
-                    market_id = parts[1]
-                    # Get event details from the betting events to populate the table
-                    event_details = conn.execute("""
-                        SELECT sport_name, event_name, market 
-                        FROM bets 
-                        WHERE match_id = ? AND market = ? 
-                        LIMIT 1
-                    """, (event_id, market_id)).fetchone()
-                    
-                    if event_details:
-                        sport_name = event_details['sport_name']
-                        event_name = event_details['event_name'] or 'Unknown Event'
-                        market = event_details['market'] or 'Unknown Market'
-                    else:
-                        sport_name = 'Unknown Sport'
-                        event_name = 'Unknown Event'
-                        market = 'Unknown Market'
-                else:
-                    sport_name = 'Unknown Sport'
-                    event_name = 'Unknown Event'
-                    market = 'Unknown Market'
+            base_event_id = event_key
+            market = None
+        
+        # Update bets.is_active for this operator's bets
+        if new_status == 'disabled':
+            # Mark all bets for this event/market combination as inactive
+            if market:
+                bets_result = conn.execute("""
+                    UPDATE bets 
+                    SET is_active = FALSE 
+                    WHERE match_id = ? AND market = ?
+                    AND user_id IN (
+                        SELECT id FROM users 
+                        WHERE sportsbook_operator_id = ?
+                    )
+                """, (base_event_id, market, operator['id']))
+            else:
+                bets_result = conn.execute("""
+                    UPDATE bets 
+                    SET is_active = FALSE 
+                    WHERE match_id = ?
+                    AND user_id IN (
+                        SELECT id FROM users 
+                        WHERE sportsbook_operator_id = ?
+                    )
+                """, (base_event_id, operator['id']))
+        else:
+            # Mark all bets for this event/market combination as active
+            if market:
+                bets_result = conn.execute("""
+                    UPDATE bets 
+                    SET is_active = TRUE 
+                    WHERE match_id = ? AND market = ?
+                    AND user_id IN (
+                        SELECT id FROM users 
+                        WHERE sportsbook_operator_id = ?
+                    )
+                """, (base_event_id, market, operator['id']))
+            else:
+                bets_result = conn.execute("""
+                    UPDATE bets 
+                    SET is_active = TRUE 
+                    WHERE match_id = ?
+                    AND user_id IN (
+                        SELECT id FROM users 
+                        WHERE sportsbook_operator_id = ?
+                    )
+                """, (base_event_id, operator['id']))
+        
+        conn.commit()
+        conn.close()
+        
+        # Return success - the operation completed regardless of rowcount
+        return jsonify({'success': True, 'message': f'Event status updated to {new_status}'})
                 
-                conn.execute(
-                    'INSERT INTO disabled_events (sport, event_name, market) VALUES (?, ?, ?)',
-                    (event_key, event_name, market)
-                )
-                conn.commit()
-                conn.close()
-                return jsonify({'success': True, 'message': 'Event disabled successfully', 'status': 'disabled'})
-            except Exception as parse_error:
-                # Fallback if parsing fails
-                conn.execute(
-                    'INSERT INTO disabled_events (sport, event_name, market) VALUES (?, ?, ?)',
-                    (event_key, 'Unknown Event', 'Unknown Market')
-                )
-                conn.commit()
-                conn.close()
-                return jsonify({'success': True, 'message': 'Event disabled successfully', 'status': 'disabled'})
-            
     except Exception as e:
+        print(f"Error toggling event status: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/overview')
@@ -2087,10 +2173,6 @@ RICH_ADMIN_TEMPLATE = '''
                     <option value="">All Markets</option>
                 </select>
                 <input type="text" id="search-events" placeholder="Search events...">
-                <label style="margin-left: 10px; display: flex; align-items: center; gap: 5px; font-size: 14px; color: #666;">
-                    <input type="checkbox" id="show-only-with-bets" checked style="margin: 0;">
-                    Show Only Events with Bets (Faster)
-                </label>
                 <button onclick="loadBettingEvents()">🔄 Refresh Events</button>
             </div>
             
@@ -2329,7 +2411,6 @@ RICH_ADMIN_TEMPLATE = '''
             currentSportFilter = document.getElementById('sport-filter')?.value || '';
             currentMarketFilter = document.getElementById('market-filter')?.value || '';
             currentSearchQuery = document.getElementById('search-events')?.value || '';
-            showOnlyWithBets = document.getElementById('show-only-with-bets')?.checked || false;
             loadBettingEvents();
         }
         
@@ -2376,13 +2457,11 @@ RICH_ADMIN_TEMPLATE = '''
             const sportFilter = document.getElementById('sport-filter');
             const marketFilter = document.getElementById('market-filter');
             const searchInput = document.getElementById('search-events');
-            const showOnlyCheckbox = document.getElementById('show-only-with-bets');
             const refreshBtn = document.getElementById('refresh-events');
             
             if (sportFilter) sportFilter.addEventListener('change', applyFilters);
             if (marketFilter) marketFilter.addEventListener('change', applyFilters);
             if (searchInput) searchInput.addEventListener('input', applyFilters);
-            if (showOnlyCheckbox) showOnlyCheckbox.addEventListener('change', applyFilters);
             if (refreshBtn) refreshBtn.addEventListener('click', loadBettingEvents);
         });
         
@@ -2399,7 +2478,6 @@ RICH_ADMIN_TEMPLATE = '''
                 if (currentSportFilter) params.append('sport', currentSportFilter);
                 if (currentMarketFilter) params.append('market', currentMarketFilter);
                 if (currentSearchQuery) params.append('search', currentSearchQuery);
-                if (showOnlyWithBets) params.append('show_only_with_bets', 'true');
                 
                 // Use the working API endpoint from comprehensive_admin.py
                 const response = await fetch(`/api/admin/${SUBDOMAIN}/betting-events?${params.toString()}`);

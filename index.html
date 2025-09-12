@@ -4972,34 +4972,16 @@
             return odds.map(odd => {
                 // Find the actual market ID from the event's odds data
                 let marketId = 'unknown';
-                if (event && event.odds) {
-                    // Look for the market with this display name and get its ID
-                    if (Object.entries) {
-                        for (var i = 0; i < Object.keys(event.odds).length; i++) {
-                            var marketKey = Object.keys(event.odds)[i];
-                            var marketData = event.odds[marketKey];
-                            if (marketKey === market || marketData === market) {
-                                // This is the market we're looking for, get its ID
-                                const marketIdKey = `${marketKey}_market_id`;
-                                if (event.odds[marketIdKey]) {
-                                    marketId = event.odds[marketIdKey];
-                                }
+                if (event && event.odds && Array.isArray(event.odds)) {
+                    // Look through the odds array to find the market with matching value
+                    for (const odd of event.odds) {
+                        if (odd.value && odd.id) {
+                            // Check if this market matches what we're looking for
+                            if (odd.value.toLowerCase() === market.toLowerCase() || 
+                                odd.value.toLowerCase().includes(market.toLowerCase()) ||
+                                market.toLowerCase().includes(odd.value.toLowerCase())) {
+                                marketId = odd.id;
                                 break;
-                            }
-                        }
-                    } else {
-                        // Fallback for older browsers
-                        for (const marketKey in event.odds) {
-                            if (event.odds.hasOwnProperty(marketKey)) {
-                                const marketData = event.odds[marketKey];
-                                if (marketKey === market || marketData === market) {
-                                    // This is the market we're looking for, get its ID
-                                    const marketIdKey = `${marketKey}_market_id`;
-                                    if (event.odds[marketIdKey]) {
-                                        marketId = event.odds[marketIdKey];
-                                    }
-                                    break;
-                                }
                             }
                         }
                     }

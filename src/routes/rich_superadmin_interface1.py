@@ -107,6 +107,64 @@ def calculate_global_event_financials(event_id, market_id, sport_name):
         print(f"Error calculating global financials: {e}")
         return 0.0, 0.0
 
+def calculate_global_event_financials_with_fallback(event_id, market_id, sport_name):
+    """Calculate max liability and max possible gain with fallback for both old and new market IDs"""
+    try:
+        conn = get_db_connection()
+        
+        # Get all pending bets for this specific event+market combination from ALL operators
+        # Handle both old "unknown" market IDs and new proper market IDs
+        query = """
+        SELECT b.bet_selection, b.stake, b.potential_return, b.odds
+        FROM bets b
+        JOIN users u ON b.user_id = u.id
+        JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+        WHERE b.match_id = ? AND (b.market = ? OR b.market = 'unknown') AND b.sport_name = ? AND b.status = 'pending'
+        AND op.is_active = TRUE
+        """
+        
+        bets = conn.execute(query, (event_id, market_id, sport_name)).fetchall()
+        conn.close()
+        
+        if not bets:
+            return 0.0, 0.0  # No bets = no liability or gain
+        
+        # Group bets by selection (outcome)
+        selections = {}
+        total_stakes = 0
+        
+        for bet in bets:
+            selection = bet['bet_selection']
+            stake = float(bet['stake'])
+            potential_return = float(bet['potential_return'])
+            
+            if selection not in selections:
+                selections[selection] = {'total_stake': 0, 'total_payout': 0}
+            
+            selections[selection]['total_stake'] += stake
+            selections[selection]['total_payout'] += potential_return
+            total_stakes += stake
+        
+        # Calculate profit/loss for each possible outcome
+        outcomes = []
+        for selection, data in selections.items():
+            # If this selection wins: pay out winners, keep losing stakes
+            payout = data['total_payout']
+            profit_loss = total_stakes - payout
+            outcomes.append(profit_loss)
+        
+        # Max liability = worst case (most negative outcome)
+        max_liability = abs(min(outcomes)) if outcomes else 0.0
+        
+        # Max possible gain = best case (most positive outcome)  
+        max_possible_gain = max(outcomes) if outcomes else 0.0
+        
+        return max_liability, max_possible_gain
+        
+    except Exception as e:
+        print(f"Error calculating global financials with fallback: {e}")
+        return 0.0, 0.0
+
 def check_superadmin_auth(f):
     """Decorator to check if user is authenticated as super admin"""
     def decorated_function(*args, **kwargs):
@@ -157,232 +215,190 @@ def test_toggle_status():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def calculate_global_event_financials(event_id, market_id, sport_name, conn):
+    """Calculate max liability and max possible gain for a specific event+market combination across all operators"""
+    try:
+        # Get all pending bets for this specific event+market combination from all operators
+        query = """
+        SELECT b.bet_selection, b.stake, b.potential_return, b.odds
+        FROM bets b
+        JOIN users u ON b.user_id = u.id
+        JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+        WHERE b.match_id = ? AND b.market = ? AND b.sport_name = ? AND b.status = 'pending'
+        AND op.is_active = TRUE
+        """
+        
+        bets = conn.execute(query, (event_id, market_id, sport_name)).fetchall()
+        
+        if not bets:
+            return 0.0, 0.0  # No bets = no liability or gain
+        
+        # Group bets by selection (outcome)
+        from collections import defaultdict
+        selections = defaultdict(lambda: {'total_stake': 0, 'total_payout': 0})
+        total_stakes = 0
+        
+        for bet in bets:
+            selection = bet['bet_selection']
+            stake = float(bet['stake'])
+            potential_return = float(bet['potential_return'])
+            
+            selections[selection]['total_stake'] += stake
+            selections[selection]['total_payout'] += potential_return
+            total_stakes += stake
+        
+        # Calculate liability and profit for each possible outcome
+        outcomes = []
+        for selection, data in selections.items():
+            # If this selection wins: pay out winners, keep all stakes
+            payout = data['total_payout']
+            net_profit = total_stakes - payout
+            outcomes.append(net_profit)
+        
+        # Max liability = worst case (most negative outcome)
+        max_liability = abs(min(outcomes)) if outcomes else 0.0
+        
+        # Max possible gain = best case (most positive outcome)  
+        max_possible_gain = max(outcomes) if outcomes else 0.0
+        
+        return max_liability, max_possible_gain
+        
+    except Exception as e:
+        print(f"Error calculating global event financials: {e}")
+        return 0.0, 0.0
+
 @rich_superadmin_bp.route('/superadmin/api/global-betting-events', methods=['GET', 'POST'])
 @check_superadmin_auth
 def get_global_betting_events():
-    """Get global betting events across all operators with global liability calculations"""
+    """Get global betting events - simple database-only approach"""
     try:
         # Handle both GET and POST methods
         if request.method == 'GET':
-            # GET method - get parameters from query string
-            show_bets_only = request.args.get('show_only_with_bets', 'false').lower() == 'true'
             sport_filter = request.args.get('sport', '')
             market_filter = request.args.get('market', '')
             search_term = request.args.get('search', '')
         else:
-            # POST method - get parameters from JSON body
             data = request.get_json() or {}
-            show_bets_only = data.get('show_bets_only', True)
             sport_filter = data.get('sport', '')
             market_filter = data.get('market', '')
             search_term = data.get('search', '')
 
-        print(f"🔍 DEBUG: Global betting events - show_bets_only = {show_bets_only}")
-        print(f"🔍 DEBUG: Method = {request.method}")
+        print(f"🔍 DEBUG: Simple database-only approach - showing only pending bets")
 
         conn = get_db_connection()
         
-        # First, query the database to find which event_market combinations have bets across all operators
-        if show_bets_only:
-            # Get events with bets from database first
-            bet_events_query = """
-                SELECT DISTINCT b.match_id, b.sport_name, b.market, COUNT(*) as bet_count
-        FROM bets b
-                JOIN users u ON b.user_id = u.id 
-                JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                WHERE op.is_active = TRUE
-                GROUP BY b.match_id, b.sport_name, b.market
-                HAVING COUNT(*) > 0
-                ORDER BY bet_count DESC
-            """
-            bet_events_result = conn.execute(bet_events_query).fetchall()
-            
-            # Create a set of events to load
-            events_to_load = set()
-            for row in bet_events_result:
-                match_id = str(row['match_id'])
-                sport_name = str(row['sport_name'])
-                market_id = str(row['market'])
-                events_to_load.add((match_id, sport_name, market_id))
+        # Simple query: Get all pending bets grouped by event_id + market_id
+        bet_events_query = """
+            SELECT 
+                b.match_id,
+                b.sport_name,
+                b.market,
+                COUNT(*) as bet_count,
+                SUM(b.stake) as total_stake,
+                SUM(b.potential_return) as total_potential_return,
+                SUM(CASE WHEN b.is_active = TRUE THEN 1 ELSE 0 END) as active_bet_count,
+                COUNT(*) as total_bet_count
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+            WHERE op.is_active = TRUE AND b.status = 'pending'
+            GROUP BY b.match_id, b.sport_name, b.market
+            ORDER BY b.match_id, b.sport_name, b.market
+        """
         
-        # Load sports and events data directly from JSON files
-        import os
-        import json
-        
-        # Path to Sports Pre Match directory
-        sports_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Sports Pre Match')
-        
-        if not os.path.exists(sports_dir):
-            return jsonify({'error': 'Sports directory not found'})
+        print(f"🔍 DEBUG: Executing SQL query for all operators")
+        bet_events_result = conn.execute(bet_events_query).fetchall()
+        print(f"🔍 DEBUG: Found {len(bet_events_result)} event_market combinations with pending bets")
         
         all_events = []
         all_sports = set()
         all_markets = set()
         
-        # Load sports data
-        sport_folders = [f for f in os.listdir(sports_dir) if os.path.isdir(os.path.join(sports_dir, f))]
-        
-        for sport_folder in sport_folders:
-            sport_path = os.path.join(sports_dir, sport_folder)
-            sport_display_name = sport_folder.title()
+        # Process each bet combination directly from database
+        for row in bet_events_result:
+            match_id = str(row['match_id'])
+            sport_name = str(row['sport_name'])
+            market_id = str(row['market'])
+            bet_count = row['bet_count']
+            active_bet_count = row['active_bet_count']
+            total_bet_count = row['total_bet_count']
+            
+            # Calculate proper liability using the algorithm
+            total_liability, total_revenue = calculate_global_event_financials(match_id, market_id, sport_name, conn)
+            
+            # Determine if event is active based on active bets
+            is_event_active = active_bet_count > 0
+            event_status = 'active' if is_event_active else 'disabled'
             
             # Apply sport filter if specified
-            if sport_filter and sport_display_name.lower() != sport_filter.lower():
+            if sport_filter and sport_name.lower() != sport_filter.lower():
                 continue
             
-            # Load events for this sport
-            events_file = os.path.join(sport_path, f'{sport_folder}_odds.json')
+            # Apply market filter if specified
+            if market_filter and market_id.lower() != market_filter.lower():
+                continue
             
-            if os.path.exists(events_file):
-                try:
-                    with open(events_file, 'r', encoding='utf-8') as f:
-                        sport_data = json.load(f)
-                    
-                    # Extract events from the JSON structure
-                    sport_events = []
-                    if 'odds_data' in sport_data and 'scores' in sport_data['odds_data'] and 'categories' in sport_data['odds_data']['scores']:
-                        for category in sport_data['odds_data']['scores']['categories']:
-                            if 'matches' in category:
-                                # Add category info to each match
-                                for match in category['matches']:
-                                    match['_category_name'] = category.get('name', 'Unknown Category')
-                                sport_events.extend(category['matches'])
-                    
-                    # Process each event
-                    for event in sport_events:
-                        event_id = event.get('id', '')
-                        
-                        # Process markets/odds
-                        if 'odds' in event:
-                            for odd in event['odds']:
-                                market_name = odd.get('value', '').lower()
-                                market_id = odd.get('id', '')
-                                
-                                if not market_id:
-                                    continue
-                                
-                                # If we're only showing events with bets, check if this event_market has bets
-                                if show_bets_only:
-                                    event_key = (str(event_id), str(sport_folder), str(market_id))
-                                    if event_key not in events_to_load:
-                                        continue  # Skip this event_market combination
-                                
-                                # Apply market filter if specified
-                                if market_filter and market_name.lower() != market_filter.lower():
-                                    continue
-                                
-                                # Apply search filter if specified
-                                event_name = f"{event.get('localteam', {}).get('name', 'Unknown')} vs {event.get('awayteam', {}).get('name', 'Unknown')}"
-                                if search_term and search_term.lower() not in event_name.lower() and search_term.lower() not in str(event_id).lower():
-                                    continue
-                                
-                                # Add to sports and markets filters
-                                all_sports.add(sport_display_name)
-                                all_markets.add(market_name)
-                                
-                                # Create betting event entry
-                                betting_event = {
-                                    'id': f"{event_id}_{market_id}",
-                                    'unique_id': f"{event_id}_{market_id}",
-                                    'event_id': f"{event_id}_{market_id}",
-                                    'sport': sport_display_name,
-                                    'event_name': event_name,
-                                    'market': market_name,
-                                    'market_display': market_name,
-                                    'category': event.get('_category_name', 'Unknown Category'),
-                                    'odds_data': [],  # We'll populate this if needed
-                                    'is_active': True,
-                                    'date': event.get('date', ''),
-                                    'time': event.get('time', ''),
-                                    'status': 'active' if event.get('status', 'Unknown').lower() != 'finished' else 'finished'
-                                }
-                                
-                                # Check if this event is disabled by checking bets.is_active status
-                                # If any bets for this event/market are inactive, mark the event as disabled
-                                active_check = conn.execute("""
-                                    SELECT COUNT(*) as active_count, COUNT(*) as total_count
-                                    FROM bets b 
-                                    JOIN users u ON b.user_id = u.id 
-                                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                                    WHERE op.is_active = TRUE AND b.match_id = ? AND b.sport_name = ? AND b.market = ? AND b.is_active = TRUE
-                                """, (event_id, sport_folder, market_id)).fetchone()
-                                
-                                total_check = conn.execute("""
-                                    SELECT COUNT(*) as total_count
-                                    FROM bets b 
-                                    JOIN users u ON b.user_id = u.id 
-                                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                                    WHERE op.is_active = TRUE AND b.match_id = ? AND b.sport_name = ? AND b.market = ?
-                                """, (event_id, sport_folder, market_id)).fetchone()
-                                
-                                total_bets_for_event = total_check['total_count'] if total_check else 0
-                                active_bets_for_event = active_check['active_count'] if active_check else 0
-                                
-                                # If there are bets but none are active, mark as disabled
-                                if total_bets_for_event > 0 and active_bets_for_event == 0:
-                                    betting_event['is_active'] = False
-                                    betting_event['status'] = 'disabled'
-                                else:
-                                    betting_event['is_active'] = True
-                                    betting_event['status'] = 'active'
-                                
-                                # Calculate global financials for this event (across all operators)
-                                max_liability, max_possible_gain = calculate_global_event_financials(event_id, market_id, sport_folder)
-                                betting_event['max_liability'] = max_liability
-                                betting_event['max_possible_gain'] = max_possible_gain
-                                
-                                # Add fields expected by the dashboard
-                                betting_event['name'] = event_name
-                                betting_event['liability'] = max_liability
-                                betting_event['revenue'] = max_possible_gain
-                                
-                                # Get total bets for this event across all operators
-                                bet_count_result = conn.execute("""
-                                    SELECT COUNT(*) as count
-                                    FROM bets b 
-                                    JOIN users u ON b.user_id = u.id 
-                                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-                                    WHERE op.is_active = TRUE AND b.match_id = ? AND b.sport_name = ? AND b.market = ?
-                                """, (event_id, sport_folder, market_id)).fetchone()
-                                total_bets = bet_count_result['count'] if bet_count_result else 0
-                                betting_event['total_bets'] = total_bets
-                                
-                                all_events.append(betting_event)
-                                
-                except Exception as e:
-                    print(f"Error loading events for {sport_folder}: {e}")
-                    continue
+            # Apply search filter if specified
+            if search_term and search_term.lower() not in match_id.lower():
+                continue
+            
+            # Add to sports and markets filters
+            all_sports.add(sport_name)
+            all_markets.add(f"Market {market_id}")
+            
+            # Create betting event entry
+            betting_event = {
+                'id': f"{match_id}_{market_id}",
+                'unique_id': f"{match_id}_{market_id}",
+                'event_id': f"{match_id}_{market_id}",
+                'sport': sport_name,
+                'event_name': f"Event {match_id}",
+                'market': f"Market {market_id}",
+                'market_display': f"Market {market_id}",
+                'category': 'Unknown Category',
+                'odds_data': [],
+                'is_active': is_event_active,
+                'date': '',
+                'time': '',
+                'status': event_status,
+                'total_bets': bet_count,
+                'max_liability': total_liability,
+                'max_possible_gain': total_revenue,
+                'liability': total_liability,
+                'revenue': total_revenue,
+                'name': f"Event {match_id}"
+            }
+            
+            all_events.append(betting_event)
         
         conn.close()
         
-        # Calculate global summary
+        # Calculate summary
         total_events = len(all_events)
         active_events = len([e for e in all_events if e['status'] == 'active'])
-        max_liability = max([e['liability'] for e in all_events]) if all_events else 0
-        max_gain = max([e['revenue'] for e in all_events]) if all_events else 0
-        
-        sports = list(all_sports)
-        markets = list(all_markets)
+        total_liability = sum([e['liability'] for e in all_events])
+        total_revenue = sum([e['revenue'] for e in all_events])
         
         return jsonify({
             'success': True,
             'events': all_events,
             'pagination': {
-            'page': 1,
+                'page': 1,
                 'per_page': len(all_events),
                 'total': total_events,
                 'pages': 1
             },
             'summary': {
-                'total_events': total_events,  # Show total available events, not filtered count
-                'active_events': active_events,  # Count from all events
-                'total_liability': max_liability,
-                'max_liability': max_liability,
-                'max_possible_gain': max_gain
+                'total_events': total_events,
+                'active_events': active_events,
+                'total_liability': total_liability,
+                'total_revenue': total_revenue,
+                'max_liability': total_liability,
+                'max_possible_gain': total_revenue
             },
             'filters': {
-                'sports': sports,
-                'markets': markets
+                'sports': sorted(all_sports),
+                'markets': sorted(all_markets)
             }
         })
         
@@ -395,14 +411,15 @@ def get_global_betting_events():
 @rich_superadmin_bp.route('/superadmin/api/global-betting-events/toggle-status', methods=['POST'])
 @check_superadmin_auth
 def toggle_global_event_status():
-    """Toggle the status of a global betting event"""
+    """Toggle the status of a global betting event - simple bets.is_active approach"""
     try:
         data = request.get_json()
         event_id = data.get('event_id')
-        new_status = data.get('status')
         
-        if not event_id or not new_status:
-            return jsonify({'success': False, 'error': 'Missing event_id or status'}), 400
+        print(f"🔍 DEBUG: Toggle request - event_id: {event_id}")
+        
+        if not event_id:
+            return jsonify({'success': False, 'error': 'Missing event_id'}), 400
             
         conn = get_db_connection()
         
@@ -413,79 +430,27 @@ def toggle_global_event_status():
             base_event_id = event_id
             market = None
         
-        # APPROACH 1: Update bets.is_active for backend processing
-        if new_status == 'disabled':
-            # Mark all bets for this event/market combination as inactive
-            if market:
-                bets_result = conn.execute("""
-                    UPDATE bets 
-                    SET is_active = FALSE 
-                    WHERE match_id = ? AND market = ?
-                """, (base_event_id, market))
-            else:
-                bets_result = conn.execute("""
-                    UPDATE bets 
-                    SET is_active = FALSE 
-                    WHERE match_id = ?
-                """, (base_event_id,))
+        # Simply flip the is_active status for ALL operators (global)
+        if market:
+            result = conn.execute("""
+                UPDATE bets 
+                SET is_active = NOT is_active 
+                WHERE match_id = ? AND market = ?
+            """, (base_event_id, market))
         else:
-            # Mark all bets for this event/market combination as active
-            if market:
-                bets_result = conn.execute("""
-                    UPDATE bets 
-                    SET is_active = TRUE 
-                    WHERE match_id = ? AND market = ?
-                """, (base_event_id, market))
-            else:
-                bets_result = conn.execute("""
-                    UPDATE bets 
-                    SET is_active = TRUE 
-                    WHERE match_id = ?
-                """, (base_event_id,))
+            result = conn.execute("""
+                UPDATE bets 
+                SET is_active = NOT is_active 
+                WHERE match_id = ?
+            """, (base_event_id,))
         
-        # APPROACH 2: Update disabled_events table for frontend filtering
-        if new_status == 'disabled':
-            # Disable event by adding to disabled_events table
-            # Get event details for the table
-            event_details = conn.execute("""
-                SELECT sport_name, match_name, market 
-                FROM bets 
-                WHERE match_id = ? AND market = ? 
-                LIMIT 1
-            """, (base_event_id, market)).fetchone()
-            
-            if event_details:
-                sport_name = event_details['sport_name']
-                event_name = event_details['match_name'] or 'Unknown Event'  # Use match_name from bets table
-                market_name = event_details['market'] or 'Unknown Market'
-            else:
-                sport_name = 'Unknown Sport'
-                event_name = 'Unknown Event'
-                market_name = 'Unknown Market'
-            
-            # Insert into disabled_events table
-            conn.execute("""
-                INSERT INTO disabled_events (event_key, sport, event_name, market, is_disabled)
-                VALUES (?, ?, ?, ?, TRUE)
-                ON CONFLICT (event_key) DO UPDATE SET
-                    sport = EXCLUDED.sport,
-                    event_name = EXCLUDED.event_name,
-                    market = EXCLUDED.market,
-                    is_disabled = EXCLUDED.is_disabled
-            """, (event_id, sport_name, event_name, market_name))
-            
-        else:
-            # Enable event by removing from disabled_events table
-            conn.execute("DELETE FROM disabled_events WHERE event_key = ?", (event_id,))
+        print(f"🔍 DEBUG: Updated {result.rowcount} bet records for {base_event_id}_{market}")
         
         conn.commit()
         conn.close()
         
-        # Return success if either bets were updated or disabled_events was updated
-        if bets_result.rowcount > 0 or new_status == 'disabled':
-            return jsonify({'success': True, 'message': f'Event status updated to {new_status}'})
-        else:
-            return jsonify({'success': False, 'error': 'Event not found'})
+        # Return success - the operation completed
+        return jsonify({'success': True, 'message': 'Event status toggled successfully'})
             
     except Exception as e:
         print(f"Error toggling global event status: {e}")
@@ -2577,10 +2542,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     <option value="">All Markets</option>
                 </select>
                 <input type="text" id="global-event-search" placeholder="Search events...">
-                <label>
-                    <input type="checkbox" id="global-show-bets-only" checked>
-                    Show Only Events with Bets (Faster)
-                </label>
                 <button onclick="refreshGlobalEvents()" class="btn btn-primary">
                     <i class="fas fa-sync-alt"></i> Refresh Events
                 </button>
@@ -2998,12 +2959,8 @@ RICH_SUPERADMIN_TEMPLATE = '''
         
         async function loadGlobalBettingEvents() {
             try {
-                // Get the checkbox value
-                const showBetsOnly = document.getElementById('global-show-bets-only')?.checked || false;
-                console.log('🔍 DEBUG: showBetsOnly checkbox value:', showBetsOnly);
-                
-                // Build the URL with query parameters
-                const url = `/superadmin/api/global-betting-events?show_only_with_bets=${showBetsOnly}`;
+                // Always show only events with bets
+                const url = `/superadmin/api/global-betting-events`;
                 console.log('🔍 DEBUG: Calling URL:', url);
                 
                 const response = await fetch(url);
@@ -3696,10 +3653,9 @@ RICH_SUPERADMIN_TEMPLATE = '''
             const sportFilter = document.getElementById('global-events-sport-filter').value;
             const marketFilter = document.getElementById('global-market-filter').value;
             const searchTerm = document.getElementById('global-event-search').value;
-            const showBetsOnly = document.getElementById('global-show-bets-only').checked;
 
-                         // Show loading state
-             document.getElementById('global-events-tbody').innerHTML = '<tr><td colspan="9" class="loading">Loading global events...</td></tr>';
+            // Show loading state
+            document.getElementById('global-events-tbody').innerHTML = '<tr><td colspan="9" class="loading">Loading global events...</td></tr>';
 
             fetch('/superadmin/api/global-betting-events', {
                 method: 'POST',
@@ -3709,8 +3665,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 body: JSON.stringify({
                     sport: sportFilter,
                     market: marketFilter,
-                    search: searchTerm,
-                    show_bets_only: showBetsOnly
+                    search: searchTerm
                 })
             })
             .then(response => response.json())
@@ -3879,7 +3834,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
         }
 
         function toggleGlobalEventStatus(eventId, currentStatus) {
-            const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
+            console.log(`🔍 DEBUG: Toggling eventId: ${eventId}`);
             
             fetch('/superadmin/api/global-betting-events/toggle-status', {
                 method: 'POST',
@@ -3887,17 +3842,16 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    event_id: eventId,
-                    status: newStatus
+                    event_id: eventId
                 })
             })
             .then(response => response.json())
             .then(data => {
+                console.log(`🔍 DEBUG: API Response:`, data);
                 if (data.success) {
-                    // Show success message
                     alert(data.message);
-                    // Refresh the events to show updated status
-                    loadGlobalBettingEvents();
+                    // Force page reload to show updated status
+                    window.location.reload();
                 } else {
                     alert('Error updating event status: ' + data.error);
                 }
@@ -3925,7 +3879,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
             const globalSportFilter = document.getElementById('global-events-sport-filter');
             const globalMarketFilter = document.getElementById('global-market-filter');
             const globalEventSearch = document.getElementById('global-event-search');
-            const globalShowBetsOnly = document.getElementById('global-show-bets-only');
 
             if (globalSportFilter) {
                 globalSportFilter.addEventListener('change', loadGlobalBettingEvents);
@@ -3935,9 +3888,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
             }
             if (globalEventSearch) {
                 globalEventSearch.addEventListener('input', debounce(loadGlobalBettingEvents, 500));
-            }
-            if (globalShowBetsOnly) {
-                globalShowBetsOnly.addEventListener('change', loadGlobalBettingEvents);
             }
 
                     // Load initial global stats (since global overview is the default active tab)
