@@ -976,14 +976,24 @@ class OptimizedGoalServeClient:
                 return {}
 
             import json
+            from src.utils.memlog import log_mem, force_gc_if_needed
+            
+            log_mem(f"before loading {sport_name} JSON")
+            
+            # Check memory limit before loading large files
+            if force_gc_if_needed():
+                logger.warning(f"High memory usage before loading {sport_name}, skipping")
+                return {}
+            
             with open(json_file, 'r', encoding='utf-8') as f:
                 odds_data = json.load(f)
             
-            logger.info(f"Successfully loaded odds for {sport_name} from JSON")
+            log_mem(f"after loading {sport_name} JSON")
             
             # Force garbage collection after loading large JSON
             import gc
             gc.collect()
+            log_mem(f"after GC for {sport_name}")
             
             return odds_data
             

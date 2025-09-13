@@ -13,6 +13,17 @@ primary_region = "iad"
   PORT = "8080"
   # ensure env.local never overrides prod values on Fly
   IGNORE_ENV_LOCAL = "1"
+  
+  # Memory & cache management
+  DISABLE_CACHE_WARMUP = "true"
+  CACHE_TTL_SEC = "180"
+  MAX_EVENTS_PER_SPORT = "2000"
+  MEM_SOFT_LIMIT_MB = "1400"
+  
+  # Gunicorn settings for memory optimization
+  WEB_WORKERS = "1"
+  WEB_THREADS = "1"
+  GUNICORN_PRELOAD = "false"
 
 [processes]
   app = "python run.py"

@@ -161,7 +161,7 @@ class BetSettlementService:
         self.app = app  # Store Flask app instance
         self.running = False
         self.settlement_thread = None
-        self.check_interval = 30  # Check every 30 seconds for completed matches
+        self.check_interval = 1800  # Check every 30 minutes for completed matches
         self.last_check_time = None
         self.total_checks = 0
         self.successful_settlements = 0
@@ -234,7 +234,7 @@ class BetSettlementService:
                 # Don't let the service crash - continue running
                 logger.info("🔄 Continuing settlement service despite error...")
             
-            logger.info(f"⏰ Sleeping for {self.check_interval} seconds...")
+            logger.info(f"⏰ Sleeping for {self.check_interval} seconds ({self.check_interval//60} minutes)...")
             time.sleep(self.check_interval)
         
         logger.info("🛑 Settlement service loop stopped")

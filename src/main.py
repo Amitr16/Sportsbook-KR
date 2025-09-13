@@ -384,6 +384,19 @@ from src.routes.betting import betting_bp
 # Register betting blueprint after models are bound
 app.register_blueprint(betting_bp, url_prefix='/api/betting')
 
+# Register memory monitor blueprint (if available)
+if os.getenv("DISABLE_MEMORY_MONITOR", "0") != "1":
+    try:
+        from src.routes.memory_monitor import memory_bp
+        app.register_blueprint(memory_bp, url_prefix='/api')
+        print("✅ Memory monitor blueprint registered")
+    except ImportError as e:
+        print(f"⚠️ Memory monitor disabled - psutil not available: {e}")
+        logging.info(f"Memory monitor disabled due to missing psutil: {e}")
+else:
+    print("⏭️ Memory monitor disabled via DISABLE_MEMORY_MONITOR")
+    logging.info("⏭️ Memory monitor disabled via DISABLE_MEMORY_MONITOR")
+
 # Note: Alias route removed - using the proxy route below instead
 
 # Initialize WebSocket service
@@ -1041,10 +1054,16 @@ if __name__ == '__main__':
 
     monitor_connection_pools()
 
-    # Start the automatic bet settlement service
+# Start the automatic bet settlement service with delay to prevent startup overload
+import threading
+import time
+
+def delayed_start_bet_settlement():
+    """Start bet settlement service after a delay to prevent startup overload"""
+    time.sleep(30)  # Wait 30 seconds after app starts
     try:
         bet_settlement_service.start()
-        print("✅ Bet settlement service started successfully")
+        print("✅ Bet settlement service started successfully (delayed)")
         
         # Verify the service is running
         if bet_settlement_service.running:
@@ -1055,7 +1074,12 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"❌ Failed to start bet settlement service: {e}")
         logging.error(f"Failed to start bet settlement service: {e}")
-    
-    print("🌐 Flask application initialized successfully")
-    print("🔧 Ready for SocketIO to start the server")
+
+# Start bet settlement service in background thread with delay
+settlement_thread = threading.Thread(target=delayed_start_bet_settlement, daemon=True)
+settlement_thread.start()
+print("⏳ Bet settlement service will start in 30 seconds...")
+
+print("🌐 Flask application initialized successfully")
+print("🔧 Ready for SocketIO to start the server")
 

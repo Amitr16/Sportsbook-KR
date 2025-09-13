@@ -9,13 +9,9 @@ from datetime import datetime, timedelta
 from functools import wraps
 import io
 import csv
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.units import inch
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment
+
+# PDF and Excel generation libraries removed due to Python 3.11 compatibility issues
+# These features can be re-enabled when libraries are updated
 
 tenant_admin_bp = Blueprint('tenant_admin', __name__)
 

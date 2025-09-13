@@ -19,6 +19,10 @@ class LiveOddsCacheService:
         self.running = False
         self.base_path = Path("Sports Pre Match")
         
+        # Memory limits
+        self.max_events_per_sport = int(os.getenv('MAX_EVENTS_PER_SPORT', '2000'))
+        self.cache_ttl_sec = int(os.getenv('CACHE_TTL_SEC', '180'))
+        
         # Initialize cache from existing JSON files
         self._initialize_cache_from_files()
     
@@ -43,9 +47,12 @@ class LiveOddsCacheService:
         """Start the live odds cache service"""
         try:
             self.running = True
-            # Force a complete cache refresh when starting
-            self.reinitialize_cache()
-            logger.info("✅ Live Odds Cache Service started with fresh cache")
+            # Disable cache warmup on startup to save memory
+            if not os.getenv('DISABLE_CACHE_WARMUP', 'true').lower() == 'true':
+                self.reinitialize_cache()
+                logger.info("✅ Live Odds Cache Service started with fresh cache")
+            else:
+                logger.info("✅ Live Odds Cache Service started (cache warmup disabled for memory)")
             return True
         except Exception as e:
             logger.error(f"❌ Failed to start Live Odds Cache Service: {e}")
