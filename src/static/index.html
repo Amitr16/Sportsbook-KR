@@ -2785,7 +2785,6 @@
                 'match_result': 'Match Result',
                 'home_away': sport === 'darts' ? 'Match Result' : (sport === 'esports' ? 'Match Winners' : 'Match Winner'),  // For darts, show as Match Result; for esports, show as Match Winners
                 'correct_score': 'Correct Score',
-                'correct_score_first_half': 'Correct Score 1st Half',
                 'both_teams_score': 'Both Teams Score',
                 'first_half_winner': '1st Half Winner',
                 'double_chance': 'Double Chance',
@@ -2844,13 +2843,12 @@
                 case 'tennis':
                     return [
                         { id: 'home_away', name: 'Match Winner' },  // Tennis has no draw
-                        { id: 'correct_score_first_half', name: 'Correct Score 1st Half' },
+                        { id: 'set_betting', name: 'Set Betting' },
                         { id: 'games_over_under', name: 'Games Over/Under' },
                         { id: 'over_under_first_set', name: 'Over/Under (1st Set)' },
                         { id: 'first_set', name: 'Home/Away (1st Set)' },
                         { id: 'asian_handicap_sets', name: 'Asian Handicap (Sets)' },
                         { id: 'asian_handicap_games', name: 'Asian Handicap (Games)' },
-                        { id: 'set_betting', name: 'Set Betting' },
                         { id: 'tie_break_first_set', name: 'Tie-break (1st Set)' },
                         { id: 'second_set', name: 'Home/Away (2nd Set)' },
                         { id: 'win_one_set_player1', name: 'Win at least one set (Player 1)' },
@@ -3028,13 +3026,13 @@
         let updateBettingMarketsInProgress = false;
         
         function updateBettingMarkets() {
-            // Temporarily disable the guard to fix the issue
-            // if (updateBettingMarketsInProgress) {
-            //     console.log('🚫 Update betting markets already in progress, skipping...');
-            //     return;
-            // }
+            // Prevent multiple simultaneous updates to avoid flickering
+            if (updateBettingMarketsInProgress) {
+                console.log('🚫 Update betting markets already in progress, skipping...');
+                return;
+            }
             
-            // updateBettingMarketsInProgress = true;
+            updateBettingMarketsInProgress = true;
             
             const marketTabs = document.querySelector('.market-tabs');
             const markets = getBettingMarkets(currentSport);
@@ -3058,6 +3056,12 @@
                     // Skip has_draw market (should not be displayed as a separate market)
                     if (market.id === 'has_draw' || market.name === 'Has Draw') {
                         console.log(`🚫 Hiding has_draw market tab: ${market.name}`);
+                        return; // Skip this market
+                    }
+                    
+                    // Skip correct_score_first_half market (should not be displayed for tennis)
+                    if (market.id === 'correct_score_first_half' || market.name === 'Correct Score 1st Half') {
+                        console.log(`🚫 Hiding correct_score_first_half market tab: ${market.name}`);
                         return; // Skip this market
                     }
                     
@@ -3115,8 +3119,8 @@
                 }
             }
             
-            // Clear the progress flag (disabled)
-            // updateBettingMarketsInProgress = false;
+            // Clear the progress flag
+            updateBettingMarketsInProgress = false;
         }
 
         // Authentication functions - REMOVED to prevent conflicts with bootstrapAuth
@@ -3995,13 +3999,13 @@
         let displayEventsInProgress = false;
         
         function displayEvents() {
-            // Temporarily disable the guard to fix the issue
-            // if (displayEventsInProgress) {
-            //     console.log('🚫 Display events already in progress, skipping...');
-            //     return;
-            // }
+            // Prevent multiple simultaneous updates to avoid flickering
+            if (displayEventsInProgress) {
+                console.log('🚫 Display events already in progress, skipping...');
+                return;
+            }
             
-            // displayEventsInProgress = true;
+            displayEventsInProgress = true;
             
             console.log('🔍 DEBUG displayEvents:', {
                 currentSport: currentSport,
@@ -4110,8 +4114,8 @@
                 });
             }
             
-            // Clear the progress flag (disabled)
-            // displayEventsInProgress = false;
+            // Clear the progress flag
+            displayEventsInProgress = false;
         }
 
         function updateFilterCounts(events) {
@@ -4601,13 +4605,13 @@
         let displayEventsOptimizedInProgress = false;
         
         function displayEvents(eventsToDisplay = null) {
-            // Temporarily disable the guard to fix the issue
-            // if (displayEventsOptimizedInProgress) {
-            //     console.log('🚫 Display events (optimized) already in progress, skipping...');
-            //     return;
-            // }
+            // Prevent multiple simultaneous updates to avoid flickering
+            if (displayEventsOptimizedInProgress) {
+                console.log('🚫 Display events (optimized) already in progress, skipping...');
+                return;
+            }
             
-            // displayEventsOptimizedInProgress = true;
+            displayEventsOptimizedInProgress = true;
             
 
             
@@ -4728,8 +4732,8 @@
                 }
             }
             
-            // Clear the progress flag (disabled)
-            // displayEventsOptimizedInProgress = false;
+            // Clear the progress flag
+            displayEventsOptimizedInProgress = false;
         }
 
         // Helper function to get sport-specific column headers
@@ -4819,7 +4823,6 @@
                 case 'win_one_set_player2':
                     return '<div>Yes</div><div>No</div>';
                 case 'correct_score':
-                case 'correct_score_first_half':
                 case 'correct_score_second_half':
                     return '<div>1-0</div><div>2-0</div><div>2-1</div>';
                 case 'asian_handicap':
@@ -4841,7 +4844,7 @@
                 case 'corners_over_under':
                     return '<div>Over</div><div>Under</div>';
                 case 'set_betting':
-                    return '<div>2-0</div><div>2-1</div><div>0-2</div>';
+                    return '<div>2-0</div><div>2-1</div><div>0-2</div><div>1-2</div>';
                 case 'handicap_result':
                     return '<div>Home</div><div>Draw</div><div>Away</div>';
                 case 'highest_scoring_half':
@@ -5056,10 +5059,13 @@
                     console.log(`🎯 2-column template for ${currentMarket}: ${template2}`);
                     return template2;
                 case 'correct_score':
-                case 'set_betting':
                     const template3 = '120px 1fr 120px 120px 120px'; // 3 odds columns
                     console.log(`🎯 3-column template for ${currentMarket}: ${template3}`);
                     return template3;
+                case 'set_betting':
+                    const template4 = '120px 1fr 120px 120px 120px 120px'; // 4 odds columns
+                    console.log(`🎯 4-column template for ${currentMarket}: ${template4}`);
+                    return template4;
                 default:
                     const defaultTemplate = '120px 1fr 120px 120px 120px'; // Default 3 columns
                     console.log(`🎯 Default template for ${currentMarket}: ${defaultTemplate}`);
@@ -5310,8 +5316,18 @@
                             ];
                         }
                         return null;
+                    case 'set_betting':
+                        // Handle Set Betting for tennis/table tennis
+                        if (event.odds && event.odds.set_betting && event.odds.set_betting.length >= 3) {
+                            return [
+                                { label: '2-0', odds: parseFloat(event.odds.set_betting[0]), selection: 'Set Betting 2-0' },
+                                { label: '2-1', odds: parseFloat(event.odds.set_betting[1]), selection: 'Set Betting 2-1' },
+                                { label: '0-2', odds: parseFloat(event.odds.set_betting[2]), selection: 'Set Betting 0-2' },
+                                { label: '1-2', odds: parseFloat(event.odds.set_betting[3] || event.odds.set_betting[2]), selection: 'Set Betting 1-2' }
+                            ];
+                        }
+                        return null;
                     case 'correct_score':
-                    case 'correct_score_first_half':
                     case 'correct_score_second_half':
                         const correctScoreMarket = market;
                         if (event.odds && event.odds[correctScoreMarket] && event.odds[correctScoreMarket].length >= 3) {
