@@ -980,6 +980,11 @@ class OptimizedGoalServeClient:
                 odds_data = json.load(f)
             
             logger.info(f"Successfully loaded odds for {sport_name} from JSON")
+            
+            # Force garbage collection after loading large JSON
+            import gc
+            gc.collect()
+            
             return odds_data
             
         except Exception as e:

@@ -1056,29 +1056,6 @@ if __name__ == '__main__':
         print(f"❌ Failed to start bet settlement service: {e}")
         logging.error(f"Failed to start bet settlement service: {e}")
     
-    print("🌐 Starting Flask application...")
-    print("🔧 Debug mode: True")
-    print("🔧 Host: 0.0.0.0")
-    
-    # Debug: Check what port we're actually using
-    port = int(os.getenv('PORT', 8080))
-    print(f"🔧 Port from environment: {os.getenv('PORT', 'NOT_SET')}")
-    print(f"🔧 Final port: {port}")
-    
-    # Run the application with SocketIO
-    try:
-        # Use production settings when not in debug mode
-        debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-        
-        socketio.run(
-            app, 
-            host='0.0.0.0', 
-            port=port, 
-            debug=debug_mode, 
-            allow_unsafe_werkzeug=True
-        )
-    except Exception as e:
-        print(f"❌ Failed to start Flask application: {e}")
-        logging.error(f"Failed to start Flask application: {e}")
-        sys.exit(1)
+    print("🌐 Flask application initialized successfully")
+    print("🔧 Ready for SocketIO to start the server")
 

@@ -26,6 +26,11 @@ def adapt_sql(sql: str) -> str:
     s = _BOOL_0.sub(r"\1FALSE", s)
     return s
 
+def force_gc_collect():
+    """Force garbage collection to free memory"""
+    import gc
+    gc.collect()
+
 def adapt_params(params: Any) -> Any:
     """Convert SQLite-style parameters to PostgreSQL-compatible ones"""
     if params is None:

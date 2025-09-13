@@ -393,7 +393,12 @@ def get_global_betting_events():
         
         conn.close()
         
-        return jsonify({
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
+        
+        # Create response data
+        response_data = {
             'success': True,
             'events': all_events,
             'pagination': {
@@ -414,7 +419,15 @@ def get_global_betting_events():
                 'sports': sorted(all_sports),
                 'markets': sorted(all_markets)
             }
-        })
+        }
+        
+        # Clear large variables from memory
+        del all_events
+        del all_sports
+        del all_markets
+        gc.collect()
+        
+        return jsonify(response_data)
         
     except Exception as e:
         print(f"Error fetching global betting events: {e}")
@@ -804,10 +817,17 @@ def get_operators():
         """
         
         operators = conn.execute(operators_query).fetchall()
+        
+        # Convert to list and close connection immediately
+        operators_list = [dict(op) for op in operators]
         conn.close()
         
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
+        
         return jsonify({
-            'operators': [dict(op) for op in operators]
+            'operators': operators_list
         })
         
     except Exception as e:
