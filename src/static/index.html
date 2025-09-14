@@ -2914,6 +2914,12 @@
                     return [
                         { id: 'match_result', name: 'Match Winners' }  // Esports only shows Match Winners (from home_away)
                     ];
+                case 'football':
+                    return [
+                        { id: 'match_result', name: 'Match Result' },  // American Football uses 3-way (1X2)
+                        { id: 'over_under', name: 'Over/Under' },
+                        { id: 'first_half_winner', name: '1st Half Winner' }
+                    ];
                 default:
                     return [
                         { id: 'home_away', name: 'Match Winner' },  // Default to home_away for sports without draw
@@ -4580,24 +4586,51 @@
             const endIndex = startIndex + EVENTS_PER_PAGE;
             const eventsToShow = allEvents.slice(0, endIndex);
             
-            displayEvents(eventsToShow);
+            console.log(`🔍 loadMoreEvents: Showing ${eventsToShow.length} events (page ${currentPage + 1})`);
+            console.log(`🔍 loadMoreEvents: allEvents.length = ${allEvents.length}, endIndex = ${endIndex}`);
+            console.log(`🔍 loadMoreEvents: Should show button? ${endIndex < allEvents.length}`);
             
-            if (endIndex < allEvents.length) {
-                // Show load more button
-                const loadMoreBtn = document.createElement('button');
-                loadMoreBtn.className = 'load-more-btn';
-                loadMoreBtn.textContent = 'Load More Events';
-                loadMoreBtn.onclick = () => {
-                    currentPage++;
-                    loadMoreEvents();
-                };
-                
-                const container = document.getElementById('eventsContent');
-                const existingBtn = container.querySelector('.load-more-btn');
-                if (existingBtn) {
-                    existingBtn.remove();
-                }
-                container.appendChild(loadMoreBtn);
+            // Use atomic table swapping to prevent empty table flashing
+            if (currentView === 'list') {
+                swapTableAtomically((buffer) => {
+                    displayListView(eventsToShow, buffer);
+                    
+                    // Add Load More button if needed
+                    if (endIndex < allEvents.length) {
+                        console.log(`🔍 loadMoreEvents: Creating Load More button`);
+                        const loadMoreBtn = document.createElement('button');
+                        loadMoreBtn.className = 'load-more-btn';
+                        loadMoreBtn.textContent = 'Load More Events';
+                        loadMoreBtn.onclick = () => {
+                            currentPage++;
+                            loadMoreEvents();
+                        };
+                        buffer.appendChild(loadMoreBtn);
+                        console.log(`🔍 loadMoreEvents: Load More button added to buffer`);
+                    }
+                });
+            } else {
+                swapTableAtomically((buffer) => {
+                    displayCouponView(eventsToShow, buffer);
+                    
+                    // Add Load More button if needed
+                    if (endIndex < allEvents.length) {
+                        console.log(`🔍 loadMoreEvents: Creating Load More button`);
+                        const loadMoreBtn = document.createElement('button');
+                        loadMoreBtn.className = 'load-more-btn';
+                        loadMoreBtn.textContent = 'Load More Events';
+                        loadMoreBtn.onclick = () => {
+                            currentPage++;
+                            loadMoreEvents();
+                        };
+                        buffer.appendChild(loadMoreBtn);
+                        console.log(`🔍 loadMoreEvents: Load More button added to buffer`);
+                    }
+                });
+            }
+            
+            if (endIndex >= allEvents.length) {
+                console.log(`🔍 loadMoreEvents: No Load More button needed (${endIndex} >= ${allEvents.length})`);
             }
         }
 
@@ -5001,8 +5034,8 @@
 
         // Helper function to get sport-specific column headers
             function getSportSpecificHeaders() {
-        const sportsWithDraws = ['soccer', 'basketball', 'hockey', 'handball', 'cricket', 'rugby', 'rugbyleague', 'futsal'];
-        const sportsWithoutDraws = ['tennis', 'volleyball', 'football', 'table_tennis', 'boxing', 'mma', 'darts', 'esports', 'baseball'];
+        const sportsWithDraws = ['soccer', 'basketball', 'hockey', 'handball', 'cricket', 'rugby', 'rugbyleague', 'futsal', 'football'];
+        const sportsWithoutDraws = ['tennis', 'volleyball', 'table_tennis', 'boxing', 'mma', 'darts', 'esports', 'baseball'];
             
             console.log(`🎯 getSportSpecificHeaders - Sport: ${currentSport}, Sports with draws:`, sportsWithDraws, 'Sports without draws:', sportsWithoutDraws);
             
@@ -5020,8 +5053,8 @@
 
         // Helper function to get sport-specific grid template
         function getSportSpecificGridTemplate() {
-                    const sportsWithDraws = ['soccer', 'basketball', 'hockey', 'handball', 'cricket', 'rugby', 'rugbyleague', 'futsal'];
-        const sportsWithoutDraws = ['tennis', 'volleyball', 'football', 'table_tennis', 'boxing', 'mma', 'darts', 'esports', 'baseball'];
+                    const sportsWithDraws = ['soccer', 'basketball', 'hockey', 'handball', 'cricket', 'rugby', 'rugbyleague', 'futsal', 'football'];
+        const sportsWithoutDraws = ['tennis', 'volleyball', 'table_tennis', 'boxing', 'mma', 'darts', 'esports', 'baseball'];
             
             console.log(`🎯 getSportSpecificGridTemplate - Sport: ${currentSport}, Market: ${currentMarket}`);
             
