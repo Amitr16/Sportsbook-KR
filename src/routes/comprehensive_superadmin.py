@@ -179,8 +179,8 @@ def get_global_betting_events():
                         profit_loss = event_total_stakes - total_payout
                         outcomes.append(profit_loss)
                     
-                    max_liability = abs(min(outcomes)) if outcomes else 0.0
-                    max_possible_gain = max(outcomes) if outcomes else 0.0
+                    max_liability = round(abs(min(outcomes)), 2) if outcomes else 0.0
+                    max_possible_gain = round(max(outcomes), 2) if outcomes else 0.0
                 else:
                     max_liability = 0.0
                     max_possible_gain = 0.0
@@ -215,8 +215,8 @@ def get_global_betting_events():
             'events': all_events,
             'total_events': total_events,
             'active_events': total_events,
-            'total_liability': sum(e['max_liability'] for e in all_events),
-            'max_possible_gain': sum(e['max_possible_gain'] for e in all_events),
+            'total_liability': round(sum(e['max_liability'] for e in all_events), 2),
+            'max_possible_gain': round(sum(e['max_possible_gain'] for e in all_events), 2),
             'summary': {
                 'total_events': total_events,
                 'total_bets': sum(event['total_bets'] for event in all_events),
@@ -383,14 +383,14 @@ def get_global_reports():
             'success': True,
             'stats': {
                 'total_bets': total_bets,
-                'total_stakes': float(stats['total_stakes'] or 0),
-                'total_revenue': float(stats['total_revenue'] or 0),
+                'total_stakes': round(float(stats['total_stakes'] or 0), 2),
+                'total_revenue': round(float(stats['total_revenue'] or 0), 2),
                 'win_rate': round(win_rate, 1),
                 'pending_bets': stats['pending_bets'] or 0,
                 'won_bets': won_bets,
                 'lost_bets': stats['lost_bets'] or 0
             },
-            'sport_performance': [{'sport': s['sport_name'], 'revenue': float(s['revenue'])} for s in sports],
+            'sport_performance': [{'sport': s['sport_name'], 'revenue': round(float(s['revenue']), 2)} for s in sports],
             'top_users': [{'username': u['username'], 'operator': u['sportsbook_name'], 'bets': u['bet_count']} for u in top_users]
         })
         
@@ -434,7 +434,7 @@ def get_operators():
                 'created_at': op['created_at'][:10] if op['created_at'] else '',
                 'total_users': op['total_users'],
                 'total_bets': op['total_bets'],
-                'revenue': float(op['revenue'] or 0),
+                'revenue': round(float(op['revenue'] or 0), 2),
                 'status': 'Active' if op['is_active'] else 'Disabled'
             })
         

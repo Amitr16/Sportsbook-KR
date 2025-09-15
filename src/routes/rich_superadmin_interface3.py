@@ -333,6 +333,8 @@ def get_global_betting_events():
                                 
                                 # Calculate global financials for this event (across all operators)
                                 max_liability, max_possible_gain = calculate_global_event_financials(event_id, market_id, sport_folder)
+                                max_liability = round(max_liability, 2)
+                                max_possible_gain = round(max_possible_gain, 2)
                                 betting_event['max_liability'] = max_liability
                                 betting_event['max_possible_gain'] = max_possible_gain
                                 
@@ -533,8 +535,18 @@ def get_global_users():
         
         conn.close()
         
+        # Round financial values to 2 decimal places
+        processed_users = []
+        for user in users:
+            user_dict = dict(user)
+            user_dict['balance'] = round(float(user_dict['balance'] or 0), 2)
+            user_dict['total_staked'] = round(float(user_dict['total_staked'] or 0), 2)
+            user_dict['total_payout'] = round(float(user_dict['total_payout'] or 0), 2)
+            user_dict['profit'] = round(float(user_dict['profit'] or 0), 2)
+            processed_users.append(user_dict)
+        
         return jsonify({
-            'users': [dict(user) for user in users],
+            'users': processed_users,
             'total': total_count,
             'page': page,
             'per_page': per_page

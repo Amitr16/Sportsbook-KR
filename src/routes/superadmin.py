@@ -263,9 +263,19 @@ def get_global_users():
         
         conn.close()
         
+        # Round financial values to 2 decimal places
+        processed_users = []
+        for user in users:
+            user_dict = dict(user)
+            user_dict['balance'] = round(float(user_dict['balance'] or 0), 2)
+            user_dict['total_staked'] = round(float(user_dict['total_staked'] or 0), 2)
+            user_dict['total_payout'] = round(float(user_dict['total_payout'] or 0), 2)
+            user_dict['profit'] = round(float(user_dict['profit'] or 0), 2)
+            processed_users.append(user_dict)
+        
         return jsonify({
             'success': True,
-            'users': [dict(user) for user in users]
+            'users': processed_users
         })
         
     except Exception as e:
