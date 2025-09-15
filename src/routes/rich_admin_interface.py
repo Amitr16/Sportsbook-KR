@@ -262,7 +262,7 @@ def get_tenant_betting_events(subdomain):
                 COUNT(*) as bet_count,
                 SUM(b.stake) as total_stake,
                 SUM(b.potential_return) as total_potential_return,
-                SUM(b.stake) as total_liability,
+                SUM(b.potential_return) as total_liability,
                 SUM(b.potential_return - b.stake) as total_revenue,
                 SUM(CASE WHEN b.is_active = TRUE THEN 1 ELSE 0 END) as active_bet_count,
                 COUNT(*) as total_bet_count
@@ -417,7 +417,7 @@ def get_tenant_stats(subdomain):
         """, (operator['id'],)).fetchone()['total']
         
         total_liability = conn.execute("""
-            SELECT COALESCE(SUM(stake), 0) as total FROM bets b 
+            SELECT COALESCE(SUM(potential_return), 0) as total FROM bets b 
             JOIN users u ON b.user_id = u.id 
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
             WHERE op.id = ? AND b.status = 'pending'
@@ -602,14 +602,16 @@ def get_tenant_stats(subdomain):
                                             if event_key in bet_info_map:
                                                 bet_info = bet_info_map[event_key]
                                                 betting_event['total_bets'] = bet_info['bet_count']
-                                                betting_event['liability'] = bet_info['total_liability']
-                                                betting_event['revenue'] = bet_info['total_revenue']
-                                                betting_event['max_liability'] = bet_info['total_liability']
-                                                betting_event['max_possible_gain'] = bet_info['total_revenue']
+                                                betting_event['liability'] = round(bet_info['total_liability'], 2)
+                                                betting_event['revenue'] = round(bet_info['total_revenue'], 2)
+                                                betting_event['max_liability'] = round(bet_info['total_liability'], 2)
+                                                betting_event['max_possible_gain'] = round(bet_info['total_revenue'], 2)
                                                 print(f"🔍 DEBUG: Found bet info for {event_key}: {bet_info}")
                                             else:
                                                 # Calculate financials if no bet info available
                                                 max_liability, max_possible_gain = calculate_event_financials(event_id, market_id, sport_folder, operator['id'])
+                                                max_liability = round(max_liability, 2)
+                                                max_possible_gain = round(max_possible_gain, 2)
                                                 betting_event['max_liability'] = max_liability
                                                 betting_event['max_possible_gain'] = max_possible_gain
                                                 betting_event['liability'] = max_liability
@@ -789,8 +791,8 @@ def get_tenant_stats(subdomain):
         
         # Calculate summary statistics (from filtered events)
         active_events = len([e for e in filtered_events if e.get('is_active', True)])
-        total_liability = sum(e.get('max_liability', 0) for e in filtered_events)
-        total_revenue = calculate_total_revenue(operator['id'])  # Calculate from settled bets for this operator
+        total_liability = round(sum(e.get('max_liability', 0) for e in filtered_events), 2)
+        total_revenue = round(calculate_total_revenue(operator['id']), 2)  # Calculate from settled bets for this operator
         
         # Debug logging
         print(f"🔍 DEBUG: Total events loaded: {len(all_events)}")
@@ -898,8 +900,18 @@ def get_tenant_users(subdomain):
         
         conn.close()
         
+        # Round financial values to 2 decimal places
+        processed_users = []
+        for user in users:
+            user_dict = dict(user)
+            user_dict['balance'] = round(float(user_dict['balance'] or 0), 2)
+            user_dict['total_staked'] = round(float(user_dict['total_staked'] or 0), 2)
+            user_dict['total_payout'] = round(float(user_dict['total_payout'] or 0), 2)
+            user_dict['profit'] = round(float(user_dict['profit'] or 0), 2)
+            processed_users.append(user_dict)
+        
         return jsonify({
-            'users': [dict(user) for user in users],
+            'users': processed_users,
             'total': total_count,
             'page': page,
             'per_page': per_page
@@ -1222,11 +1234,11 @@ def get_reports_overview(subdomain):
         conn.close()
         
         # Calculate metrics
-        total_stakes = float(totals['total_stakes'] or 0)
-        total_revenue_from_losses = float(totals['total_revenue_from_losses'] or 0)
-        total_payouts = float(totals['total_payouts'] or 0)
-        total_revenue = total_revenue_from_losses - total_payouts
-        win_rate = (totals['won_bets'] / max(totals['total_bets'], 1)) * 100
+        total_stakes = round(float(totals['total_stakes'] or 0), 2)
+        total_revenue_from_losses = round(float(totals['total_revenue_from_losses'] or 0), 2)
+        total_payouts = round(float(totals['total_payouts'] or 0), 2)
+        total_revenue = round(total_revenue_from_losses - total_payouts, 2)
+        win_rate = round((totals['won_bets'] / max(totals['total_bets'], 1)) * 100, 2)
         
         return jsonify({
             'overview': {

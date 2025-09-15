@@ -321,11 +321,11 @@ def get_users(subdomain):
                 'id': user['id'],
                 'username': user['username'],
                 'email': user['email'],
-                'balance': float(user['balance']),
+                'balance': round(float(user['balance']), 2),
                 'total_bets': user['total_bets'],
-                'total_staked': float(user['total_staked']),
-                'total_payout': float(user['total_payout']),
-                'cumulative_profit': float(user['cumulative_profit']),
+                'total_staked': round(float(user['total_staked']), 2),
+                'total_payout': round(float(user['total_payout']), 2),
+                'cumulative_profit': round(float(user['cumulative_profit']), 2),
                 'joined': user['created_at'][:10] if user['created_at'] else '',
                 'status': 'Active' if user['is_active'] else 'Disabled',
                 'is_active': user['is_active']
@@ -450,14 +450,14 @@ def get_reports(subdomain):
             'success': True,
             'stats': {
                 'total_bets': total_bets,
-                'total_stakes': float(stats['total_stakes'] or 0),
-                'total_revenue': float(stats['total_revenue'] or 0),
+                'total_stakes': round(float(stats['total_stakes'] or 0), 2),
+                'total_revenue': round(float(stats['total_revenue'] or 0), 2),
                 'win_rate': round(win_rate, 1),
                 'pending_bets': stats['pending_bets'] or 0,
                 'won_bets': won_bets,
                 'lost_bets': stats['lost_bets'] or 0
             },
-            'sport_performance': [{'sport': s['sport_name'], 'revenue': float(s['revenue'])} for s in sports],
+            'sport_performance': [{'sport': s['sport_name'], 'revenue': round(float(s['revenue']), 2)} for s in sports],
             'top_users': [{'username': u['username'], 'bets': u['bet_count']} for u in top_users]
         })
         

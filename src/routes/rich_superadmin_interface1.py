@@ -325,6 +325,9 @@ def get_global_betting_events():
             
             # Calculate proper liability using the algorithm
             total_liability, total_revenue = calculate_global_event_financials(match_id, market_id, sport_name, conn)
+            # Round to 2 decimal places
+            total_liability = round(total_liability, 2)
+            total_revenue = round(total_revenue, 2)
             
             # Determine if event is active based on active bets
             is_event_active = active_bet_count > 0
@@ -375,21 +378,21 @@ def get_global_betting_events():
         total_events = len(all_events)
         active_events = len([e for e in all_events if e['status'] == 'active'])
         
-        # Get actual settled bets data for summary
-        settled_stats_query = """
+        # Get actual pending bets data for summary (liability = money at risk)
+        pending_stats_query = """
         SELECT 
             COUNT(*) as total_bets,
-            COALESCE(SUM(stake), 0) as total_stakes,
-            COALESCE(SUM(stake), 0) - COALESCE(SUM(actual_return), 0) as total_revenue
+            COALESCE(SUM(potential_return), 0) as total_liability,
+            COALESCE(SUM(potential_return - stake), 0) as total_revenue
         FROM bets b
         JOIN users u ON b.user_id = u.id
         JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-        WHERE op.is_active = TRUE AND b.status IN ('won', 'lost')
+        WHERE op.is_active = TRUE AND b.status = 'pending'
         """
         
-        settled_stats = conn.execute(settled_stats_query).fetchone()
-        total_liability = float(settled_stats['total_stakes'] or 0)  # Total stakes from settled bets
-        total_revenue = float(settled_stats['total_revenue'] or 0)   # Actual revenue from settled bets
+        pending_stats = conn.execute(pending_stats_query).fetchone()
+        total_liability = round(float(pending_stats['total_liability'] or 0), 2)  # Total potential returns from pending bets
+        total_revenue = round(float(pending_stats['total_revenue'] or 0), 2)     # Potential profit/loss from pending bets
         
         conn.close()
         
@@ -520,8 +523,18 @@ def get_global_users():
         
         conn.close()
         
+        # Round financial values to 2 decimal places
+        processed_users = []
+        for user in users:
+            user_dict = dict(user)
+            user_dict['balance'] = round(float(user_dict['balance'] or 0), 2)
+            user_dict['total_staked'] = round(float(user_dict['total_staked'] or 0), 2)
+            user_dict['total_payout'] = round(float(user_dict['total_payout'] or 0), 2)
+            user_dict['profit'] = round(float(user_dict['profit'] or 0), 2)
+            processed_users.append(user_dict)
+        
         return jsonify({
-            'users': [dict(user) for user in users],
+            'users': processed_users,
             'total': total_count,
             'page': page,
             'per_page': per_page
@@ -759,13 +772,13 @@ def get_global_overview():
         """).fetchone()['count']
         
         # Get total revenue from settled bets (actual revenue)
-        total_revenue = conn.execute("""
+        total_revenue = round(float(conn.execute("""
             SELECT COALESCE(SUM(stake), 0) - COALESCE(SUM(actual_return), 0) as total
             FROM bets b
             JOIN users u ON b.user_id = u.id
             JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
             WHERE op.is_active = TRUE AND b.status IN ('won', 'lost')
-        """).fetchone()['total']
+        """).fetchone()['total'] or 0), 2)
         
         # Get active events (total count of pending bets)
         active_events = conn.execute("""
@@ -776,12 +789,12 @@ def get_global_overview():
             WHERE op.is_active = TRUE AND b.status = 'pending'
         """).fetchone()['count']
         
-        # Get total liability (sum of all pending bet stakes)
-        total_liability = conn.execute("""
-            SELECT COALESCE(SUM(stake), 0) as total 
+        # Get total liability (sum of all pending bet potential returns - just add them up like in the table)
+        total_liability = round(float(conn.execute("""
+            SELECT COALESCE(SUM(potential_return), 0) as total 
             FROM bets 
             WHERE status = 'pending'
-        """).fetchone()['total']
+        """).fetchone()['total'] or 0), 2)
         
         conn.close()
         
@@ -939,8 +952,7 @@ def get_global_stats():
             WHERE op.is_active = TRUE AND b.status = 'pending'
         """)).scalar_one()
         
-        # Get total liability across all operators (sum of all pending bet potential returns)
-        # This matches the calculation shown in the betting events table
+        # Get total liability across all operators (sum of all pending bet potential returns - just add them up)
         total_liability = db.execute(text("""
             SELECT COALESCE(SUM(b.potential_return), 0)
             FROM bets b 
@@ -2308,6 +2320,80 @@ RICH_SUPERADMIN_TEMPLATE = '''
         .table-container {
             overflow-x: auto;
         }
+        
+        /* Client-Side Pagination Styles */
+        .pagination-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+            padding: 15px 0;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .pagination-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .pagination-info select {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+        }
+        
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pagination-controls button {
+            padding: 8px 15px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .pagination-controls button:hover:not(:disabled) {
+            background: #f5f5f5;
+        }
+        
+        .pagination-controls button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .page-numbers {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .page-numbers button {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            min-width: 40px;
+        }
+        
+        .page-numbers button:hover {
+            background: #f5f5f5;
+        }
+        
+        .page-numbers button.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
 
         table {
             width: 100%;
@@ -2628,6 +2714,26 @@ RICH_SUPERADMIN_TEMPLATE = '''
                          <!-- Events will be loaded here -->
                     </tbody>
                 </table>
+            </div>
+            
+            <!-- Client-Side Pagination Controls -->
+            <div class="pagination-container">
+                <div class="pagination-info">
+                    <span id="pagination-info">Showing 0-0 of 0 events</span>
+                    <select id="per-page-select" onchange="changePerPage()">
+                        <option value="10">10 per page</option>
+                        <option value="20" selected>20 per page</option>
+                        <option value="50">50 per page</option>
+                        <option value="100">100 per page</option>
+                    </select>
+                </div>
+                <div class="pagination-controls">
+                    <button id="prev-page-btn" onclick="goToPreviousPage()" disabled>Previous</button>
+                    <div id="page-numbers" class="page-numbers">
+                        <!-- Page numbers will be generated here -->
+                    </div>
+                    <button id="next-page-btn" onclick="goToNextPage()" disabled>Next</button>
+                </div>
             </div>
         </div>
         
@@ -3694,6 +3800,10 @@ RICH_SUPERADMIN_TEMPLATE = '''
         }
         
         // Global Betting Events Management Functions
+        let allGlobalEvents = []; // Store all events for client-side pagination
+        let currentPage = 1;
+        let currentPerPage = 20;
+        
         function loadGlobalBettingEventsWithFilters() {
             const sportFilter = document.getElementById('global-events-sport-filter').value;
             const marketFilter = document.getElementById('global-market-filter').value;
@@ -3716,7 +3826,15 @@ RICH_SUPERADMIN_TEMPLATE = '''
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    displayGlobalEvents(data.events);
+                    // Store all events for client-side pagination
+                    allGlobalEvents = data.events;
+                    currentPage = 1; // Reset to first page
+                    
+                    console.log(`Loaded ${allGlobalEvents.length} events from server`);
+                    
+                    // Display paginated events
+                    displayPaginatedGlobalEvents();
+                    
                     // Update total liability in summary card from table data
                     if (document.getElementById('global-total-liability')) {
                         document.getElementById('global-total-liability').textContent = '$' + (data.summary.total_liability || 0).toFixed(2);
@@ -3736,12 +3854,141 @@ RICH_SUPERADMIN_TEMPLATE = '''
         function refreshGlobalEvents() {
             loadGlobalBettingEventsWithFilters();
         }
+        
+        // Client-Side Pagination Functions
+        function displayPaginatedGlobalEvents() {
+            console.log(`Displaying paginated events: allGlobalEvents.length = ${allGlobalEvents ? allGlobalEvents.length : 'undefined'}`);
+            console.log(`Current page: ${currentPage}, Per page: ${currentPerPage}`);
+            
+            if (!allGlobalEvents || allGlobalEvents.length === 0) {
+                console.log('No events to display, showing empty table');
+                const tbody = document.getElementById('global-events-tbody');
+                tbody.innerHTML = '<tr><td colspan="9" class="loading">No events found</td></tr>';
+                return;
+            }
+            
+            const startIndex = (currentPage - 1) * currentPerPage;
+            const endIndex = startIndex + currentPerPage;
+            const eventsToShow = allGlobalEvents.slice(startIndex, endIndex);
+            
+            console.log(`Showing events ${startIndex} to ${endIndex}, total events to show: ${eventsToShow.length}`);
+            
+            displayGlobalEvents(eventsToShow);
+            updatePaginationControls();
+        }
+        
+        function updatePaginationControls() {
+            const totalEvents = allGlobalEvents.length;
+            const totalPages = Math.ceil(totalEvents / currentPerPage);
+            
+            // Update pagination info
+            const startItem = (currentPage - 1) * currentPerPage + 1;
+            const endItem = Math.min(currentPage * currentPerPage, totalEvents);
+            document.getElementById('pagination-info').textContent = `Showing ${startItem}-${endItem} of ${totalEvents} events`;
+            
+            // Update per-page select
+            document.getElementById('per-page-select').value = currentPerPage;
+            
+            // Update navigation buttons
+            document.getElementById('prev-page-btn').disabled = currentPage <= 1;
+            document.getElementById('next-page-btn').disabled = currentPage >= totalPages;
+            
+            // Generate page numbers
+            generatePageNumbers(totalPages);
+        }
+        
+        function generatePageNumbers(totalPages) {
+            const pageNumbersContainer = document.getElementById('page-numbers');
+            pageNumbersContainer.innerHTML = '';
+            
+            // Show up to 5 page numbers around current page
+            let startPage = Math.max(1, currentPage - 2);
+            let endPage = Math.min(totalPages, currentPage + 2);
+            
+            // Adjust if we're near the beginning or end
+            if (endPage - startPage < 4) {
+                if (startPage === 1) {
+                    endPage = Math.min(totalPages, startPage + 4);
+                } else {
+                    startPage = Math.max(1, endPage - 4);
+                }
+            }
+            
+            // Add first page and ellipsis if needed
+            if (startPage > 1) {
+                addPageButton(1);
+                if (startPage > 2) {
+                    addEllipsis();
+                }
+            }
+            
+            // Add page numbers
+            for (let i = startPage; i <= endPage; i++) {
+                addPageButton(i, i === currentPage);
+            }
+            
+            // Add last page and ellipsis if needed
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    addEllipsis();
+                }
+                addPageButton(totalPages);
+            }
+        }
+        
+        function addPageButton(pageNum, isActive = false) {
+            const pageNumbersContainer = document.getElementById('page-numbers');
+            const button = document.createElement('button');
+            button.textContent = pageNum;
+            button.className = isActive ? 'active' : '';
+            button.onclick = () => goToPage(pageNum);
+            pageNumbersContainer.appendChild(button);
+        }
+        
+        function addEllipsis() {
+            const pageNumbersContainer = document.getElementById('page-numbers');
+            const ellipsis = document.createElement('span');
+            ellipsis.textContent = '...';
+            ellipsis.style.padding = '8px 12px';
+            ellipsis.style.color = '#666';
+            pageNumbersContainer.appendChild(ellipsis);
+        }
+        
+        function goToPage(page) {
+            currentPage = page;
+            displayPaginatedGlobalEvents();
+        }
+        
+        function goToPreviousPage() {
+            if (currentPage > 1) {
+                goToPage(currentPage - 1);
+            }
+        }
+        
+        function goToNextPage() {
+            const totalPages = Math.ceil(allGlobalEvents.length / currentPerPage);
+            if (currentPage < totalPages) {
+                goToPage(currentPage + 1);
+            }
+        }
+        
+        function changePerPage() {
+            const newPerPage = parseInt(document.getElementById('per-page-select').value);
+            currentPerPage = newPerPage;
+            currentPage = 1; // Reset to first page
+            displayPaginatedGlobalEvents();
+        }
 
         // Table sorting function
         function sortTable(tableId, columnIndex) {
             const table = document.getElementById(tableId);
-            const tbody = table.querySelector('tbody');
-            const rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            // Safety check: if no events loaded, reload data first
+            if (!allGlobalEvents || allGlobalEvents.length === 0) {
+                console.log('No events loaded, reloading data...');
+                loadGlobalBettingEventsWithFilters();
+                return;
+            }
             
             // Get current sort direction
             const header = table.querySelector(`th:nth-child(${columnIndex + 1})`);
@@ -3760,10 +4007,50 @@ RICH_SUPERADMIN_TEMPLATE = '''
             const icon = header.querySelector('.sort-icon');
             if (icon) icon.textContent = newDirection === 'asc' ? '↑' : '↓';
             
-            // Sort rows
-            rows.sort((a, b) => {
-                const aValue = a.cells[columnIndex].getAttribute('data-sort') || a.cells[columnIndex].textContent;
-                const bValue = b.cells[columnIndex].getAttribute('data-sort') || b.cells[columnIndex].textContent;
+            console.log(`Sorting ${allGlobalEvents.length} events by column ${columnIndex} (${newDirection})`);
+            
+            // Sort all events based on the column
+            allGlobalEvents.sort((a, b) => {
+                let aValue, bValue;
+                
+                // Get the appropriate field value based on column index
+                switch(columnIndex) {
+                    case 0: // Event ID
+                        aValue = a.event_id;
+                        bValue = b.event_id;
+                        break;
+                    case 1: // Sport
+                        aValue = a.sport;
+                        bValue = b.sport;
+                        break;
+                    case 2: // Event Name
+                        aValue = a.event_name;
+                        bValue = b.event_name;
+                        break;
+                    case 3: // Market
+                        aValue = a.market;
+                        bValue = b.market;
+                        break;
+                    case 4: // Total Bets
+                        aValue = a.total_bets;
+                        bValue = b.total_bets;
+                        break;
+                    case 5: // Liability
+                        aValue = Math.abs(a.liability);
+                        bValue = Math.abs(b.liability);
+                        break;
+                    case 6: // Revenue
+                        aValue = Math.abs(a.revenue);
+                        bValue = Math.abs(b.revenue);
+                        break;
+                    case 7: // Status
+                        aValue = a.status;
+                        bValue = b.status;
+                        break;
+                    default:
+                        aValue = '';
+                        bValue = '';
+                }
                 
                 // Handle numeric values
                 const aNum = parseFloat(aValue);
@@ -3784,8 +4071,9 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 }
             });
             
-            // Reorder rows in the table
-            rows.forEach(row => tbody.appendChild(row));
+            // Reset to first page and re-display
+            currentPage = 1;
+            displayPaginatedGlobalEvents();
         }
 
         function displayGlobalEvents(events) {
