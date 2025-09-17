@@ -546,34 +546,80 @@ def get_global_users():
 @rich_superadmin_bp.route('/superadmin/api/global-users/reset', methods=['POST'])
 @check_superadmin_auth
 def reset_all_global_users():
-    """Reset all users across all operators - superadmin only"""
+    """Reset contest - reset all users and save contest end date"""
     try:
+        print("🏆 RESET CONTEST: Starting contest reset process...")
         data = request.get_json()
         new_balance = float(data.get('new_balance', 0))
+        contest_end_date = data.get('contest_end_date')
+        print(f"🏆 RESET CONTEST: New balance set to: {new_balance}")
+        print(f"🏆 RESET CONTEST: Contest end date: {contest_end_date}")
         
         if new_balance < 0:
+            print("❌ RESET CONTEST: Invalid balance - must be 0 or greater")
             return jsonify({'success': False, 'error': 'Balance must be 0 or greater'}), 400
+            
+        if not contest_end_date:
+            print("❌ RESET CONTEST: Contest end date is required")
+            return jsonify({'success': False, 'error': 'Contest end date is required'}), 400
         
+        # BACKUP LEADERBOARDS BEFORE RESET
+        print("💾 RESET CONTEST: Starting leaderboard backup...")
+        try:
+            from src.backup_leaderboard import backup_all_leaderboards
+            backup_result = backup_all_leaderboards()
+            print(f"✅ RESET CONTEST: Leaderboard backup completed: {backup_result['user_count']} users, {backup_result['partner_count']} partners")
+        except Exception as e:
+            print(f"⚠️ RESET CONTEST: Warning - Failed to backup leaderboards: {e}")
+            # Continue with reset even if backup fails
+        
+        print("🔄 RESET CONTEST: Connecting to database...")
         conn = get_db_connection()
         
+        # SAVE CONTEST END DATE
+        print("🏆 RESET CONTEST: Saving contest end date...")
+        try:
+            from datetime import datetime
+            contest_datetime = datetime.fromisoformat(contest_end_date.replace('Z', '+00:00'))
+            
+            # Deactivate previous contests
+            conn.execute("UPDATE contest_dates SET is_active = FALSE")
+            
+            # Insert new contest date
+            conn.execute("""
+                INSERT INTO contest_dates (contest_name, contest_end_date, is_active)
+                VALUES (?, ?, TRUE)
+            """, (f"Contest {contest_datetime.strftime('%Y-%m-%d %H:%M')}", contest_datetime))
+            
+            print(f"✅ RESET CONTEST: Contest end date saved: {contest_datetime}")
+        except Exception as e:
+            print(f"⚠️ RESET CONTEST: Warning - Failed to save contest date: {e}")
+            # Continue with reset even if contest date save fails
+        
         # Cancel all pending bets and refund stakes
+        print("🔄 RESET CONTEST: Cancelling pending bets...")
         bets_cancelled = conn.execute("""
             UPDATE bets 
             SET status = 'cancelled' 
             WHERE status = 'pending'
         """).rowcount
+        print(f"✅ RESET CONTEST: Cancelled {bets_cancelled} pending bets")
         
         # Reset all user balances
+        print("🔄 RESET CONTEST: Resetting user balances...")
         users_reset = conn.execute("""
             UPDATE users 
             SET balance = ?
         """, (new_balance,)).rowcount
+        print(f"✅ RESET CONTEST: Reset {users_reset} user balances to {new_balance}")
         
         # Update default balance for all operators
+        print("🔄 RESET CONTEST: Updating operator default balances...")
         import json
         
         # First get all operators and update their settings
         operators = conn.execute("SELECT id, settings FROM sportsbook_operators").fetchall()
+        print(f"🔄 RESET CONTEST: Found {len(operators)} operators to update")
         
         for operator in operators:
             try:
@@ -594,15 +640,19 @@ def reset_all_global_users():
                     WHERE id = ?
                 """, (json.dumps({'default_user_balance': new_balance}), operator['id']))
         
+        print("🔄 RESET CONTEST: Committing changes to database...")
         conn.commit()
         conn.close()
         
+        print(f"✅ RESET CONTEST: Successfully completed! Cancelled {bets_cancelled} bets, reset {users_reset} users to balance {new_balance}")
+        
         return jsonify({
             'success': True,
-            'message': f'Successfully reset all users across all operators',
+            'message': f'Contest reset completed successfully! Contest end date saved.',
             'bets_cancelled': bets_cancelled,
             'users_reset': users_reset,
-            'new_balance': new_balance
+            'new_balance': new_balance,
+            'contest_end_date': contest_end_date
         })
         
     except Exception as e:
@@ -2832,14 +2882,16 @@ RICH_SUPERADMIN_TEMPLATE = '''
             <div class="controls">
                 <button onclick="loadGlobalUsers()">🔄 Refresh Global Users</button>
                 
-                <div class="reset-users-controls" style="display: inline-block; margin-left: 20px;">
+                <div class="reset-contest-controls" style="display: inline-block; margin-left: 20px;">
                     <input type="number" id="global-reset-balance-amount" placeholder="Enter balance amount" 
                            style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 150px;">
-                    <button onclick="resetAllGlobalUsers()" style="background: #dc2626; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
-                        🔄 Reset All Users
+                    <input type="datetime-local" id="contest-end-date" placeholder="Contest End Date" 
+                           style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 200px;">
+                    <button onclick="resetContest()" style="background: #dc2626; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
+                        🏆 Reset Contest
                     </button>
                     <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                        ⚠️ This will cancel all pending bets (refund stakes), reset ALL user balances across ALL operators, and set default balance for new users
+                        ⚠️ This will cancel all pending bets (refund stakes), reset ALL user balances across ALL operators, set default balance for new users, and save contest end date
                     </div>
                 </div>
             </div>
@@ -3459,15 +3511,21 @@ RICH_SUPERADMIN_TEMPLATE = '''
             }, 5000);
         }
         
-        async function resetAllGlobalUsers() {
+        async function resetContest() {
             const resetAmount = document.getElementById('global-reset-balance-amount').value;
+            const contestEndDate = document.getElementById('contest-end-date').value;
             
             if (!resetAmount || resetAmount < 0) {
                 alert('Please enter a valid balance amount (must be 0 or greater)');
                 return;
             }
             
-            if (!confirm(`⚠️ WARNING: This will:\n\n1. Cancel ALL pending bets (refund stakes) across ALL operators\n2. Reset ALL user balances to $${resetAmount} across ALL operators\n3. Set default balance for NEW users to $${resetAmount}\n4. This action cannot be undone!\n\nAre you sure you want to continue?`)) {
+            if (!contestEndDate) {
+                alert('Please enter a contest end date');
+                return;
+            }
+            
+            if (!confirm(`⚠️ WARNING: This will:\n\n1. Cancel ALL pending bets (refund stakes) across ALL operators\n2. Reset ALL user balances to $${resetAmount} across ALL operators\n3. Set default balance for NEW users to $${resetAmount}\n4. Create backup snapshot of current leaderboards\n5. Save contest end date: ${new Date(contestEndDate).toLocaleString()}\n6. This action cannot be undone!\n\nAre you sure you want to continue?`)) {
                 return;
             }
             
@@ -3478,7 +3536,8 @@ RICH_SUPERADMIN_TEMPLATE = '''
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        new_balance: parseFloat(resetAmount)
+                        new_balance: parseFloat(resetAmount),
+                        contest_end_date: contestEndDate
                     })
                 });
                 
