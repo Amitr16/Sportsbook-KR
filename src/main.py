@@ -22,6 +22,7 @@ from flask_sqlalchemy import SQLAlchemy
 from src.routes.auth import auth_bp
 from src.routes.json_sports import json_sports_bp
 from src.routes.sports import sports_bp
+from src.routes.public_leaderboard import public_leaderboard_bp
 # Move betting routes import to after database initialization to avoid circular dependency
 # from src.routes.betting import betting_bp
 from src.routes.prematch_odds import prematch_odds_bp
@@ -117,6 +118,26 @@ socketio = SocketIO(
 @app.route('/health')
 def health_check():
     return {'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()}
+
+@app.route('/user-leaderboard')
+def user_leaderboard_page():
+    """Serve public user leaderboard HTML page"""
+    try:
+        with open('src/static/user_leader.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        logging.error(f"Error serving user leaderboard page: {e}")
+        return f"Error loading leaderboard page: {str(e)}", 500
+
+@app.route('/partner-leaderboard')
+def partner_leaderboard_page():
+    """Serve public partner leaderboard HTML page"""
+    try:
+        with open('src/static/partner_leader.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        logging.error(f"Error serving partner leaderboard page: {e}")
+        return f"Error loading leaderboard page: {str(e)}", 500
 
 # Add route debug endpoint
 @app.route('/debug/routes')
@@ -311,6 +332,7 @@ app.register_blueprint(rich_admin_bp)  # Rich admin interface
 app.register_blueprint(rich_superadmin_bp)
 app.register_blueprint(theme_bp, url_prefix='/api')  # Theme customization routes
 app.register_blueprint(public_apis_bp)  # Public APIs for non-authenticated users
+app.register_blueprint(public_leaderboard_bp)  # Public leaderboard routes
 app.register_blueprint(auth_bp, url_prefix='/api/auth')  # General auth routes (less specific)
 logger.info("✅ Registered auth_bp blueprint with /api/auth prefix")
 app.register_blueprint(json_sports_bp, url_prefix='/api/sports')
