@@ -2446,7 +2446,7 @@ RICH_ADMIN_TEMPLATE = '''
     
     <div class="container">
                     <div class="nav-tabs">
-                <button class="nav-tab active" onclick="showSection('betting-events')">📊 Betting Events</button>
+                <button class="nav-tab active" onclick="showSection('betting-events')">📊 Events</button>
 
                 <button class="nav-tab" onclick="showSection('user-management')">👥 User Management</button>
                 <button class="nav-tab" onclick="showSection('report-builder')">🔧 Report Builder</button>

@@ -535,7 +535,6 @@
             border-radius: 12px;
             font-size: 0.75rem;
             font-weight: 600;
-            display: none; /* Hide bet counts */
         }
 
         .sport-item.active .event-count {
@@ -1671,7 +1670,7 @@
         // Show bet history in sidebar for authenticated users
         const betHistoryItems = document.querySelectorAll('.filter-item');
         betHistoryItems.forEach(item => {
-            if (item.textContent.includes('Bet History')) {
+            if (item.textContent.includes('Trade History')) {
                 item.style.display = 'block';
             }
         });
@@ -1958,7 +1957,7 @@
           // Hide bet history in sidebar for public users
           const betHistoryItems = document.querySelectorAll('.filter-item');
           betHistoryItems.forEach(item => {
-              if (item.textContent.includes('Bet History')) {
+              if (item.textContent.includes('Trade History')) {
                   item.style.display = 'none';
               }
           });
@@ -2209,7 +2208,7 @@
                         <div class="balance" id="userBalance">$1000.00</div>
                         <div class="user-menu" id="userMenu" onclick="toggleUserMenu()">Loading... ▼</div>
                         <div class="user-dropdown" id="userDropdown" style="display: none;">
-                            <div class="dropdown-item" onclick="showBetHistory()">📊 Bet History</div>
+                            <div class="dropdown-item" onclick="showBetHistory()">📊 Trade History</div>
                             <div class="dropdown-item" onclick="logout()">🚪 Logout</div>
                         </div>
                     </div>
@@ -2273,7 +2272,7 @@
                     <div class="filter-item" onclick="showBetHistory()">
                         <div class="filter-info">
                             <span class="filter-icon">📊</span>
-                            <span>Bet History</span>
+                            <span>Trade History</span>
                         </div>
                     </div>
                     <div class="filter-item" onclick="showAdminPanel()" style="display: none;">
@@ -2329,7 +2328,7 @@
         <aside class="bet-slip">
             <div class="bet-slip-header">
                 <div class="bet-slip-title">
-                    🎯 Bet Slip
+                    🎯 Trade Slip
                     <span class="bet-count" id="betCount">0</span>
                 </div>
                 <div class="bet-slip-controls">
@@ -3378,6 +3377,9 @@
             } finally {
                 // Always clear the loading flag (disabled)
                 // loadSportsInProgress = false;
+                
+                // Update sport counts after loading sports (they will be 0 initially until events are loaded)
+                setTimeout(() => updateSportCounts(), 200);
             }
         }
 
@@ -3662,14 +3664,13 @@
         async function loadEvents(sport, forceRefresh = false, retryCount = 0) {
             console.log(`🔍 DEBUG loadEvents called: sport=${sport}, forceRefresh=${forceRefresh}, retryCount=${retryCount}`);
             
-            // Temporarily disable the guard to fix the issue
-            // // Prevent multiple simultaneous loads for the same sport
-            // if (loadingEvents[sport]) {
-            //     console.log(`🚫 Already loading events for ${sport}, skipping duplicate request`);
-            //     return;
-            // }
+            // Prevent multiple simultaneous loads for the same sport
+            if (loadingEvents[sport]) {
+                console.log(`🚫 Already loading events for ${sport}, skipping duplicate request`);
+                return;
+            }
             
-            // loadingEvents[sport] = true;
+            loadingEvents[sport] = true;
             
             try {
                 // Show loading state
@@ -3687,9 +3688,12 @@
                     console.log(`📦 Using cached events for ${sport} (age: ${Math.round(cacheAge/1000)}s)`);
                                     eventsData[sport] = JSON.parse(cachedData);
                 window.eventsData[sport] = eventsData[sport]; // Sync with global
-                console.log(`🔍 DEBUG: eventsData[${sport}] set from cache to:`, eventsData[sport]);
+                    console.log(`🔍 DEBUG: eventsData[${sport}] set from cache to:`, eventsData[sport]);
                     console.log(`🔍 DEBUG: eventsData keys after cache:`, Object.keys(eventsData));
                     displayEvents();
+                    
+                    // Update sport counts after loading from cache
+                    setTimeout(() => updateSportCounts(), 100);
                     updateBettingMarkets();
                     
                     // Hide loading indicator since we're using cached data
@@ -3796,8 +3800,18 @@
                     window.eventsData[sport] = freshData; // Sync with global
                     console.log(`🔍 DEBUG: eventsData[${sport}] set to:`, eventsData[sport]);
                     console.log(`🔍 DEBUG: eventsData keys after setting:`, Object.keys(eventsData));
-                    displayEvents();
-                    updateBettingMarkets();
+                    
+                    // Safely call displayEvents with error handling
+                    try {
+                        displayEvents();
+                        updateBettingMarkets();
+                    } catch (displayError) {
+                        console.error('Error in displayEvents or updateBettingMarkets:', displayError);
+                        document.getElementById('eventsContent').innerHTML = '<div class="loading-text">Error displaying events. Please refresh the page.</div>';
+                    }
+                    
+                    // Update sport counts after loading events for this sport
+                    setTimeout(() => updateSportCounts(), 100);
                     
                     // Cache the data for persistence across manual refreshes
                     localStorage.setItem(cacheKey, JSON.stringify(freshData));
@@ -3852,8 +3866,8 @@
                 document.getElementById('eventsContent').innerHTML = `<div class="loading-text">Network error: ${error.message}. Please check your connection and refresh.</div>`;
                 hideLoadingIndicator();
             } finally {
-                // Always clear the loading flag (disabled)
-                // loadingEvents[sport] = false;
+                // Always clear the loading flag
+                loadingEvents[sport] = false;
             }
         }
         
@@ -4013,6 +4027,8 @@
             
             displayEventsInProgress = true;
             
+            try {
+            
             console.log('🔍 DEBUG displayEvents:', {
                 currentSport: currentSport,
                 eventsDataKeys: Object.keys(eventsData),
@@ -4120,8 +4136,79 @@
                 });
             }
             
-            // Clear the progress flag
-            displayEventsInProgress = false;
+            } catch (error) {
+                console.error('Error in displayEvents:', error);
+                const container = document.getElementById('eventsContent');
+                if (container) {
+                    container.innerHTML = '<div class="loading-text">Error displaying events. Please refresh the page.</div>';
+                }
+            } finally {
+                // Always clear the progress flag
+                displayEventsInProgress = false;
+            }
+            
+            // Update sport counts after displaying events
+            updateSportCounts();
+        }
+        
+        // Function to count filtered events for each sport and update the sidebar counts
+        function updateSportCounts() {
+            console.log('🔢 Updating sport counts...');
+            
+            const now = new Date();
+            const sportCounts = {};
+            
+            // Count events for each sport after applying the same filters as displayEvents
+            Object.keys(eventsData).forEach(sport => {
+                const events = eventsData[sport] || [];
+                
+                // Apply the same filtering logic as displayEvents
+                let activeEvents = events.filter(event => {
+                    // Skip completed and cancelled matches
+                    if (event.is_completed || event.is_cancelled) return false;
+                    
+                    // Skip live matches - we only want pre-match odds
+                    if (event.status === 'Live' || event.status === 'LIVE' || 
+                        event.status === 'HT' || event.status === 'FT' ||
+                        event.status === 'Finished' || event.status === 'Final' ||
+                        event.status === 'Ended' || event.status === 'Completed') {
+                        return false;
+                    }
+                    
+                    return true;
+                });
+                
+                // Filter to show only future events
+                activeEvents = activeEvents.filter(event => {
+                    if (!event?.date) {
+                        return false; // need a date at least
+                    }
+                    try {
+                        const dt = parseFlexibleEventDateTime(event.date, event.time);
+                        const isFuture = dt && dt.getTime() > now.getTime();
+                        return isFuture;
+                    } catch (e) {
+                        console.warn('Date parse failed for event in count:', event, e);
+                        return false;
+                    }
+                });
+                
+                sportCounts[sport] = activeEvents.length;
+            });
+            
+            // Update the sidebar sport counts
+            const sportItems = document.querySelectorAll('.sport-item');
+            sportItems.forEach(item => {
+                const sportName = item.getAttribute('onclick')?.match(/selectSport\('([^']+)'\)/)?.[1];
+                if (sportName && sportCounts.hasOwnProperty(sportName)) {
+                    const countElement = item.querySelector('.event-count');
+                    if (countElement) {
+                        countElement.textContent = sportCounts[sportName];
+                    }
+                }
+            });
+            
+            console.log('🔢 Sport counts updated:', sportCounts);
         }
 
         function updateFilterCounts(events) {
@@ -4632,141 +4719,6 @@
             if (endIndex >= allEvents.length) {
                 console.log(`🔍 loadMoreEvents: No Load More button needed (${endIndex} >= ${allEvents.length})`);
             }
-        }
-
-        // Optimized displayEvents function
-        let displayEventsOptimizedInProgress = false;
-        
-        function displayEvents(eventsToDisplay = null) {
-            // Prevent multiple simultaneous updates to avoid flickering
-            if (displayEventsOptimizedInProgress) {
-                console.log('🚫 Display events (optimized) already in progress, skipping...');
-                return;
-            }
-            
-            displayEventsOptimizedInProgress = true;
-            
-
-            
-            const events = eventsToDisplay || eventsData[currentSport] || [];
-            const container = document.getElementById('eventsContent');
-            
-            // Debug: Log event structure for darts
-            if (currentSport === 'darts' && events.length > 0) {
-                console.log('🔍 Darts event structure:', events[0]);
-                console.log('🔍 Darts event fields:', Object.keys(events[0]));
-            }
-            
-            // Filter out completed, cancelled, and live matches (only show pre-match odds)
-            let activeEvents = events.filter(event => {
-                // Skip completed and cancelled matches
-                if (event.is_completed || event.is_cancelled) return false;
-                
-                // Skip live matches - we only want pre-match odds
-                if (event.status === 'Live' || event.status === 'LIVE' || 
-                    event.status === 'HT' || event.status === 'FT' ||
-                    event.status === 'Finished' || event.status === 'Final' ||
-                    event.status === 'Ended' || event.status === 'Completed') {
-                    return false;
-                }
-                
-                return true;
-            });
-            
-            // Tolerant future filter — accept DD.MM (assume year), allow missing time
-            // FIXED: Convert local time to UTC for proper comparison with API event times
-            const now = new Date();
-            const nowUTC = new Date(now.getTime() + (now.getTimezoneOffset() * 60000));
-            console.log(`🔍 [OPTIMIZED] Filtering ${activeEvents.length} events for future dates (local: ${now.toISOString()}, UTC: ${nowUTC.toISOString()})`);
-            
-            activeEvents = activeEvents.filter(event => {
-                if (!event?.date) {
-                    console.log(`⚠️ [OPTIMIZED] Event skipped - no date:`, event);
-                    return false; // need a date at least
-                }
-                try {
-                    const dt = parseFlexibleEventDateTime(event.date, event.time);
-                    const isFuture = dt && dt.getTime() > nowUTC.getTime();
-                    if (!isFuture) {
-                        console.log(`⚠️ [OPTIMIZED] Event skipped - not in future: ${event.date} ${event.time} -> ${dt?.toISOString()} (UTC now: ${nowUTC.toISOString()})`);
-                    }
-                    return isFuture;
-                } catch (e) {
-                    console.warn('[OPTIMIZED] Date parse failed for event:', event, e);
-                    return false;
-                }
-            });
-            console.log(`🔍 [OPTIMIZED] After future filter: ${activeEvents.length} events remaining`);
-            
-            // Apply current search filter if exists
-            if (currentSearchTerm && currentSearchTerm.trim() !== '') {
-                const searchTerm = currentSearchTerm.toLowerCase().trim();
-                activeEvents = activeEvents.filter(event => {
-                    const homeTeam = event.home_team?.toLowerCase() || '';
-                    const awayTeam = event.away_team?.toLowerCase() || '';
-                    const league = event.league?.toLowerCase() || '';
-                    const venue = event.venue?.toLowerCase() || '';
-                    
-                    return homeTeam.includes(searchTerm) ||
-                           awayTeam.includes(searchTerm) ||
-                           league.includes(searchTerm) ||
-                           venue.includes(searchTerm) ||
-                           `${homeTeam} ${awayTeam}`.includes(searchTerm) ||
-                           `${awayTeam} ${homeTeam}`.includes(searchTerm);
-                });
-            }
-            
-            if (activeEvents.length === 0) {
-                if (currentSearchTerm && currentSearchTerm.trim() !== '') {
-                    container.innerHTML = `<div class="loading-text">No events found for "${currentSearchTerm}"</div>`;
-                } else {
-                    container.innerHTML = '<div class="loading-text">No active events found for this sport</div>';
-                }
-                return;
-            }
-            
-            // Sort events chronologically by date/time (no live matches to prioritize)
-            const sortedEvents = activeEvents.sort((a, b) => {
-                // Sort by date and time using proper parsing
-                const dateA = parseEventDateTime(a.date, a.time);
-                const dateB = parseEventDateTime(b.date, b.time);
-                
-                if (!dateA && !dateB) return 0;
-                if (!dateA) return 1;
-                if (!dateB) return -1;
-                
-                return dateA.getTime() - dateB.getTime();
-            });
-            
-            // Store current events globally for market filtering
-            window.currentEvents = sortedEvents;
-            allEvents = sortedEvents; // Store for lazy loading
-            currentPage = 0; // Reset pagination
-            
-            // Update filter counts
-            updateFilterCounts(sortedEvents);
-            
-            // Restore search input state
-            restoreSearchState();
-            
-            // Use lazy loading for large lists
-            if (sortedEvents.length > EVENTS_PER_PAGE) {
-                loadMoreEvents();
-            } else {
-                // Use atomic table swapping to prevent empty table flashing
-                if (currentView === 'list') {
-                    swapTableAtomically((buffer) => {
-                        displayListView(sortedEvents, buffer);
-                    });
-                } else {
-                    swapTableAtomically((buffer) => {
-                        displayCouponView(sortedEvents, buffer);
-                    });
-                }
-            }
-            
-            // Clear the progress flag
-            displayEventsOptimizedInProgress = false;
         }
 
         // Helper function to get sport-specific column headers
@@ -5585,7 +5537,7 @@
             
             // Check if we're in combo mode and have reached the limit
             if (betMode === 'combo' && betSlip.length >= maxComboBets) {
-                showWarningAlert('Too Many Bets', `Maximum ${maxComboBets} bets allowed in combo mode.`, 3000);
+                showWarningAlert('Too Many Trades', `Maximum ${maxComboBets} trades allowed in combo mode.`, 3000);
                 return;
             }
             
@@ -5709,7 +5661,7 @@
                 container.innerHTML = `
                     <p>Your trade slip is empty</p>
                     <p>Click on odds to add selections</p>
-                    ${betMode === 'combo' ? `<p style="font-size: 0.8rem; color: #4ade80;">Combo Mode: Up to ${maxComboBets} bets</p>` : ''}
+                    ${betMode === 'combo' ? `<p style="font-size: 0.8rem; color: #4ade80;">Combo Mode: Up to ${maxComboBets} trades</p>` : ''}
                 `;
                 return;
             }
@@ -5728,7 +5680,7 @@
             // Calculate potential return based on bet mode
             let potentialReturn, totalOdds;
             if (betMode === 'combo') {
-                // Combo bet: multiply all odds together
+                // Combo trade: multiply all odds together
                 totalOdds = betSlip.reduce((product, bet) => product * bet.odds, 1);
                 potentialReturn = totalStake * totalOdds;
             } else {
@@ -5740,7 +5692,7 @@
             container.innerHTML = `
                 ${betMode === 'combo' ? `
                     <div style="background: linear-gradient(135deg, #4ade80, #22c55e); border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; text-align: center;">
-                        <div style="font-weight: 600; color: #000;">🎯 COMBO BET</div>
+                        <div style="font-weight: 600; color: #000;">🎯 COMBO TRADE</div>
                         <div style="font-size: 0.8rem; color: #000; margin-top: 0.25rem;">
                             ${betSlip.length}/${maxComboBets} selections • Total Odds: ${totalOdds.toFixed(2)}x
                         </div>
@@ -5789,7 +5741,7 @@
                         <span style="font-weight: 600; color: #4ade80;">$${potentialReturn.toFixed(2)}</span>
                     </div>
                     <button onclick="placeBets()" style="width: 100%; background: linear-gradient(135deg, #4ade80, #22c55e); border: none; border-radius: 8px; color: #000; font-weight: 600; padding: 0.75rem; cursor: pointer; transition: all 0.3s ease;">
-                        Place ${betMode === 'combo' ? 'Combo ' : ''}Bet
+                        Place ${betMode === 'combo' ? 'Combo ' : ''}Trade
                     </button>
                 </div>
             `;
@@ -6199,7 +6151,7 @@
                 padding-bottom: 1rem;
             `;
             header.innerHTML = `
-                <h2 style="color: #ffffff; margin: 0;">Bet History</h2>
+                <h2 style="color: #ffffff; margin: 0;">Trade History</h2>
                 <button onclick="this.closest('.modal').remove()" style="background: #ef4444; border: none; border-radius: 4px; color: white; padding: 0.5rem 1rem; cursor: pointer;">&times;</button>
             `;
 
@@ -6231,7 +6183,7 @@
                     <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
                         <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Date & Time</th>
                         <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Match</th>
-                        <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Bet Selection</th>
+                        <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Trade Selection</th>
                         <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Odds</th>
                         <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Stake</th>
                         <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Potential Return</th>
@@ -6296,7 +6248,12 @@
                     }
 
                     // Get proper match name (prefer match_name over match_id)
-                    const matchName = bet.match_name || bet.match_id || 'N/A';
+                    let matchName = bet.match_name || bet.match_id || 'N/A';
+                    
+                    // Fix terminology: Change "Combo Bet" to "Combo Trade"
+                    if (matchName.includes('Combo Bet')) {
+                        matchName = matchName.replace('Combo Bet', 'Combo Trade');
+                    }
 
                     row.innerHTML = `
                         <td style="padding: 0.75rem; font-size: 0.9rem;">${localTime}</td>
