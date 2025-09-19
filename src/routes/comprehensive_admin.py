@@ -546,15 +546,15 @@ def get_comprehensive_admin_template():
 
     <div class="container">
         <div class="tabs">
-            <button class="tab active" onclick="showTab('betting-events', event)">📊 Betting Events</button>
+            <button class="tab active" onclick="showTab('trading-events', event)">📊 Trading Events</button>
             <button class="tab" onclick="showTab('user-management', event)">👥 User Management</button>
             <button class="tab" onclick="showTab('reports', event)">📈 Reports</button>
             <button class="tab" onclick="showTab('report-builder', event)">🔧 Report Builder</button>
         </div>
 
-        <!-- Betting Events Tab -->
-        <div id="betting-events" class="tab-content active">
-            <h2>Betting Events Management</h2>
+        <!-- Trading Events Tab -->
+        <div id="trading-events" class="tab-content active">
+            <h2>Trading Events Management</h2>
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="stat-number" id="total-events">-</div>
@@ -667,8 +667,8 @@ def get_comprehensive_admin_template():
             
             <div class="reports-grid">
                 <div class="report-card">
-                    <div class="report-title">📊 Betting Overview</div>
-                    <div id="betting-overview">Loading...</div>
+                    <div class="report-title">📊 Trading Overview</div>
+                    <div id="trading-overview">Loading...</div>
                 </div>
                 <div class="report-card">
                     <div class="report-title">🏆 Sport Performance</div>

@@ -12,11 +12,9 @@ from sqlalchemy import text
 
 rich_superadmin_bp = Blueprint('rich_superadmin', __name__)
 
-DATABASE_PATH = 'src/database/app.db'
-
 def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
+    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1224,13 +1222,18 @@ def generate_global_custom_report():
             return jsonify({'error': 'Invalid report type'}), 400
         
         # Execute query
-        result = conn.execute(query, params).fetchall()
-        conn.close()
-        
-        # Convert to list of dictionaries
-        report_data = [dict(row) for row in result]
-        
-        return jsonify(report_data)
+        try:
+            result = conn.execute(query, params).fetchall()
+            conn.close()
+            
+            # Convert to list of dictionaries
+            report_data = [dict(row) for row in result]
+            
+            return jsonify(report_data)
+        except Exception as query_error:
+            conn.close()
+            print(f"Database query error: {query_error}")
+            return jsonify({'error': f'Database query failed: {str(query_error)}'}), 500
         
     except Exception as e:
         print(f"Error generating global custom report: {e}")
@@ -3644,7 +3647,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const data = await response.json();
                 
                 if (data.sports) {
-                    const sportSelect = document.getElementById('global-events-sport-filter');
+                    const sportSelect = document.getElementById('global-reports-sport-filter');
                     sportSelect.innerHTML = '<option value="">All Sports</option>';
                     data.sports.forEach(sport => {
                         sportSelect.innerHTML += `<option value="${sport}">${sport}</option>`;
@@ -3668,7 +3671,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const reportType = document.getElementById('global-report-type').value;
                 const dateFrom = document.getElementById('global-date-from').value;
                 const dateTo = document.getElementById('global-date-to').value;
-                const sportFilter = document.getElementById('global-sport-filter').value;
+                const sportFilter = document.getElementById('global-reports-sport-filter').value;
                 const groupBy = document.getElementById('global-group-by').value;
                 
                 const requestData = {
@@ -3783,7 +3786,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const reportType = document.getElementById('global-report-type').value;
                 const dateFrom = document.getElementById('global-date-from').value;
                 const dateTo = document.getElementById('global-date-to').value;
-                const sportFilter = document.getElementById('global-sport-filter').value;
+                const sportFilter = document.getElementById('global-reports-sport-filter').value;
                 
                 const requestData = {
                     report_type: reportType,

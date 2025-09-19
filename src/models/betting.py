@@ -78,7 +78,7 @@ class Bet:
     # Market information - for admin liability calculation
     market = None  # Market ID for admin liability calculation
     
-    # Bet details
+    # Trade details
     stake = None
     odds = None  # Odds at time of bet placement
     potential_return = None

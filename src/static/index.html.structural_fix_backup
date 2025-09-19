@@ -1664,7 +1664,7 @@
                     <div class="balance" id="userBalance">$1000.00</div>
                     <div class="user-menu" id="userMenu" onclick="toggleUserMenu()">Loading... ▼</div>
                 <div class="user-dropdown" id="userDropdown" style="display: none;">
-                    <div class="dropdown-item" onclick="showBetHistory()">📊 Bet History</div>
+                    <div class="dropdown-item" onclick="showBetHistory()">📊 Trade History</div>
                     <div class="dropdown-item" onclick="logout()">🚪 Logout</div>
                 </div>
             </div>
@@ -1715,7 +1715,7 @@
                     <div class="filter-item" onclick="showBetHistory()">
                         <div class="filter-info">
                             <span class="filter-icon">📊</span>
-                            <span>Bet History</span>
+                            <span>Trade History</span>
                         </div>
                     </div>
                     <div class="filter-item" onclick="showAdminPanel()" style="display: none;">
@@ -1770,7 +1770,7 @@
         <aside class="bet-slip">
             <div class="bet-slip-header">
                 <div class="bet-slip-title">
-                    🎯 Bet Slip
+                    🎯 Trade Slip
                     <span class="bet-count" id="betCount">0</span>
                 </div>
                 <div class="bet-slip-controls">
@@ -4778,7 +4778,7 @@
                 padding-bottom: 1rem;
             `;
             header.innerHTML = `
-                <h2 style="color: #ffffff; margin: 0;">Bet History</h2>
+                <h2 style="color: #ffffff; margin: 0;">Trade History</h2>
                 <button onclick="this.closest('.modal').remove()" style="background: #ef4444; border: none; border-radius: 4px; color: white; padding: 0.5rem 1rem; cursor: pointer;">&times;</button>
             `;
 
@@ -4810,7 +4810,7 @@
                     <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
                         <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Date & Time</th>
                         <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Match</th>
-                        <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Bet Selection</th>
+                        <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Trade Selection</th>
                         <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Odds</th>
                         <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Stake</th>
                         <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Potential Return</th>
