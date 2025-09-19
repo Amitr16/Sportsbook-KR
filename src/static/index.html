@@ -5595,8 +5595,8 @@
 
             // If there are selections, confirm before switching
             if (Array.isArray(betSlip) && betSlip.length > 0) {
-                const title = 'Switch Bet Mode';
-                const msg = 'Switching bet modes will clear your current selections. Continue?';
+                const title = 'Switch Trade Mode';
+                const msg = 'Switching trade modes will clear your current selections. Continue?';
 
                 if (typeof showCustomConfirm === 'function') {
                     showCustomConfirm(
@@ -6044,7 +6044,7 @@
                         }
                     }
                     
-                    showSuccessAlert('Bets Placed! 🎉', 'All your bets have been placed successfully!', 4000);
+                    showSuccessAlert('Trades Placed! 🎉', 'All your trades have been placed successfully!', 4000);
                 }
                 
                 betSlip = [];
