@@ -282,8 +282,8 @@
                     <div class="stat-label">Total Users</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-number">${stats.total_bets || 0}</div>
-                    <div class="stat-label">Total Bets</div>
+                    <div class="stat-number">${stats.total_trades || 0}</div>
+                    <div class="stat-label">Total Trades</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-number">$${stats.total_revenue || 0}</div>
@@ -306,23 +306,23 @@
                 <div class="action-card" onclick="navigateTo('users')">
                     <div class="action-icon">👥</div>
                     <div class="action-title">User Management</div>
-                    <div class="action-description">View and manage user accounts, balances, and betting history</div>
+                    <div class="action-description">View and manage user accounts, balances, and trading history</div>
                 </div>
                 <div class="action-card" onclick="navigateTo('events')">
                     <div class="action-icon">⚽</div>
                     <div class="action-title">Event Management</div>
-                    <div class="action-description">Manage betting events, odds, and event status</div>
+                    <div class="action-description">Manage trading events, odds, and event status</div>
                 </div>
-                <div class="action-card" onclick="navigateTo('bets')">
+                <div class="action-card" onclick="navigateTo('trades')">
                     <div class="action-icon">🎯</div>
-                    <div class="action-title">Bet Management</div>
-                    <div class="action-description">Monitor active bets, settle results, and manage payouts</div>
+                    <div class="action-title">Trade Management</div>
+                    <div class="action-description">Monitor active trades, settle results, and manage payouts</div>
                 </div>
 
                 <div class="action-card" onclick="navigateTo('reports')">
                     <div class="action-icon">📊</div>
                     <div class="action-title">Reports & Analytics</div>
-                    <div class="action-description">Generate financial reports and view betting analytics</div>
+                    <div class="action-description">Generate financial reports and view trading analytics</div>
                 </div>
             `;
             

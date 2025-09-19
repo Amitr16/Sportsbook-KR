@@ -7,17 +7,32 @@ from src import sqlite3_shim as sqlite3
 import json
 from datetime import datetime, timedelta
 import os
+from functools import wraps
+from werkzeug.security import check_password_hash, generate_password_hash
 
 rich_admin_bp = Blueprint('rich_admin', __name__)
 
-# Fix database path to work from root directory
-DATABASE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'src', 'database', 'app.db')
-
 def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect(DATABASE_PATH)
+    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
     conn.row_factory = sqlite3.Row
     return conn
+
+def require_admin_auth(f):
+    """Decorator to require admin authentication"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check if this is an API call (URL contains /api/)
+        is_api_call = '/api/' in request.path
+        
+        # Check for admin-specific session keys
+        if 'admin_operator_id' not in session:
+            if is_api_call:
+                return jsonify({'error': 'Unauthorized'}), 401
+            else:
+                return redirect('/admin/login')
+        return f(*args, **kwargs)
+    return decorated_function
 
 def update_operator_revenue(operator_id, conn):
     """Update the total_revenue field for an operator based on actual bet settlements"""
@@ -277,6 +292,33 @@ def get_tenant_betting_events(subdomain):
         bet_events_result = conn.execute(bet_events_query, (operator['id'],)).fetchall()
         print(f"🔍 DEBUG: Found {len(bet_events_result)} event_market combinations with pending bets")
         
+        # If no pending bets, return empty but properly structured response
+        if len(bet_events_result) == 0:
+            print(f"🔍 DEBUG: No pending bets found for operator {operator['id']}, returning empty events list")
+            conn.close()
+            return jsonify({
+                'success': True,
+                'events': [],
+                'pagination': {
+                    'page': 1,
+                    'per_page': 0,
+                    'total': 0,
+                    'pages': 1
+                },
+                'summary': {
+                    'total_events': 0,
+                    'active_events': 0,
+                    'total_liability': 0.0,
+                    'total_revenue': 0.0,
+                    'max_liability': 0.0,
+                    'max_possible_gain': 0.0
+                },
+                'filters': {
+                    'sports': [],
+                    'markets': []
+                }
+            })
+        
         all_events = []
         all_sports = set()
         all_markets = set()
@@ -346,6 +388,7 @@ def get_tenant_betting_events(subdomain):
         total_revenue = sum([e['revenue'] for e in all_events])
         
         return jsonify({
+            'success': True,
             'events': all_events,
             'pagination': {
                 'page': 1,
@@ -1171,6 +1214,7 @@ def toggle_event_status(subdomain, event_key):
         return jsonify({'error': str(e)}), 500
 
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/overview')
+@require_admin_auth
 def get_reports_overview(subdomain):
     """Get comprehensive reports overview (tenant-filtered)"""
     operator = get_operator_from_session()
@@ -1258,6 +1302,7 @@ def get_reports_overview(subdomain):
         return jsonify({'error': str(e)}), 500
 
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/generate', methods=['POST'])
+@require_admin_auth
 def generate_custom_report(subdomain):
     """Generate custom reports based on parameters (tenant-filtered)"""
     operator = get_operator_from_session()
@@ -1280,10 +1325,10 @@ def generate_custom_report(subdomain):
         
         # Add date filters if provided
         if date_from:
-            base_where += " AND DATE(b.created_at) >= ?"
+            base_where += " AND b.created_at::date >= ?"
             params.append(date_from)
         if date_to:
-            base_where += " AND DATE(b.created_at) <= ?"
+            base_where += " AND b.created_at::date <= ?"
             params.append(date_to)
         if sport_filter:
             base_where += " AND b.sport_name = ?"
@@ -1293,7 +1338,7 @@ def generate_custom_report(subdomain):
         if report_type == 'revenue':
             query = f"""
             SELECT 
-                DATE(b.created_at) as bet_date,
+                b.created_at::date as bet_date,
                 b.sport_name,
                 COUNT(*) as total_bets,
                 SUM(b.stake) as total_stakes,
@@ -1302,7 +1347,7 @@ def generate_custom_report(subdomain):
             FROM bets b
             JOIN users u ON b.user_id = u.id
             WHERE {base_where}
-            GROUP BY DATE(b.created_at), b.sport_name
+            GROUP BY b.created_at::date, b.sport_name
             ORDER BY bet_date DESC, revenue DESC
             """
             
@@ -1328,7 +1373,7 @@ def generate_custom_report(subdomain):
         elif report_type == 'betting-patterns':
             query = f"""
             SELECT 
-                DATE(b.created_at) as bet_date,
+                b.created_at::date as bet_date,
                 b.sport_name,
                 b.market as bet_type,
                 COUNT(*) as count,
@@ -1337,7 +1382,7 @@ def generate_custom_report(subdomain):
             FROM bets b
             JOIN users u ON b.user_id = u.id
             WHERE {base_where}
-            GROUP BY DATE(b.created_at), b.sport_name, b.market
+            GROUP BY b.created_at::date, b.sport_name, b.market
             ORDER BY bet_date DESC, count DESC
             """
             
@@ -1363,19 +1408,25 @@ def generate_custom_report(subdomain):
             return jsonify({'error': 'Invalid report type'}), 400
         
         # Execute query
-        result = conn.execute(query, params).fetchall()
-        conn.close()
-        
-        # Convert to list of dictionaries
-        report_data = [dict(row) for row in result]
-        
-        return jsonify(report_data)
+        try:
+            result = conn.execute(query, params).fetchall()
+            conn.close()
+            
+            # Convert to list of dictionaries
+            report_data = [dict(row) for row in result]
+            
+            return jsonify(report_data)
+        except Exception as query_error:
+            conn.close()
+            print(f"Database query error: {query_error}")
+            return jsonify({'error': f'Database query failed: {str(query_error)}'}), 500
         
     except Exception as e:
         print(f"Error generating custom report: {e}")
         return jsonify({'error': str(e)}), 500
 
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/available-sports')
+@require_admin_auth
 def get_available_sports_for_reports(subdomain):
     """Get available sports for report filtering (tenant-filtered)"""
     operator = get_operator_from_session()
@@ -1404,7 +1455,79 @@ def get_available_sports_for_reports(subdomain):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@rich_admin_bp.route('/<subdomain>/admin/api/change-password', methods=['POST'])
+@require_admin_auth
+def change_admin_password(subdomain):
+    """Change admin password"""
+    operator = get_operator_from_session()
+    if not operator:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    try:
+        data = request.get_json()
+        current_password = data.get('current_password', '')
+        new_password = data.get('new_password', '')
+        
+        if not current_password or not new_password:
+            return jsonify({
+                'success': False,
+                'error': 'Current password and new password are required'
+            }), 400
+        
+        if len(new_password) < 6:
+            return jsonify({
+                'success': False,
+                'error': 'New password must be at least 6 characters long'
+            }), 400
+        
+        conn = get_db_connection()
+        
+        # Get current operator with password hash
+        operator_data = conn.execute("""
+            SELECT id, login, password_hash 
+            FROM sportsbook_operators 
+            WHERE id = ?
+        """, (operator['id'],)).fetchone()
+        
+        if not operator_data:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Operator not found'
+            }), 404
+        
+        # Verify current password
+        if not check_password_hash(operator_data['password_hash'], current_password):
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Current password is incorrect'
+            }), 400
+        
+        # Update password
+        new_password_hash = generate_password_hash(new_password)
+        conn.execute("""
+            UPDATE sportsbook_operators 
+            SET password_hash = ?, updated_at = ? 
+            WHERE id = ?
+        """, (new_password_hash, datetime.utcnow(), operator['id']))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Password changed successfully'
+        })
+        
+    except Exception as e:
+        print(f"Error changing admin password: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/export', methods=['POST'])
+@require_admin_auth
 def export_custom_report(subdomain):
     """Export custom report to CSV (tenant-filtered)"""
     operator = get_operator_from_session()
@@ -1766,10 +1889,150 @@ RICH_ADMIN_TEMPLATE = '''
             font-size: 1.5rem;
         }
         
-        .header .admin-info {
+        .header         .admin-info {
             display: flex;
             align-items: center;
             gap: 1rem;
+            position: relative;
+        }
+        
+        .settings-btn {
+            background: none;
+            border: none;
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 2.5rem;
+            height: 2.5rem;
+        }
+        
+        .settings-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: rotate(90deg);
+        }
+        
+        .settings-dropdown {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 1rem;
+            min-width: 280px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e9ecef;
+        }
+        
+        .settings-dropdown.show {
+            display: block;
+        }
+        
+        .settings-dropdown h3 {
+            margin: 0 0 1rem 0;
+            color: #2c3e50;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .settings-dropdown .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .settings-dropdown .form-group label {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-weight: 600;
+            color: #495057;
+            font-size: 0.85rem;
+        }
+        
+        .settings-dropdown .form-group input {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        
+        .settings-dropdown .form-group input:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+        }
+        
+        .settings-dropdown .form-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        
+        .settings-dropdown .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex: 1;
+        }
+        
+        .settings-dropdown .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .settings-dropdown .btn-primary:hover {
+            background: #45a049;
+        }
+        
+        .settings-dropdown .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .settings-dropdown .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .settings-dropdown .message {
+            padding: 0.75rem;
+            border-radius: 4px;
+            margin-top: 0.75rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .settings-dropdown .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .settings-dropdown .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        /* Responsive adjustments for settings dropdown */
+        @media (max-width: 768px) {
+            .settings-dropdown {
+                top: 70px;
+                right: 10px;
+                left: 10px;
+                min-width: auto;
+                width: auto;
+            }
         }
         
         .logout-btn {
@@ -2139,6 +2402,7 @@ RICH_ADMIN_TEMPLATE = '''
             border-radius: 4px;
             font-size: 0.9rem;
         }
+        
     </style>
 </head>
 <body>
@@ -2146,7 +2410,37 @@ RICH_ADMIN_TEMPLATE = '''
         <h1>🏆 {{ operator.sportsbook_name }} - Admin Dashboard</h1>
         <div class="admin-info">
             <span>Welcome, {{ operator.login }}</span>
+            <button class="settings-btn" onclick="toggleSettingsDropdown()" title="Settings">⚙️</button>
             <a href="/{{ operator.subdomain }}/admin/logout" class="logout-btn">Logout</a>
+        </div>
+        
+        <!-- Settings Dropdown -->
+        <div id="settings-dropdown" class="settings-dropdown">
+            <h3>🔐 Change Password</h3>
+            
+            <form id="password-change-form" class="settings-form">
+                <div class="form-group">
+                    <label for="current-password">Current Password:</label>
+                    <input type="password" id="current-password" name="current_password" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="new-password">New Password:</label>
+                    <input type="password" id="new-password" name="new_password" required minlength="6">
+                </div>
+                
+                <div class="form-group">
+                    <label for="confirm-password">Confirm New Password:</label>
+                    <input type="password" id="confirm-password" name="confirm_password" required>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Change Password</button>
+                    <button type="button" class="btn btn-secondary" onclick="clearPasswordForm()">Clear</button>
+                </div>
+            </form>
+            
+            <div id="password-change-message" class="message" style="display: none;"></div>
         </div>
     </div>
     
@@ -2159,9 +2453,9 @@ RICH_ADMIN_TEMPLATE = '''
                 <button class="nav-tab" onclick="openThemeCustomizer()">🎨 Theme Customizer</button>
             </div>
         
-        <!-- Betting Events Section -->
-        <div id="betting-events" class="content-section active">
-            <h2>Betting Events Management</h2>
+        <!-- Trading Events Section -->
+        <div id="trading-events" class="content-section active">
+            <h2>Trading Events Management</h2>
             <div class="summary-cards">
                 <div class="summary-card">
                     <h3>Total Events</h3>
@@ -2312,7 +2606,7 @@ RICH_ADMIN_TEMPLATE = '''
                         <select id="report-type">
                             <option value="revenue">Revenue Analysis</option>
                             <option value="user-activity">User Activity</option>
-                            <option value="betting-patterns">Betting Patterns</option>
+                            <option value="trading-patterns">Trading Patterns</option>
                             <option value="sport-performance">Sport Performance</option>
                         </select>
                         <div class="form-help-text">Choose the type of analysis you want to generate</div>
@@ -2368,6 +2662,7 @@ RICH_ADMIN_TEMPLATE = '''
                 </button>
             </div>
         </div>
+        
     </div>
     
     <script>
@@ -2491,22 +2786,18 @@ RICH_ADMIN_TEMPLATE = '''
                 if (currentMarketFilter) params.append('market', currentMarketFilter);
                 if (currentSearchQuery) params.append('search', currentSearchQuery);
                 
-                // Use the working API endpoint from comprehensive_admin.py
-                const response = await fetch(`/api/admin/${SUBDOMAIN}/betting-events?${params.toString()}`);
+                // Use the correct API endpoint for rich admin interface
+                const response = await fetch(`/${SUBDOMAIN}/admin/api/betting-events?${params.toString()}`);
                 const data = await response.json();
                 
                 if (data.success) {
                     // Update summary cards
-                    document.getElementById('total-events').textContent = data.total_events || 0;
-                    document.getElementById('active-events').textContent = data.active_events || 0;
+                    document.getElementById('total-events').textContent = data.summary?.total_events || 0;
+                    document.getElementById('active-events').textContent = data.summary?.active_events || 0;
                     
-                    // Calculate and update total liability
-                    if (data.events && data.events.length > 0) {
-                        const totalLiability = data.events.reduce((sum, event) => sum + (event.max_liability || 0), 0);
-                        document.getElementById('total-liability').textContent = '$' + totalLiability.toFixed(2);
-                    } else {
-                        document.getElementById('total-liability').textContent = '$0.00';
-                    }
+                    // Update total liability from summary
+                    const totalLiability = data.summary?.total_liability || 0;
+                    document.getElementById('total-liability').textContent = '$' + totalLiability.toFixed(2);
                     
                     // Update events table
                     const tbody = document.getElementById('events-tbody');
@@ -2524,18 +2815,23 @@ RICH_ADMIN_TEMPLATE = '''
                         `).join('');
                         tbody.innerHTML = eventRows;
                     } else {
-                        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #666;">No events found</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #666; padding: 2rem; font-style: italic;">📊 No pending events at the moment</td></tr>';
                     }
                     
                     // Update pagination
-                    updatePagination(data.total_events || 0);
+                    updatePagination(data.summary?.total_events || 0);
+                    
+                    // Update filter options
+                    if (data.filters) {
+                        updateFilterOptions(data.filters);
+                    }
                 } else {
                     console.error('Failed to load betting events:', data.error);
-                    document.getElementById('events-tbody').innerHTML = '<tr><td colspan="7" style="text-align: center; color: #dc3545;">Error loading events</td></tr>';
+                    document.getElementById('events-tbody').innerHTML = '<tr><td colspan="7" style="text-align: center; color: #dc3545; padding: 2rem;">⚠️ Unable to load events. Please try refreshing the page.</td></tr>';
                 }
             } catch (error) {
                 console.error('Error loading betting events:', error);
-                document.getElementById('events-tbody').innerHTML = '<tr><td colspan="7" style="text-align: center; color: #dc3545;">Error loading events</td></tr>';
+                document.getElementById('events-tbody').innerHTML = '<tr><td colspan="7" style="text-align: center; color: #dc3545; padding: 2rem;">⚠️ Unable to load events. Please try refreshing the page.</td></tr>';
             } finally {
                 hideLoading('betting-events');
             }
@@ -2986,12 +3282,106 @@ RICH_ADMIN_TEMPLATE = '''
             // Load data for specific sections
             if (sectionId === 'betting-events') {
                 loadBettingEvents();
-            } else if (sectionId === 'reports') {
-                loadReports();
+            } else if (sectionId === 'report-builder') {
+                loadReportBuilder();
             } else if (sectionId === 'user-management') {
                 loadUsers();
             }
         }
+        
+        // Settings Dropdown Functions
+        function toggleSettingsDropdown() {
+            const dropdown = document.getElementById('settings-dropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        function clearPasswordForm() {
+            document.getElementById('password-change-form').reset();
+            hideMessage();
+        }
+        
+        function showMessage(message, type) {
+            const messageDiv = document.getElementById('password-change-message');
+            messageDiv.textContent = message;
+            messageDiv.className = `message ${type}`;
+            messageDiv.style.display = 'block';
+            
+            // Auto-hide success messages after 5 seconds
+            if (type === 'success') {
+                setTimeout(() => {
+                    hideMessage();
+                }, 5000);
+            }
+        }
+        
+        function hideMessage() {
+            const messageDiv = document.getElementById('password-change-message');
+            messageDiv.style.display = 'none';
+        }
+        
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('settings-dropdown');
+            const settingsBtn = document.querySelector('.settings-btn');
+            
+            if (!dropdown.contains(event.target) && !settingsBtn.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+        
+        // Handle password change form submission
+        document.addEventListener('DOMContentLoaded', function() {
+            const passwordForm = document.getElementById('password-change-form');
+            if (passwordForm) {
+                passwordForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    
+                    const currentPassword = document.getElementById('current-password').value;
+                    const newPassword = document.getElementById('new-password').value;
+                    const confirmPassword = document.getElementById('confirm-password').value;
+                    
+                    // Validate passwords
+                    if (newPassword !== confirmPassword) {
+                        showMessage('New passwords do not match', 'error');
+                        return;
+                    }
+                    
+                    if (newPassword.length < 6) {
+                        showMessage('New password must be at least 6 characters long', 'error');
+                        return;
+                    }
+                    
+                    try {
+                        const response = await fetch(`/${SUBDOMAIN}/admin/api/change-password`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                current_password: currentPassword,
+                                new_password: newPassword
+                            })
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            showMessage('Password changed successfully!', 'success');
+                            clearPasswordForm();
+                            // Close dropdown after successful password change
+                            setTimeout(() => {
+                                document.getElementById('settings-dropdown').classList.remove('show');
+                            }, 2000);
+                        } else {
+                            showMessage(data.error || 'Failed to change password', 'error');
+                        }
+                    } catch (error) {
+                        console.error('Error changing password:', error);
+                        showMessage('An error occurred while changing password', 'error');
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>

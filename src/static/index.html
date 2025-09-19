@@ -2340,7 +2340,7 @@
                 </div>
             </div>
             <div class="bet-slip-content" id="betSlipContent">
-                <p>Your bet slip is empty</p>
+                <p>Your trade slip is empty</p>
                 <p>Click on odds to add selections</p>
             </div>
         </aside>
@@ -5707,7 +5707,7 @@
             
             if (betSlip.length === 0) {
                 container.innerHTML = `
-                    <p>Your bet slip is empty</p>
+                    <p>Your trade slip is empty</p>
                     <p>Click on odds to add selections</p>
                     ${betMode === 'combo' ? `<p style="font-size: 0.8rem; color: #4ade80;">Combo Mode: Up to ${maxComboBets} bets</p>` : ''}
                 `;
@@ -5919,7 +5919,7 @@
             
             if (betSlip.length === 0) {
                 container.innerHTML = `
-                    <p>Your bet slip is empty</p>
+                    <p>Your trade slip is empty</p>
                     <p>Click on odds to add selections</p>
                 `;
                 return;
