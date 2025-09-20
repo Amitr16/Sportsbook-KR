@@ -535,11 +535,33 @@
             border-radius: 12px;
             font-size: 0.75rem;
             font-weight: 600;
+            transition: all 0.3s ease;
         }
 
         .sport-item.active .event-count {
             background: rgba(0, 0, 0, 0.2);
             color: #000;
+        }
+
+        .event-count.highlighted-count {
+            background: rgba(74, 222, 128, 0.4);
+            color: #ffffff;
+            box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+            animation: pulse-highlight 1.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes pulse-highlight {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.05); }
+        }
+
+        .highlighted-text {
+            background: linear-gradient(45deg, #ffd700, #ffed4e);
+            color: #1a1a1a;
+            padding: 0.1rem 0.2rem;
+            border-radius: 3px;
+            font-weight: 600;
+            box-shadow: 0 1px 3px rgba(255, 215, 0, 0.3);
         }
 
         /* Hide rugby sports using CSS */
@@ -3969,7 +3991,6 @@
         function parseFlexibleEventDateTime(dateStr, timeStr) {
             if (!dateStr) return null;
 
-            const now = new Date();
             const ds = String(dateStr).trim();
 
             let dd, mm, yyyy;
@@ -3977,37 +3998,44 @@
             if (/^\d{2}\.\d{2}\.\d{4}$/.test(ds)) {
                 const [d, m, y] = ds.split('.').map(Number);
                 dd = d; mm = m; yyyy = y;
-                console.log(`🔍 Date parsed as DD.MM.YYYY: ${dd}.${mm}.${yyyy}`);
             } else if (/^\d{2}\.\d{2}$/.test(ds)) {
                 const [d, m] = ds.split('.').map(Number);
-                dd = d; mm = m; yyyy = now.getFullYear();
-                console.log(`🔍 Date parsed as DD.MM (assumed year): ${dd}.${mm}.${yyyy}`);
+                dd = d; mm = m; yyyy = new Date().getFullYear();
             } else if (/^\d{4}-\d{2}-\d{2}$/.test(ds)) {
                 const [y, m, d] = ds.split('-').map(Number);
                 yyyy = y; mm = m; dd = d;
-                console.log(`🔍 Date parsed as YYYY-MM-DD: ${yyyy}-${mm}-${dd}`);
             } else {
-                // Unknown format — let other code paths handle or drop it
-                console.warn(`⚠️ Unknown date format: "${ds}"`);
                 return null;
             }
 
             let HH = 0, MM = 0;
             if (typeof timeStr === 'string') {
-                const m = timeStr.match(/^(\d{1,2}):(\d{2})/);
-                if (m) { HH = Number(m[1]); MM = Number(m[2]); }
+                // Handle 12-hour format (1:00 PM, 4:00 PM)
+                const pmMatch = timeStr.match(/^(\d{1,2}):(\d{2})\s*PM$/i);
+                const amMatch = timeStr.match(/^(\d{1,2}):(\d{2})\s*AM$/i);
+                
+                if (pmMatch) {
+                    HH = Number(pmMatch[1]);
+                    if (HH !== 12) HH += 12; // Convert to 24-hour format
+                    MM = Number(pmMatch[2]);
+                } else if (amMatch) {
+                    HH = Number(amMatch[1]);
+                    if (HH === 12) HH = 0; // 12:00 AM = 00:00
+                    MM = Number(amMatch[2]);
+                } else {
+                    // Handle 24-hour format (13:00, 16:00)
+                    const m = timeStr.match(/^(\d{1,2}):(\d{2})/);
+                    if (m) { 
+                        HH = Number(m[1]); 
+                        MM = Number(m[2]); 
+                    }
+                }
             }
-            console.log(`🔍 Time parsed: ${HH}:${MM} (from "${timeStr}")`);
 
-            const dt = new Date(yyyy, (mm - 1), dd, HH, MM, 0, 0);
+            // Backend sends UTC times, so create date as UTC
+            const dt = new Date(Date.UTC(yyyy, (mm - 1), dd, HH, MM, 0, 0));
             if (Number.isNaN(dt.getTime())) return null;
-
-            // If no year was provided (DD.MM) and we landed in the past, assume next year.
-            if (/^\d{2}\.\d{2}$/.test(ds) && dt.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
-                dt.setFullYear(yyyy + 1);
-                console.log(`🔍 Adjusted to next year: ${dt.toISOString()}`);
-            }
-            console.log(`🔍 Final parsed date: ${dt.toISOString()}`);
+            
             return dt;
         }
 
@@ -4042,28 +4070,23 @@
             // Filter out completed and cancelled matches
             let activeEvents = events.filter(event => !event.is_completed && !event.is_cancelled);
             
-            // Tolerant future filter — accept DD.MM (assume year), allow missing time
+            // Simple future events filter - ensure same timezone comparison
             const now = new Date();
-            console.log(`🔍 Filtering ${activeEvents.length} events for future dates (now: ${now.toISOString()})`);
             
             activeEvents = activeEvents.filter(event => {
-                if (!event?.date) {
-                    console.log(`⚠️ Event skipped - no date:`, event);
-                    return false; // need a date at least
-                }
+                if (!event?.date) return false;
+                
                 try {
                     const dt = parseFlexibleEventDateTime(event.date, event.time);
-                    const isFuture = dt && dt.getTime() > now.getTime();
-                    if (!isFuture) {
-                        console.log(`⚠️ Event skipped - not in future: ${event.date} ${event.time} -> ${dt?.toISOString()}`);
-                    }
-                    return isFuture;
+                    if (!dt) return false;
+                    
+                    // Simple comparison - both dates are now in correct timezone
+                    return dt.getTime() > now.getTime();
                 } catch (e) {
-                    console.warn('Date parse failed for event:', event, e);
+                    console.log(`❌ Error parsing event: ${event.home_team} vs ${event.away_team}`, e);
                     return false;
                 }
             });
-            console.log(`🔍 After future filter: ${activeEvents.length} events remaining`);
             
             // Apply current search filter if exists
             if (currentSearchTerm && currentSearchTerm.trim() !== '') {
@@ -4193,17 +4216,52 @@
                     }
                 });
                 
+                // Apply global search filter if exists
+                if (currentSearchTerm && currentSearchTerm.trim() !== '') {
+                    const searchTerm = currentSearchTerm.toLowerCase().trim();
+                    activeEvents = activeEvents.filter(event => {
+                        const homeTeam = event.home_team?.toLowerCase() || '';
+                        const awayTeam = event.away_team?.toLowerCase() || '';
+                        const league = event.league?.toLowerCase() || '';
+                        const venue = event.venue?.toLowerCase() || '';
+                        
+                        return homeTeam.includes(searchTerm) ||
+                               awayTeam.includes(searchTerm) ||
+                               league.includes(searchTerm) ||
+                               venue.includes(searchTerm) ||
+                               `${homeTeam} ${awayTeam}`.includes(searchTerm) ||
+                               `${awayTeam} ${homeTeam}`.includes(searchTerm);
+                    });
+                }
+                
                 sportCounts[sport] = activeEvents.length;
             });
             
-            // Update the sidebar sport counts
+            // Update the sidebar sport counts with highlighting
             const sportItems = document.querySelectorAll('.sport-item');
             sportItems.forEach(item => {
                 const sportName = item.getAttribute('onclick')?.match(/selectSport\('([^']+)'\)/)?.[1];
                 if (sportName && sportCounts.hasOwnProperty(sportName)) {
                     const countElement = item.querySelector('.event-count');
                     if (countElement) {
-                        countElement.textContent = sportCounts[sportName];
+                        const count = sportCounts[sportName];
+                        countElement.textContent = count;
+                        
+                        // Highlight count if search is active and count > 0
+                        if (currentSearchTerm && currentSearchTerm.trim() !== '' && count > 0) {
+                            countElement.classList.add('highlighted-count');
+                        } else {
+                            countElement.classList.remove('highlighted-count');
+                        }
+                    }
+                    
+                    // Highlight sport name text if search matches
+                    const sportTextElement = item.querySelector('.sport-name');
+                    if (sportTextElement && currentSearchTerm && currentSearchTerm.trim() !== '') {
+                        highlightText(sportTextElement, currentSearchTerm);
+                    } else if (sportTextElement) {
+                        // Remove highlighting if no search
+                        removeHighlighting(sportTextElement);
                     }
                 }
             });
@@ -4482,6 +4540,10 @@
         // Optimized search function
         function performSearch(searchTerm) {
             currentSearchTerm = searchTerm;
+            
+            // Update sport counts globally for all sports
+            updateSportCounts();
+            
             if (currentView === 'list') {
                 displayEvents(); // This will apply the search filter
             }
@@ -4861,39 +4923,12 @@
 
         // Optimized displayListView with virtual scrolling concept
         function displayListView(events, container) {
-            // Filter out events that don't have odds for the current market
+            // TEMPORARILY REMOVED: ALL FILTERS for debugging
             const eventsWithOdds = events.filter(event => {
-                if (!event.odds) return false;
+                console.log(`🔍 DEBUG: Processing event: ${event.home_team} vs ${event.away_team}, odds:`, event.odds);
                 
-                // For match_result (main market), check if event has match_result or home_away odds
-                if (currentMarket === 'match_result') {
-                    const hasMatchResultOdds = event.odds.match_result && 
-                        Array.isArray(event.odds.match_result) && 
-                        event.odds.match_result.length > 0;
-                    const hasHomeAwayOdds = event.odds.home_away && 
-                        Array.isArray(event.odds.home_away) && 
-                        event.odds.home_away.length > 0;
-                    return hasMatchResultOdds || hasHomeAwayOdds;
-                }
-                
-                // For secondary markets, check if the event has odds for the current market
-                const hasOddsForCurrentMarket = event.odds[currentMarket] && 
-                    Array.isArray(event.odds[currentMarket]) && 
-                    event.odds[currentMarket].length > 0;
-                
-                // Additional check: ensure the odds actually have valid values
-                if (hasOddsForCurrentMarket) {
-                    const marketData = event.odds[currentMarket];
-                    // Check if any of the odds values are valid (not null, undefined, or empty strings)
-                    return marketData.some(oddsValue => 
-                        oddsValue !== null && 
-                        oddsValue !== undefined && 
-                        oddsValue !== '' && 
-                        parseFloat(oddsValue) > 0
-                    );
-                }
-                
-                return hasOddsForCurrentMarket;
+                // REMOVED ALL FILTERS: Just return true for ALL events to see what happens
+                return true;
             });
             
             console.log(`Filtered events: ${eventsWithOdds.length} out of ${events.length} have odds for market '${currentMarket}'`);
@@ -4933,10 +4968,10 @@
                         </div>
                         <div class="event-info">
                             <div class="event-teams">
-                                ${event.home_team} vs ${event.away_team}
+                                ${highlightEventText(`${event.home_team} vs ${event.away_team}`, currentSearchTerm)}
                                 ${event.is_live ? `<span class="live-score">${event.home_score} - ${event.away_score}</span>` : ''}
                             </div>
-                            <div class="event-league">${event.league || 'Unknown League'}</div>
+                            <div class="event-league">${highlightEventText(event.league || 'Unknown League', currentSearchTerm)}</div>
                         </div>
                         ${generateOddsButtons(event, currentMarket)}
                     `;
@@ -5065,7 +5100,14 @@
                     return false;
                 }
                 
+                // TEMPORARILY REMOVED: match_result filter for debugging
                 // Special handling for baseball, darts, and esports match_result market
+                if ((currentSport === 'baseball' || currentSport === 'darts' || currentSport === 'esports') && currentMarket === 'match_result') {
+                    // REMOVED FILTER: Just return true to see all events
+                    console.log(`🔍 DEBUG COUPON: Bypassing match_result filter for event: ${event.home_team} vs ${event.away_team}`);
+                    return true;
+                }
+                
                 let marketOdds = null;
                 if ((currentSport === 'baseball' || currentSport === 'darts' || currentSport === 'esports') && currentMarket === 'match_result') {
                     // For baseball, darts, and esports, check both match_result and home_away markets
@@ -5103,8 +5145,8 @@
                         <div style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 1rem; transition: all 0.3s ease;">
                             <div style="text-align: center; margin-bottom: 1rem;">
                                 <div style="font-size: 0.9rem; color: #fbbf24; margin-bottom: 0.5rem;">${formatEventTime(event)}</div>
-                                <div style="font-weight: 600; margin-bottom: 0.25rem;">${event.home_team} VS ${event.away_team}</div>
-                                <div style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.6);">${event.league || 'Unknown League'}</div>
+                                <div style="font-weight: 600; margin-bottom: 0.25rem;">${highlightEventText(`${event.home_team} VS ${event.away_team}`, currentSearchTerm)}</div>
+                                <div style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.6);">${highlightEventText(event.league || 'Unknown League', currentSearchTerm)}</div>
                             </div>
                             <div style="display: flex; justify-content: center; gap: 0.5rem; flex-wrap: wrap;">
                                 ${generateOddsButtons(event, currentMarket)}
@@ -6137,8 +6179,10 @@
                 padding: 2rem;
                 max-width: 90%;
                 max-height: 80%;
-                overflow-y: auto;
+                overflow: hidden;
                 border: 1px solid rgba(255, 255, 255, 0.1);
+                display: flex;
+                flex-direction: column;
             `;
 
             const header = document.createElement('div');
@@ -6146,13 +6190,21 @@
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                margin-bottom: 1.5rem;
+                margin-bottom: 1rem;
                 border-bottom: 1px solid rgba(255, 255, 255, 0.1);
                 padding-bottom: 1rem;
+                flex-shrink: 0;
             `;
             header.innerHTML = `
                 <h2 style="color: #ffffff; margin: 0;">Trade History</h2>
                 <button onclick="this.closest('.modal').remove()" style="background: #ef4444; border: none; border-radius: 4px; color: white; padding: 0.5rem 1rem; cursor: pointer;">&times;</button>
+            `;
+
+            const scrollableContent = document.createElement('div');
+            scrollableContent.style.cssText = `
+                overflow-y: auto;
+                flex: 1;
+                padding-right: 0.5rem;
             `;
 
             modalContent.appendChild(header);
@@ -6163,6 +6215,11 @@
                     text-align: center;
                     color: rgba(255, 255, 255, 0.7);
                     padding: 2rem;
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
                 `;
                 noBets.innerHTML = `
                     <div style="font-size: 3rem; margin-bottom: 1rem;">📊</div>
@@ -6171,36 +6228,56 @@
                 `;
                 modalContent.appendChild(noBets);
             } else {
-                const table = document.createElement('table');
+                // Create table header that's sticky within the scrollable content
+                const tableHeader = document.createElement('div');
+                tableHeader.style.cssText = `
+                    position: sticky;
+                    top: 0;
+                    background: #1a1a2e;
+                    z-index: 10;
+                    border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+                    margin-bottom: 0.5rem;
+                `;
+                
+                const headerRow = document.createElement('div');
+                headerRow.style.cssText = `
+                    display: grid;
+                    grid-template-columns: 1.5fr 2fr 1.5fr 0.8fr 0.8fr 1fr 1fr;
+                    gap: 1rem;
+                    padding: 0.75rem;
+                    font-weight: 600;
+                    color: #ffffff;
+                `;
+                headerRow.innerHTML = `
+                    <div>Date & Time</div>
+                    <div>Match</div>
+                    <div>Trade Selection</div>
+                    <div style="text-align: center;">Odds</div>
+                    <div style="text-align: center;">Stake</div>
+                    <div style="text-align: center;">Potential Return</div>
+                    <div style="text-align: center;">Status</div>
+                `;
+                tableHeader.appendChild(headerRow);
+                scrollableContent.appendChild(tableHeader);
+
+                const table = document.createElement('div');
                 table.style.cssText = `
-                    width: 100%;
-                    border-collapse: collapse;
                     color: #ffffff;
                 `;
 
-                const thead = document.createElement('thead');
-                thead.innerHTML = `
-                    <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
-                        <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Date & Time</th>
-                        <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Match</th>
-                        <th style="padding: 0.75rem; text-align: left; font-weight: 600;">Trade Selection</th>
-                        <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Odds</th>
-                        <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Stake</th>
-                        <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Potential Return</th>
-                        <th style="padding: 0.75rem; text-align: center; font-weight: 600;">Status</th>
-                    </tr>
-                `;
-                table.appendChild(thead);
-
-                const tbody = document.createElement('tbody');
                 bets.forEach(bet => {
-                    const row = document.createElement('tr');
+                    const row = document.createElement('div');
                     row.style.cssText = `
-                        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-                        transition: background-color 0.2s;
+                        display: grid;
+                        grid-template-columns: 1.5fr 2fr 1.5fr 0.8fr 0.8fr 1fr 1fr;
+                        gap: 1rem;
+                        padding: 0.75rem;
+                        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                        transition: background-color 0.2s ease;
+                        align-items: center;
                     `;
-                    row.onmouseover = () => row.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
-                    row.onmouseout = () => row.style.backgroundColor = 'transparent';
+                    row.onmouseenter = () => row.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+                    row.onmouseleave = () => row.style.backgroundColor = 'transparent';
 
                     const statusColor = {
                         'pending': '#f59e0b',
@@ -6256,13 +6333,13 @@
                     }
 
                     row.innerHTML = `
-                        <td style="padding: 0.75rem; font-size: 0.9rem;">${localTime}</td>
-                        <td style="padding: 0.75rem; font-weight: 500;">${matchName}</td>
-                        <td style="padding: 0.75rem; color: #4ade80;">${bet.selection || 'N/A'}</td>
-                        <td style="padding: 0.75rem; text-align: center;">${bet.odds || 'N/A'}</td>
-                        <td style="padding: 0.75rem; text-align: center;">$${bet.stake?.toFixed(2) || 'N/A'}</td>
-                        <td style="padding: 0.75rem; text-align: center;">$${bet.potential_return?.toFixed(2) || 'N/A'}</td>
-                        <td style="padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.9rem;">${localTime}</div>
+                        <div style="font-weight: 500;">${matchName}</div>
+                        <div style="color: #4ade80;">${bet.selection || 'N/A'}</div>
+                        <div style="text-align: center;">${bet.odds || 'N/A'}</div>
+                        <div style="text-align: center;">$${bet.stake?.toFixed(2) || 'N/A'}</div>
+                        <div style="text-align: center;">$${bet.potential_return?.toFixed(2) || 'N/A'}</div>
+                        <div style="text-align: center;">
                             <span style="
                                 background: ${statusColor[bet.status] || '#6b7280'};
                                 color: white;
@@ -6271,12 +6348,12 @@
                                 font-size: 0.8rem;
                                 font-weight: 500;
                             ">${statusText[bet.status] || bet.status}</span>
-                        </td>
+                        </div>
                     `;
-                    tbody.appendChild(row);
+                    table.appendChild(row);
                 });
-                table.appendChild(tbody);
-                modalContent.appendChild(table);
+                scrollableContent.appendChild(table);
+                modalContent.appendChild(scrollableContent);
             }
 
             modal.appendChild(modalContent);
@@ -6788,15 +6865,12 @@
             const eventsWithOdds = events.filter(event => {
                 if (!event.odds) return false;
                 
+                // TEMPORARILY REMOVED: match_result filter for debugging
                 // For match_result (main market), check if event has match_result or home_away odds
                 if (currentMarket === 'match_result') {
-                    const hasMatchResultOdds = event.odds.match_result && 
-                        Array.isArray(event.odds.match_result) && 
-                        event.odds.match_result.length > 0;
-                    const hasHomeAwayOdds = event.odds.home_away && 
-                        Array.isArray(event.odds.home_away) && 
-                        event.odds.home_away.length > 0;
-                    return hasMatchResultOdds || hasHomeAwayOdds;
+                    // REMOVED FILTER: Just return true to see all events
+                    console.log(`🔍 DEBUG SEARCH: Bypassing match_result filter for event: ${event.home_team} vs ${event.away_team}`);
+                    return true;
                 }
                 
                 // For secondary markets, check if the event has odds for the current market
@@ -6852,15 +6926,12 @@
             const eventsWithOdds = events.filter(event => {
                 if (!event.odds) return false;
                 
+                // TEMPORARILY REMOVED: match_result filter for debugging
                 // For match_result (main market), check if event has match_result or home_away odds
                 if (currentMarket === 'match_result') {
-                    const hasMatchResultOdds = event.odds.match_result && 
-                        Array.isArray(event.odds.match_result) && 
-                        event.odds.match_result.length > 0;
-                    const hasHomeAwayOdds = event.odds.home_away && 
-                        Array.isArray(event.odds.home_away) && 
-                        event.odds.home_away.length > 0;
-                    return hasMatchResultOdds || hasHomeAwayOdds;
+                    // REMOVED FILTER: Just return true to see all events
+                    console.log(`🔍 DEBUG COUPON SEARCH: Bypassing match_result filter for event: ${event.home_team} vs ${event.away_team}`);
+                    return true;
                 }
                 
                 // For secondary markets, check if the event has odds for the current market
@@ -6923,6 +6994,49 @@
             currentSearchTerm = '';
             document.querySelector('.search-clear').classList.remove('visible');
             displayEvents(); // Show all events
+            updateSportCounts(); // Update counts to remove highlighting
+        }
+
+        // Function to highlight matching text in elements
+        function highlightText(element, searchTerm) {
+            if (!element || !searchTerm) return;
+            
+            const text = element.textContent;
+            const regex = new RegExp(`(${escapeRegExp(searchTerm)})`, 'gi');
+            const highlightedText = text.replace(regex, '<span class="highlighted-text">$1</span>');
+            
+            if (highlightedText !== text) {
+                element.innerHTML = highlightedText;
+            }
+        }
+
+        // Function to remove highlighting from elements
+        function removeHighlighting(element) {
+            if (!element) return;
+            
+            // Remove all highlighted spans and restore original text
+            const highlightedSpans = element.querySelectorAll('.highlighted-text');
+            highlightedSpans.forEach(span => {
+                const parent = span.parentNode;
+                parent.replaceChild(document.createTextNode(span.textContent), span);
+                parent.normalize();
+            });
+        }
+
+        // Function to escape special regex characters
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // Function to highlight text in HTML strings (for event names and leagues)
+        function highlightEventText(text, searchTerm) {
+            if (!text || !searchTerm || searchTerm.trim() === '') {
+                return text;
+            }
+            
+            const escapedTerm = escapeRegExp(searchTerm.trim());
+            const regex = new RegExp(`(${escapedTerm})`, 'gi');
+            return text.replace(regex, '<span class="highlighted-text">$1</span>');
         }
         
         function restoreSearchState() {
@@ -6995,6 +7109,9 @@
             
             // Load events for the selected sport (now from cache - instant!)
             loadEvents(sport);
+            
+            // Update sport counts to maintain highlighting across sport switches
+            updateSportCounts();
             
             // Restart odds update checker for the new sport
             if (typeof startOddsUpdateChecker === 'function') {

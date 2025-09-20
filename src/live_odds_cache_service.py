@@ -102,7 +102,7 @@ class LiveOddsCacheService:
                         if 'matches' in category:
                             for match in category['matches']:
                                 # Filter out live/finished matches - only show pre-match odds
-                                status = match.get('status', '')
+                                status = match.get('status', 'Not Started')  # Default to 'Not Started' if no status
                                 skip_statuses = ['FT', 'HT', 'LIVE', 'Live', 'live', 'Finished', 'Final', 'Ended', 'Completed', 
                                                '1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter', 
                                                'Set 1', 'Set 2', 'Set 3', 'Overtime', 'In Progress', 'in progress']
@@ -147,7 +147,7 @@ class LiveOddsCacheService:
             }
             
             # Extract team names based on sport
-            if sport_name in ['soccer', 'handball', 'hockey', 'futsal']:
+            if sport_name in ['soccer', 'handball', 'hockey', 'futsal', 'cricket']:
                 # These sports use localteam/visitorteam
                 localteam = match.get('localteam', {})
                 visitorteam = match.get('visitorteam', {})

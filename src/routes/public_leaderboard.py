@@ -54,20 +54,27 @@ def get_user_leaderboard():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get total count of users (same as the leaderboard query)
-        # First, get the exact same query as the leaderboard to count users
+        # Get total count of profitable users only (profit > 0)
         cursor.execute("""
             SELECT 
                 u.id
             FROM users u
             LEFT JOIN bets b ON u.id = b.user_id
-            GROUP BY u.id, u.username, u.email
+            LEFT JOIN (
+                SELECT username, staked, payout, profit
+                FROM User_leader_backup 
+                WHERE backup_date = (SELECT MAX(backup_date) FROM User_leader_backup)
+            ) ub ON u.username = ub.username
+            GROUP BY u.id, u.username, u.email, ub.staked, ub.payout, ub.profit
+            HAVING (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
+                   COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+                   COALESCE(ub.profit, 0) > 0
         """)
-        all_users = cursor.fetchall()
-        total_users = len(all_users)
+        profitable_users = cursor.fetchall()
+        total_users = len(profitable_users)
         
         # Get user leaderboard data with profit calculation (only settled bets)
-        # Show delta from backup table if available
+        # Show delta from backup table if available - ONLY PROFITABLE USERS (profit > 0)
         cursor.execute("""
             SELECT 
                 u.username,
@@ -87,6 +94,9 @@ def get_user_leaderboard():
                 WHERE backup_date = (SELECT MAX(backup_date) FROM User_leader_backup)
             ) ub ON u.username = ub.username
             GROUP BY u.id, u.username, u.email, ub.staked, ub.payout, ub.profit
+            HAVING (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
+                   COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+                   COALESCE(ub.profit, 0) > 0
             ORDER BY (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
                      COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
                      COALESCE(ub.profit, 0) DESC
@@ -119,20 +129,34 @@ def get_user_leaderboard():
                 'backup_profit': backup_profit
             })
         
-        # Get total statistics (only settled bets) - calculate deltas
+        # Get total statistics (only settled bets) - calculate deltas - ONLY PROFITABLE USERS
         cursor.execute("""
             SELECT 
-                COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as current_total_staked,
-                COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) as current_total_payout,
-                COALESCE(SUM(ub.staked), 0) as backup_total_staked,
-                COALESCE(SUM(ub.payout), 0) as backup_total_payout
-            FROM users u
-            LEFT JOIN bets b ON u.id = b.user_id
-            LEFT JOIN (
-                SELECT username, staked, payout
-                FROM User_leader_backup 
-                WHERE backup_date = (SELECT MAX(backup_date) FROM User_leader_backup)
-            ) ub ON u.username = ub.username
+                COALESCE(SUM(profitable_users.current_staked), 0) as current_total_staked,
+                COALESCE(SUM(profitable_users.current_payout), 0) as current_total_payout,
+                COALESCE(SUM(profitable_users.backup_staked), 0) as backup_total_staked,
+                COALESCE(SUM(profitable_users.backup_payout), 0) as backup_total_payout
+            FROM (
+                SELECT 
+                    COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as current_staked,
+                    COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) as current_payout,
+                    COALESCE(ub.staked, 0) as backup_staked,
+                    COALESCE(ub.payout, 0) as backup_payout,
+                    (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
+                     COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+                     COALESCE(ub.profit, 0) as profit_delta
+                FROM users u
+                LEFT JOIN bets b ON u.id = b.user_id
+                LEFT JOIN (
+                    SELECT username, staked, payout, profit
+                    FROM User_leader_backup 
+                    WHERE backup_date = (SELECT MAX(backup_date) FROM User_leader_backup)
+                ) ub ON u.username = ub.username
+                GROUP BY u.id, u.username, u.email, ub.staked, ub.payout, ub.profit
+                HAVING (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
+                       COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+                       COALESCE(ub.profit, 0) > 0
+            ) profitable_users
         """)
         
         stats_row = cursor.fetchone()
