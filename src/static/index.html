@@ -2690,6 +2690,11 @@
                             if (marketKey === 'match_result' || marketKey === 'ht_ft_double') {
                                 availableMarkets.add(marketKey);
                             }
+                        } else if (sport === 'cricket') {
+                            // For cricket, only allow 'home_away' market (Match Winner)
+                            if (marketKey === 'home_away') {
+                                availableMarkets.add(marketKey);
+                            }
                         } else {
                             // For other sports, allow all markets
                             availableMarkets.add(marketKey);
@@ -2701,27 +2706,24 @@
             console.log(`Available markets in data for ${sport}:`, Array.from(availableMarkets));
             console.log(`🔍 Raw market keys found:`, events.map(e => e.odds ? Object.keys(e.odds) : []).flat());
             
-            // Count events with odds for each market
+            // Count events with valid odds for each market
             const marketCounts = {};
             availableMarkets.forEach(marketKey => {
                 let count = 0;
                 events.forEach(event => {
+                    // Use the same validation logic as the filtering function
                     if (event.odds && event.odds[marketKey]) {
                         const marketData = event.odds[marketKey];
-                        let hasOdds = false;
+                        let hasValidOdds = false;
                         
-                        // Handle different odds data structures
+                        // Check if the market has valid odds data (same as hasValidOddsForCurrentMarket)
                         if (Array.isArray(marketData)) {
-                            // Array structure (e.g., [1.5, 2.1])
-                            hasOdds = marketData.length > 0;
+                            hasValidOdds = marketData.length > 0 && marketData.some(odd => odd && odd !== '0' && !isNaN(parseFloat(odd)));
                         } else if (typeof marketData === 'object' && marketData !== null) {
-                            // Object structure (e.g., {'1': 1.5, 'X': 3.2, '2': 2.1})
-                            hasOdds = Object.keys(marketData).length > 0;
-                        } else {
-                            hasOdds = false;
+                            hasValidOdds = Object.keys(marketData).length > 0 && Object.values(marketData).some(odd => odd && odd !== '0' && !isNaN(parseFloat(odd)));
                         }
                         
-                        if (hasOdds) {
+                        if (hasValidOdds) {
                             count++;
                         }
                     }
@@ -2732,14 +2734,15 @@
             console.log(`Market counts for ${sport}:`, marketCounts);
             
             // Always include match_result first, or home_away as fallback for 2-way markets
+            // Only show markets that have at least one event with valid odds
             const finalMarkets = [];
-            if (availableMarkets.has('match_result')) {
+            if (availableMarkets.has('match_result') && (marketCounts['match_result'] || 0) > 0) {
                 finalMarkets.push({
                     id: 'match_result',
                     name: mapMarketKeyToDisplayName('match_result', sport),
                     eventCount: marketCounts['match_result'] || 0
                 });
-            } else if (availableMarkets.has('home_away')) {
+            } else if (availableMarkets.has('home_away') && (marketCounts['home_away'] || 0) > 0) {
                 // For sports without draw option (volleyball, tennis, etc.), use home_away
                 // Special case: For baseball, treat home_away as match_result
                 if (sport === 'baseball') {
@@ -2771,17 +2774,10 @@
                 }
             }
             
-            // Special case: For baseball, always ensure match_result is first
-            if (sport === 'baseball' && !finalMarkets.some(m => m.id === 'match_result')) {
-                // If no match_result found, create a placeholder with 0 count
-                finalMarkets.unshift({
-                    id: 'match_result',
-                    name: 'Match Result',
-                    eventCount: 0
-                });
-            }
+            // Only show markets that have events with valid odds - no empty placeholders
             
             // Get top 4 markets by event count (excluding match_result and home_away)
+            // Only include markets that have at least one event with valid odds
             const otherMarkets = Array.from(availableMarkets)
                 .filter(marketKey => !['match_result', 'home_away'].includes(marketKey))
                 .map(marketKey => ({
@@ -2789,6 +2785,7 @@
                     name: mapMarketKeyToDisplayName(marketKey, sport),
                     eventCount: marketCounts[marketKey] || 0
                 }))
+                .filter(market => market.eventCount > 0) // Only show markets with events
                 .sort((a, b) => b.eventCount - a.eventCount) // Sort by count descending
                 .slice(0, 4); // Take top 4
             
@@ -2905,10 +2902,7 @@
                     ];
                 case 'cricket':
                     return [
-                        { id: 'home_away', name: 'Match Result' },    // Match Result (Home/Away) - updated to match backend
-                        { id: 'most_sixes', name: 'Most Sixes' },      // Most Sixes
-                        { id: 'most_fours', name: 'Most Fours' },     // Most Fours
-                        { id: 'most_run_outs', name: 'Most Run Outs' } // Most Run Outs
+                        { id: 'home_away', name: 'Match Winner' }    // Only show Match Winner for cricket
                     ];
                 case 'hockey':
                     return [
@@ -4921,14 +4915,45 @@
             }
         }
 
+        // Helper function to check if event has valid odds for current market
+        function hasValidOddsForCurrentMarket(event) {
+            if (!event.odds) {
+                return false;
+            }
+            
+            let marketOdds = null;
+            
+            // Special handling for different sports and markets
+            if ((currentSport === 'baseball' || currentSport === 'darts' || currentSport === 'esports') && currentMarket === 'match_result') {
+                // For baseball, darts, and esports, check both match_result and home_away markets
+                marketOdds = event.odds['match_result'] || event.odds['home_away'];
+            } else {
+                marketOdds = event.odds[currentMarket];
+            }
+            
+            if (!marketOdds) {
+                return false;
+            }
+            
+            // Check if the market has valid odds data
+            if (Array.isArray(marketOdds)) {
+                return marketOdds.length > 0 && marketOdds.some(odd => odd && odd !== '0' && !isNaN(parseFloat(odd)));
+            } else if (typeof marketOdds === 'object' && marketOdds !== null) {
+                return Object.keys(marketOdds).length > 0 && Object.values(marketOdds).some(odd => odd && odd !== '0' && !isNaN(parseFloat(odd)));
+            }
+            
+            return false;
+        }
+
         // Optimized displayListView with virtual scrolling concept
         function displayListView(events, container) {
-            // TEMPORARILY REMOVED: ALL FILTERS for debugging
+            // Filter out events that don't have valid odds for the current market
             const eventsWithOdds = events.filter(event => {
-                console.log(`🔍 DEBUG: Processing event: ${event.home_team} vs ${event.away_team}, odds:`, event.odds);
-                
-                // REMOVED ALL FILTERS: Just return true for ALL events to see what happens
-                return true;
+                const hasOdds = hasValidOddsForCurrentMarket(event);
+                if (!hasOdds) {
+                    console.log(`🚫 Filtering out event without odds: ${event.home_team} vs ${event.away_team} (market: ${currentMarket})`);
+                }
+                return hasOdds;
             });
             
             console.log(`Filtered events: ${eventsWithOdds.length} out of ${events.length} have odds for market '${currentMarket}'`);
@@ -5094,40 +5119,13 @@
         }
 
         function displayCouponView(events, container) {
-            // Filter out events that don't have odds for the current market
+            // Filter out events that don't have valid odds for the current market
             const eventsWithOdds = events.filter(event => {
-                if (!event.odds) {
-                    return false;
+                const hasOdds = hasValidOddsForCurrentMarket(event);
+                if (!hasOdds) {
+                    console.log(`🚫 Filtering out event without odds (Coupon): ${event.home_team} vs ${event.away_team} (market: ${currentMarket})`);
                 }
-                
-                // TEMPORARILY REMOVED: match_result filter for debugging
-                // Special handling for baseball, darts, and esports match_result market
-                if ((currentSport === 'baseball' || currentSport === 'darts' || currentSport === 'esports') && currentMarket === 'match_result') {
-                    // REMOVED FILTER: Just return true to see all events
-                    console.log(`🔍 DEBUG COUPON: Bypassing match_result filter for event: ${event.home_team} vs ${event.away_team}`);
-                    return true;
-                }
-                
-                let marketOdds = null;
-                if ((currentSport === 'baseball' || currentSport === 'darts' || currentSport === 'esports') && currentMarket === 'match_result') {
-                    // For baseball, darts, and esports, check both match_result and home_away markets
-                    marketOdds = event.odds['match_result'] || event.odds['home_away'];
-                } else {
-                    marketOdds = event.odds[currentMarket];
-                }
-                
-                if (!marketOdds) {
-                    return false;
-                }
-                
-                // Check if the market has valid odds data
-                if (Array.isArray(marketOdds)) {
-                    return marketOdds.length > 0 && marketOdds.some(odd => odd && odd !== '0');
-                } else if (typeof marketOdds === 'object' && marketOdds !== null) {
-                    return Object.keys(marketOdds).length > 0 && Object.values(marketOdds).some(odd => odd && odd !== '0');
-                }
-                
-                return false;
+                return hasOdds;
             });
             
             console.log(`🎯 Coupon View: Found ${eventsWithOdds.length} events with odds out of ${events.length} total events`);
