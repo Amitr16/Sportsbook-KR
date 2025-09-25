@@ -17,6 +17,21 @@
         // Expose tenant globally for other snippets
         window.__TENANT__ = tenant();
         console.log("[PUBLIC] Public betting page loaded for tenant:", window.__TENANT__);
+        
+        // Update casino link to use tenant-specific URL
+        function updateCasinoLink() {
+          const casinoLink = document.getElementById('casinoLink');
+          if (casinoLink && window.__TENANT__) {
+            casinoLink.href = `/${window.__TENANT__}/casino`;
+          }
+        }
+        
+        // Update casino link when DOM is ready
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', updateCasinoLink);
+        } else {
+          updateCasinoLink();
+        }
       })();
     </script>
     
@@ -2228,9 +2243,23 @@
                     <!-- Authenticated user section -->
                     <div id="authenticatedUser" style="display: none;">
                         <div class="balance" id="userBalance">$1000.00</div>
+                        <a href="/casino" class="casino-link" id="casinoLink" style="
+                            background: linear-gradient(135deg, #FFD700, #FFA500);
+                            color: #000;
+                            padding: 8px 16px;
+                            border-radius: 20px;
+                            text-decoration: none;
+                            font-weight: bold;
+                            margin-right: 12px;
+                            box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+                            transition: all 0.3s ease;
+                        " onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 0 30px rgba(255, 215, 0, 0.8)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 0 20px rgba(255, 215, 0, 0.5)'">
+                            🎰 Casino
+                        </a>
                         <div class="user-menu" id="userMenu" onclick="toggleUserMenu()">Loading... ▼</div>
                         <div class="user-dropdown" id="userDropdown" style="display: none;">
                             <div class="dropdown-item" onclick="showBetHistory()">📊 Trade History</div>
+                            <div class="dropdown-item" onclick="showEditUsername()">✏️ Edit Username</div>
                             <div class="dropdown-item" onclick="logout()">🚪 Logout</div>
                         </div>
                     </div>
@@ -6127,6 +6156,290 @@
             // Redirect to logout which will clear session and redirect to login
             const tenant = getTenant();
             window.location.href = `/${tenant}/logout`;
+        }
+
+        function showEditUsername() {
+            // Close user menu
+            const dropdown = document.getElementById('userDropdown');
+            if (dropdown) {
+                dropdown.style.display = 'none';
+            }
+            
+            // Get Trade Slip position for modal placement
+            const tradeSlip = document.querySelector('[class*="trade"], [id*="trade"], [class*="slip"], [id*="slip"]');
+            let topPosition = 100; // fallback
+            
+            if (tradeSlip) {
+                const tradeSlipRect = tradeSlip.getBoundingClientRect();
+                topPosition = tradeSlipRect.top;
+            } else {
+                // If we can't find trade slip, position it lower
+                topPosition = window.innerHeight * 0.3; // 30% down the screen
+            }
+            
+            // Create modal
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.style.cssText = `
+                position: fixed;
+                top: ${topPosition}px;
+                right: 20px;
+                z-index: 10000;
+            `;
+            
+            modal.innerHTML = `
+                <div style="
+                    background: #1a1a1a;
+                    border-radius: 8px;
+                    padding: 1rem;
+                    width: 300px;
+                    border: 1px solid #333;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+                ">
+                    <div style="
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        margin-bottom: 0.75rem;
+                        border-bottom: 1px solid #333;
+                        padding-bottom: 0.5rem;
+                    ">
+                        <h3 style="color: #fff; margin: 0; font-size: 1rem; font-weight: 500;">✏️ Edit Username</h3>
+                        <button onclick="this.closest('.modal').remove()" style="
+                            background: #444;
+                            border: none;
+                            border-radius: 4px;
+                            color: #fff;
+                            width: 20px;
+                            height: 20px;
+                            cursor: pointer;
+                            font-size: 0.8rem;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                        ">&times;</button>
+                    </div>
+                    
+                    <div style="margin-bottom: 0.75rem;">
+                        <label style="
+                            display: block;
+                            color: #ccc;
+                            margin-bottom: 0.25rem;
+                            font-weight: 400;
+                            font-size: 0.8rem;
+                        ">New Username:</label>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <input type="text" id="newUsername" placeholder="Enter new username" style="
+                                flex: 1;
+                                padding: 0.5rem;
+                                border: 1px solid #444;
+                                border-radius: 4px;
+                                background: #2a2a2a;
+                                color: #fff;
+                                font-size: 0.8rem;
+                                box-sizing: border-box;
+                            " />
+                            <button onclick="generateRandomUsername()" style="
+                                background: #444;
+                                border: 1px solid #555;
+                                border-radius: 4px;
+                                color: #fff;
+                                padding: 0.5rem 0.75rem;
+                                cursor: pointer;
+                                font-size: 0.75rem;
+                                font-weight: 400;
+                                white-space: nowrap;
+                                transition: all 0.2s ease;
+                            " onmouseover="this.style.background='#555'" onmouseout="this.style.background='#444'">
+                                🎲 Random
+                            </button>
+                        </div>
+                        <div style="
+                            color: #666;
+                            font-size: 0.7rem;
+                            margin-top: 0.25rem;
+                        ">3-20 characters, letters, numbers, and underscores only</div>
+                    </div>
+                    
+                    <div style="
+                        display: flex;
+                        gap: 0.5rem;
+                        justify-content: flex-end;
+                    ">
+                        <button onclick="updateUsername()" style="
+                            background: #007bff;
+                            border: none;
+                            border-radius: 4px;
+                            color: white;
+                            padding: 0.5rem 1rem;
+                            cursor: pointer;
+                            font-size: 0.8rem;
+                            font-weight: 400;
+                            transition: all 0.2s ease;
+                        " onmouseover="this.style.background='#0056b3'" onmouseout="this.style.background='#007bff'">
+                            Update
+                        </button>
+                        <button onclick="this.closest('.modal').remove()" style="
+                            background: #6c757d;
+                            border: none;
+                            border-radius: 4px;
+                            color: white;
+                            padding: 0.5rem 1rem;
+                            cursor: pointer;
+                            font-size: 0.8rem;
+                            font-weight: 400;
+                            transition: all 0.2s ease;
+                        " onmouseover="this.style.background='#545b62'" onmouseout="this.style.background='#6c757d'">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Focus on input
+            setTimeout(() => {
+                const input = document.getElementById('newUsername');
+                if (input) {
+                    input.focus();
+                }
+            }, 100);
+        }
+
+        function generateRandomUsername() {
+            // Generate random username locally - no authentication needed
+            const prefixes = [
+                'Thunder', 'Lightning', 'Storm', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+                'Quantum', 'Nebula', 'Stellar', 'Solar', 'Lunar', 'Galactic', 'Atomic', 'Neon',
+                'Cyber', 'Digital', 'Virtual', 'Matrix', 'Code', 'Pixel', 'Byte', 'Data',
+                'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Nova', 'Super', 'Ultra',
+                'Mega', 'Giga', 'Tera', 'Peta', 'Exa', 'Zetta', 'Yotta', 'Infinity'
+            ];
+            
+            const suffixes = [
+                'Master', 'Lord', 'King', 'Queen', 'Prince', 'Princess', 'Duke', 'Duchess',
+                'Warrior', 'Knight', 'Mage', 'Wizard', 'Sorcerer', 'Warlock', 'Priest', 'Monk',
+                'Hunter', 'Ranger', 'Rogue', 'Assassin', 'Ninja', 'Samurai', 'Viking', 'Berserker',
+                'Phoenix', 'Dragon', 'Tiger', 'Lion', 'Eagle', 'Falcon', 'Wolf', 'Bear',
+                'Storm', 'Thunder', 'Lightning', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+                'Pro', 'Elite', 'Legend', 'Myth', 'Epic', 'Hero', 'Champion', 'Winner'
+            ];
+            
+            // Generate random username (no numbers)
+            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+            const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+            const username = `${prefix}${suffix}`;
+            
+            // Set the generated username in the input field
+            const input = document.getElementById('newUsername');
+            if (input) {
+                input.value = username;
+                input.style.borderColor = '#00ff00';
+                setTimeout(() => {
+                    input.style.borderColor = '#444';
+                }, 2000);
+            }
+            
+            console.log('✨ Random username generated:', username);
+        }
+
+        function showCoolNotification(message, type = 'success') {
+            // Create cool notification
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: ${type === 'success' ? 'linear-gradient(135deg, #00d4ff 0%, #0099cc 100%)' : 'linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%)'};
+                color: white;
+                padding: 1rem 1.5rem;
+                border-radius: 12px;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                font-weight: 500;
+                font-size: 0.9rem;
+                z-index: 10001;
+                transform: translateX(100%);
+                transition: transform 0.3s ease;
+                border: 2px solid ${type === 'success' ? '#00b8e6' : '#ff5252'};
+            `;
+            notification.textContent = message;
+            
+            document.body.appendChild(notification);
+            
+            // Animate in
+            setTimeout(() => {
+                notification.style.transform = 'translateX(0)';
+            }, 100);
+            
+            // Auto remove after 3 seconds
+            setTimeout(() => {
+                notification.style.transform = 'translateX(100%)';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 300);
+            }, 3000);
+        }
+
+        function updateUsername() {
+            const newUsername = document.getElementById('newUsername').value.trim();
+            
+            if (!newUsername) {
+                showCoolNotification('Please enter a username', 'error');
+                return;
+            }
+            
+            if (newUsername.length < 3 || newUsername.length > 20) {
+                showCoolNotification('Username must be between 3 and 20 characters', 'error');
+                return;
+            }
+            
+            // Check username format
+            if (!/^[a-zA-Z0-9_]+$/.test(newUsername)) {
+                showCoolNotification('Username can only contain letters, numbers, and underscores', 'error');
+                return;
+            }
+            
+            // Use session-based authentication (no token needed)
+            fetch('/api/auth/update-username', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'include', // Include session cookies
+                body: JSON.stringify({ username: newUsername })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update local storage
+                    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+                    userData.username = newUsername;
+                    localStorage.setItem('userData', JSON.stringify(userData));
+                    
+                    // Update UI
+                    const userMenu = document.getElementById('userMenu');
+                    if (userMenu) {
+                        userMenu.textContent = `${newUsername} ▼`;
+                    }
+                    
+                    // Close modal
+                    const modal = document.querySelector('.modal');
+                    if (modal) {
+                        modal.remove();
+                    }
+                    
+                    showCoolNotification('✅ Username updated successfully!', 'success');
+                } else {
+                    showCoolNotification(data.error || 'Failed to update username', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error updating username:', error);
+                showCoolNotification('Failed to update username', 'error');
+            });
         }
 
         // Page navigation functions

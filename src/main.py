@@ -11,7 +11,7 @@ from src.config.env_loader import *  # noqa: F401 - just to execute the loader
 if not os.getenv("DATABASE_URL"):
     raise RuntimeError("DATABASE_URL is not set; production must use Postgres, not sqlite.")
 
-from flask import Flask, send_from_directory, request, redirect, session, current_app, jsonify
+from flask import Flask, send_from_directory, send_file, request, redirect, session, current_app, jsonify
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -200,8 +200,7 @@ def debug_db_compat():
 
 
 
-# Configuration
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-keep-me-constant')  # Fixed secret key for dev
+# Configuration - SECRET_KEY will be set in the config.update() below
 
 # Database configuration - use PostgreSQL from environment variables
 database_url = os.getenv('DATABASE_URL') or os.getenv('PG_DSN')
@@ -224,13 +223,13 @@ app.config.update(
     
     # Cookies should work over http://localhost and https://production
     SESSION_COOKIE_NAME="session",
-    SESSION_COOKIE_SECURE=True,        # we're behind HTTPS in prod
+    SESSION_COOKIE_SECURE=False,       # Allow HTTP for local development
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",       # don't set "None" unless you're on https + Secure
     SESSION_COOKIE_DOMAIN=None,          # let browser default to host; avoid '.localhost'
     SESSION_COOKIE_PATH="/",
     
-    REMEMBER_COOKIE_SECURE=True,
+    REMEMBER_COOKIE_SECURE=False,      # Allow HTTP for local development
     REMEMBER_COOKIE_SAMESITE="Lax",
     
     PERMANENT_SESSION_LIFETIME=timedelta(days=7),
@@ -324,6 +323,7 @@ from src.routes.rich_superadmin_interface1 import rich_superadmin_bp
 # Import theme customization blueprint
 from src.routes.theme_customization import theme_bp
 from src.routes.public_apis import public_apis_bp
+from src.routes.casino_api import casino_bp
 
 # Register blueprints in correct order - tenant_auth first to avoid conflicts
 app.register_blueprint(tenant_auth_bp)  # Tenant auth routes first (more specific)
@@ -339,6 +339,7 @@ app.register_blueprint(json_sports_bp, url_prefix='/api/sports')
 app.register_blueprint(sports_bp, url_prefix='/api/sports')  # Fix: should be /api/sports not /api
 app.register_blueprint(prematch_odds_bp, url_prefix='/api/prematch-odds')
 app.register_blueprint(sportsbook_bp, url_prefix='/api')
+app.register_blueprint(casino_bp)  # Casino API routes
 # app.register_blueprint(multitenant_bp)  # Disable old multitenant routing - REMOVED
 app.register_blueprint(clean_multitenant_bp)  # New clean URL routing
 app.register_blueprint(superadmin_bp)
@@ -942,6 +943,25 @@ def serve_login():
     except Exception as e:
         logging.error(f"Error serving login.html: {e}")
         return f"Error serving login page: {str(e)}", 500
+
+@app.route('/bulk-registration')
+def serve_bulk_registration():
+    """Serve the bulk registration page"""
+    static_folder_path = app.static_folder
+    if static_folder_path is None:
+        logging.error("Static folder not configured")
+        return "Static folder not configured", 404
+    
+    if not os.path.exists(static_folder_path):
+        logging.error(f"Static folder does not exist: {static_folder_path}")
+        return "Static folder not found", 404
+    
+    try:
+        return send_from_directory(static_folder_path, 'bulk_registration.html')
+    except Exception as e:
+        logging.error(f"Error serving bulk_registration.html: {e}")
+        return f"Error serving bulk registration page: {str(e)}", 500
+
 
 # Catch-all route for static files - must be after all API routes
 @app.route('/', defaults={'path': ''})

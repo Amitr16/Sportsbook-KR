@@ -160,6 +160,8 @@ def google_login():
                     cursor.execute("SELECT id FROM sportsbook_operators WHERE subdomain = %s", (tenant,))
                     if cursor.fetchone():
                         session['original_tenant'] = tenant
+                        session.permanent = True
+                        session.modified = True
                         logger.info(f"Google OAuth login - Valid tenant found: {tenant}")
                     else:
                         logger.error(f"Google OAuth login - Unknown tenant '{tenant}', cannot proceed")
@@ -290,15 +292,53 @@ def google_callback():
             
             if not user:
                 logger.info(f"🔍 No existing user found, creating new user for email: {email}")
-                base = (name or email.split("@")[0]).replace(" ", "").lower()[:15]
-                username, n = base, 1
                 
-                # Check for username conflicts within this operator
-                while conn.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone():
-                    n += 1
-                    username = f"{base}{n}"
+                # Generate cool random username (same as frontend)
+                import random
                 
-                logger.info(f"🔍 Generated username: {username} for email: {email}")
+                # List of cool username prefixes
+                prefixes = [
+                    'Thunder', 'Lightning', 'Storm', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+                    'Quantum', 'Nebula', 'Stellar', 'Solar', 'Lunar', 'Galactic', 'Atomic', 'Neon',
+                    'Cyber', 'Digital', 'Virtual', 'Matrix', 'Code', 'Pixel', 'Byte', 'Data',
+                    'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Nova', 'Super', 'Ultra',
+                    'Mega', 'Giga', 'Tera', 'Peta', 'Exa', 'Zetta', 'Yotta', 'Infinity'
+                ]
+                
+                # List of cool suffixes
+                suffixes = [
+                    'Master', 'Lord', 'King', 'Queen', 'Prince', 'Princess', 'Duke', 'Duchess',
+                    'Warrior', 'Knight', 'Mage', 'Wizard', 'Sorcerer', 'Warlock', 'Priest', 'Monk',
+                    'Hunter', 'Ranger', 'Rogue', 'Assassin', 'Ninja', 'Samurai', 'Viking', 'Berserker',
+                    'Phoenix', 'Dragon', 'Tiger', 'Lion', 'Eagle', 'Falcon', 'Wolf', 'Bear',
+                    'Storm', 'Thunder', 'Lightning', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+                    'Pro', 'Elite', 'Legend', 'Myth', 'Epic', 'Hero', 'Champion', 'Winner'
+                ]
+                
+                # Generate random username (no numbers)
+                prefix = random.choice(prefixes)
+                suffix = random.choice(suffixes)
+                username = f"{prefix}{suffix}"
+                
+                # Check if username is available, try with different suffix if taken
+                attempts = 0
+                while conn.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone() and attempts < 10:
+                    suffix = random.choice(suffixes)
+                    username = f"{prefix}{suffix}"
+                    attempts += 1
+                
+                # If still not available after 10 attempts, fall back to simple approach
+                if attempts >= 10:
+                    logger.warning(f"⚠️ Could not generate unique cool username, falling back to simple approach")
+                    base = (name or email.split("@")[0]).replace(" ", "").lower()[:15]
+                    username, n = base, 1
+                    
+                    # Check for username conflicts within this operator
+                    while conn.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone():
+                        n += 1
+                        username = f"{base}{n}"
+                
+                logger.info(f"🔍 Generated cool username: {username} for email: {email}")
                 
                 try:
                     # Get default balance for this operator
@@ -656,20 +696,102 @@ def get_current_user_jwt():
 @auth_bp.route('/debug/session', methods=['GET'])
 def debug_session():
     """Debug endpoint to check session data"""
-    from flask import session, g
+    from flask import session, g, request
     import logging
     logger = logging.getLogger(__name__)
     
     logger.info("🔍 DEBUG SESSION ENDPOINT")
     logger.info(f"🔍 Session data: {dict(session)}")
     logger.info(f"🔍 g.current_user: {getattr(g, 'current_user', 'Not set')}")
+    logger.info(f"🔍 Request cookies: {dict(request.cookies)}")
+    logger.info(f"🔍 Request headers: {dict(request.headers)}")
     
     return jsonify({
         'session_data': dict(session),
         'g_current_user': str(getattr(g, 'current_user', 'Not set')),
         'user_id': session.get('user_id'),
         'operator_id': session.get('operator_id'),
-        'user_data': session.get('user_data')
+        'user_data': session.get('user_data'),
+        'original_tenant': session.get('original_tenant'),
+        'request_cookies': dict(request.cookies),
+        'session_permanent': session.permanent,
+        'session_modified': session.modified
+    })
+
+@auth_bp.route('/debug/set-tenant', methods=['POST'])
+def debug_set_tenant():
+    """Debug endpoint to manually set tenant in session"""
+    from flask import session, make_response
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    data = request.get_json()
+    tenant = data.get('tenant', 'supersports')
+    
+    # Try to set session data
+    session['original_tenant'] = tenant
+    session['test_key'] = 'test_value'
+    session.permanent = True
+    session.modified = True
+    
+    logger.info(f"🔍 DEBUG: Set tenant to {tenant} in session")
+    logger.info(f"🔍 DEBUG: Session data: {dict(session)}")
+    logger.info(f"🔍 DEBUG: Session permanent: {session.permanent}")
+    logger.info(f"🔍 DEBUG: Session modified: {session.modified}")
+    
+    # Create response and ensure session is saved
+    response = make_response(jsonify({
+        'success': True,
+        'tenant': tenant,
+        'session_data': dict(session),
+        'session_permanent': session.permanent,
+        'session_modified': session.modified
+    }))
+    
+    return response
+
+@auth_bp.route('/debug/test-session', methods=['GET'])
+def debug_test_session():
+    """Test if session is working at all"""
+    from flask import session, make_response
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Try to read and write to session
+    current_value = session.get('test_counter', 0)
+    session['test_counter'] = current_value + 1
+    session['test_timestamp'] = str(datetime.datetime.now())
+    session.permanent = True
+    session.modified = True
+    
+    logger.info(f"🔍 DEBUG: Test session - counter: {current_value + 1}")
+    logger.info(f"🔍 DEBUG: Session data: {dict(session)}")
+    
+    response = make_response(jsonify({
+        'success': True,
+        'counter': current_value + 1,
+        'session_data': dict(session),
+        'session_permanent': session.permanent,
+        'session_modified': session.modified
+    }))
+    
+    return response
+
+@auth_bp.route('/debug/simple-session', methods=['GET'])
+def debug_simple_session():
+    """Very simple session test"""
+    from flask import session
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Just try to set a simple value
+    session['simple_test'] = 'hello_world'
+    
+    logger.info(f"🔍 SIMPLE SESSION TEST: {dict(session)}")
+    
+    return jsonify({
+        'session_data': dict(session),
+        'simple_test': session.get('simple_test', 'NOT_FOUND')
     })
 
 @auth_bp.route('/debug/fix-user-data', methods=['POST'])
@@ -876,5 +998,164 @@ def logout():
         return jsonify({
             'success': False,
             'error': 'Logout failed'
+        }), 500
+
+@auth_bp.route('/update-username', methods=['POST'])
+def update_username():
+    """Update user's username"""
+    try:
+        # Get user from session instead of token
+        user_id = session.get('user_id')
+        operator_id = session.get('operator_id')
+        
+        if not user_id or not operator_id:
+            return jsonify({
+                'success': False,
+                'error': 'Not authenticated'
+            }), 401
+        
+        data = request.get_json()
+        new_username = data.get('username', '').strip()
+        
+        if not new_username:
+            return jsonify({
+                'success': False,
+                'error': 'Username is required'
+            }), 400
+        
+        if len(new_username) < 3 or len(new_username) > 20:
+            return jsonify({
+                'success': False,
+                'error': 'Username must be between 3 and 20 characters'
+            }), 400
+        
+        # Check if username contains only valid characters
+        import re
+        if not re.match(r'^[a-zA-Z0-9_]+$', new_username):
+            return jsonify({
+                'success': False,
+                'error': 'Username can only contain letters, numbers, and underscores'
+            }), 400
+        
+        # Check if username is already taken by another user in the same operator
+        from src.db_compat import get_connection
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id FROM users 
+            WHERE username = %s AND sportsbook_operator_id = %s AND id != %s
+        """, (new_username, operator_id, user_id))
+        
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Username is already taken'
+            }), 400
+        
+        # Update username
+        cursor.execute("""
+            UPDATE users 
+            SET username = %s 
+            WHERE id = %s AND sportsbook_operator_id = %s
+        """, (new_username, user_id, operator_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Update session
+        session['username'] = new_username
+        
+        logger.info(f"Username updated for user {user_id}: {new_username}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Username updated successfully',
+            'username': new_username
+        })
+        
+    except Exception as e:
+        logger.error(f"Username update error: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to update username'
+        }), 500
+
+@auth_bp.route('/generate-username', methods=['POST'])
+@token_required
+def generate_username():
+    """Generate a random username for the user"""
+    try:
+        user = g.current_user
+        
+        # Generate random username
+        import random
+        import string
+        
+        # List of cool username prefixes
+        prefixes = [
+            'Thunder', 'Lightning', 'Storm', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+            'Quantum', 'Nebula', 'Stellar', 'Solar', 'Lunar', 'Galactic', 'Atomic', 'Neon',
+            'Cyber', 'Digital', 'Virtual', 'Matrix', 'Code', 'Pixel', 'Byte', 'Data',
+            'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Nova', 'Super', 'Ultra',
+            'Mega', 'Giga', 'Tera', 'Peta', 'Exa', 'Zetta', 'Yotta', 'Infinity'
+        ]
+        
+        # List of cool suffixes
+        suffixes = [
+            'Master', 'Lord', 'King', 'Queen', 'Prince', 'Princess', 'Duke', 'Duchess',
+            'Warrior', 'Knight', 'Mage', 'Wizard', 'Sorcerer', 'Warlock', 'Priest', 'Monk',
+            'Hunter', 'Ranger', 'Rogue', 'Assassin', 'Ninja', 'Samurai', 'Viking', 'Berserker',
+            'Phoenix', 'Dragon', 'Tiger', 'Lion', 'Eagle', 'Falcon', 'Wolf', 'Bear',
+            'Storm', 'Thunder', 'Lightning', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+            'Pro', 'Elite', 'Legend', 'Myth', 'Epic', 'Hero', 'Champion', 'Winner'
+        ]
+        
+        # Generate random username
+        prefix = random.choice(prefixes)
+        suffix = random.choice(suffixes)
+        number = random.randint(1, 9999)
+        
+        username = f"{prefix}{suffix}{number}"
+        
+        # Check if username is available
+        from src.db_compat import get_connection
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id FROM users 
+            WHERE username = %s AND sportsbook_operator_id = %s
+        """, (username, user.sportsbook_operator_id))
+        
+        # If username is taken, try with different number
+        attempts = 0
+        while cursor.fetchone() and attempts < 10:
+            number = random.randint(1, 9999)
+            username = f"{prefix}{suffix}{number}"
+            cursor.execute("""
+                SELECT id FROM users 
+                WHERE username = %s AND sportsbook_operator_id = %s
+            """, (username, user.sportsbook_operator_id))
+            attempts += 1
+        
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"Generated username for user {user.id}: {username}")
+        
+        return jsonify({
+            'success': True,
+            'username': username
+        })
+        
+    except Exception as e:
+        logger.error(f"Username generation error: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to generate username'
         }), 500
 

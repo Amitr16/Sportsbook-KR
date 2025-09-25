@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Sportsbook Registration</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .upload-section {
+            background: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 30px;
+            transition: all 0.3s ease;
+        }
+
+        .upload-section:hover {
+            border-color: #007bff;
+            background: #f0f8ff;
+        }
+
+        .upload-section.dragover {
+            border-color: #007bff;
+            background: #e3f2fd;
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            color: #6c757d;
+            margin-bottom: 20px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .upload-btn {
+            background: #007bff;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }
+
+        .upload-btn:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+        }
+
+        .template-btn {
+            background: #28a745;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .template-btn:hover {
+            background: #1e7e34;
+            transform: translateY(-2px);
+        }
+
+        .file-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .process-btn {
+            background: #dc3545;
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .process-btn:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+
+        .process-btn.show {
+            display: inline-block;
+        }
+
+        .results {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .success-section, .error-section {
+            margin: 20px 0;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .success-section {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .error-section {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        .results-table th,
+        .results-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .results-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #007bff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .instructions {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .instructions h3 {
+            color: #1976d2;
+            margin-bottom: 15px;
+        }
+
+        .instructions ul {
+            margin-left: 20px;
+        }
+
+        .instructions li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+
+        .required-field {
+            color: #dc3545;
+            font-weight: bold;
+        }
+
+        .optional-field {
+            color: #6c757d;
+            font-style: italic;
+        }
+
+        .template-section {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+
+        .template-section h3 {
+            color: #495057;
+            margin-bottom: 15px;
+        }
+
+        .template-code {
+            background: #2d3748;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            margin-top: 15px;
+        }
+
+        .template-code pre {
+            margin: 0;
+            color: #e2e8f0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .template-code code {
+            color: #e2e8f0;
+            background: none;
+            padding: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Bulk Sportsbook Registration</h1>
+            <p>Create multiple sportsbook operators, admins, and websites from a CSV file</p>
+        </div>
+
+        <div class="content">
+            <div class="instructions">
+                <h3>📋 Instructions</h3>
+                <ul>
+                    <li><span class="required-field">Required fields:</span> sportsbook_name, login, password, email</li>
+                    <li>Each row in the CSV will create a complete sportsbook with admin access and 4 wallets</li>
+                    <li>All sportsbooks will be created with default settings (5% commission, $100k initial balance)</li>
+                    <li>All sportsbooks will be created with unique subdomains automatically</li>
+                </ul>
+            </div>
+
+            <div class="template-section">
+                <h3>📄 CSV Template Format</h3>
+                <p>Copy this format and create your CSV file:</p>
+                <div class="template-code">
+                    <pre><code>sportsbook_name,login,password,email
+Example Sportsbook,admin_user,password123,admin@example.com
+Another Sportsbook,admin_user2,password456,admin2@example.com
+My Sportsbook,myadmin,securepass789,admin@mysportsbook.com</code></pre>
+                </div>
+            </div>
+
+            <div class="upload-section" id="uploadSection">
+                <div class="upload-icon">📁</div>
+                <h3>Upload CSV File</h3>
+                <p>Drag and drop your CSV file here or click to browse</p>
+                
+                <input type="file" id="csvFile" class="file-input" accept=".csv" />
+                <button class="upload-btn" onclick="document.getElementById('csvFile').click()">
+                    Choose CSV File
+                </button>
+                
+
+                <div class="file-info" id="fileInfo">
+                    <strong>Selected file:</strong> <span id="fileName"></span><br>
+                    <strong>Size:</strong> <span id="fileSize"></span>
+                </div>
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Processing CSV file and creating sportsbooks...</p>
+            </div>
+
+            <button class="process-btn" id="processBtn" onclick="processCSV()">
+                🚀 Process CSV & Create Sportsbooks
+            </button>
+
+            <div class="results" id="results">
+                <h3>📊 Processing Results</h3>
+                <div id="resultsContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFile = null;
+
+        // File input handling
+        document.getElementById('csvFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                selectedFile = file;
+                showFileInfo(file);
+                document.getElementById('processBtn').classList.add('show');
+            }
+        });
+
+        // Drag and drop handling
+        const uploadSection = document.getElementById('uploadSection');
+        
+        uploadSection.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadSection.classList.add('dragover');
+        });
+
+        uploadSection.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            uploadSection.classList.remove('dragover');
+        });
+
+        uploadSection.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadSection.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.type === 'text/csv' || file.name.toLowerCase().endsWith('.csv')) {
+                    selectedFile = file;
+                    showFileInfo(file);
+                    document.getElementById('processBtn').classList.add('show');
+                } else {
+                    alert('Please select a CSV file.');
+                }
+            }
+        });
+
+        function showFileInfo(file) {
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = formatFileSize(file.size);
+            document.getElementById('fileInfo').classList.add('show');
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        async function processCSV() {
+            if (!selectedFile) {
+                alert('Please select a CSV file first.');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('csv_file', selectedFile);
+
+            // Show loading
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('processBtn').style.display = 'none';
+            document.getElementById('results').classList.remove('show');
+
+            try {
+                const response = await fetch('/api/bulk-register', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                // Hide loading
+                document.getElementById('loading').classList.remove('show');
+                document.getElementById('processBtn').style.display = 'inline-block';
+
+                // Show results
+                displayResults(result);
+                document.getElementById('results').classList.add('show');
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred while processing the CSV file.');
+                
+                // Hide loading
+                document.getElementById('loading').classList.remove('show');
+                document.getElementById('processBtn').style.display = 'inline-block';
+            }
+        }
+
+        function displayResults(result) {
+            const resultsContent = document.getElementById('resultsContent');
+            
+            if (result.success) {
+                const { successful, failed, total_processed } = result.results;
+                
+                let html = `
+                    <div class="success-section">
+                        <h4>✅ Successfully Created: ${successful.length} sportsbooks</h4>
+                        <p>Total processed: ${total_processed} | Successful: ${successful.length} | Failed: ${failed.length}</p>
+                `;
+
+                if (successful.length > 0) {
+                    html += `
+                        <table class="results-table">
+                            <thead>
+                                <tr>
+                                    <th>Row</th>
+                                    <th>Sportsbook Name</th>
+                                    <th>Login</th>
+                                    <th>Email</th>
+                                    <th>Subdomain</th>
+                                    <th>Admin URL</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+                    
+                    successful.forEach(item => {
+                        html += `
+                            <tr>
+                                <td>${item.row}</td>
+                                <td>${item.sportsbook_name}</td>
+                                <td>${item.login}</td>
+                                <td>${item.email || 'N/A'}</td>
+                                <td>${item.subdomain}</td>
+                                <td><a href="${item.admin_url}" target="_blank">${item.admin_url}</a></td>
+                                <td><span class="status-badge status-success">Created</span></td>
+                            </tr>
+                        `;
+                    });
+                    
+                    html += `</tbody></table>`;
+                }
+
+                html += `</div>`;
+
+                if (failed.length > 0) {
+                    html += `
+                        <div class="error-section">
+                            <h4>❌ Failed: ${failed.length} sportsbooks</h4>
+                            <table class="results-table">
+                                <thead>
+                                    <tr>
+                                        <th>Row</th>
+                                        <th>Sportsbook Name</th>
+                                        <th>Error</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                    `;
+                    
+                    failed.forEach(item => {
+                        html += `
+                            <tr>
+                                <td>${item.row}</td>
+                                <td>${item.sportsbook_name}</td>
+                                <td>${item.error}</td>
+                            </tr>
+                        `;
+                    });
+                    
+                    html += `</tbody></table></div>`;
+                }
+
+                resultsContent.innerHTML = html;
+            } else {
+                resultsContent.innerHTML = `
+                    <div class="error-section">
+                        <h4>❌ Error</h4>
+                        <p>${result.error}</p>
+                    </div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>

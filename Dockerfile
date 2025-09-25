@@ -11,11 +11,14 @@ ENV FLASK_APP=run.py
 ENV FLASK_ENV=production
 ENV PORT=8080
 
-# Install system dependencies
+# Install system dependencies including Node.js
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     libpq-dev \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -26,6 +29,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+# Build casino frontend during Docker build
+RUN cd casino-suite-pro/frontend && \
+    npm install && \
+    npm run build
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app && \

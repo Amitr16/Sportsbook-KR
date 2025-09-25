@@ -113,6 +113,58 @@ def sportsbook_home(subdomain):
         print(f"❌ Error type: {type(e).__name__}")
         return f"Error reading betting interface: {str(e)}", 500
 
+# Casino interface - tenant-specific
+@clean_multitenant_bp.route('/<subdomain>/casino')
+def sportsbook_casino(subdomain):
+    """Serve the casino interface for a specific sportsbook"""
+    operator, error = validate_subdomain(subdomain)
+    if not operator:
+        return f"Error: {error}", 404
+    
+    # Serve the casino frontend
+    casino_frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'casino-suite-pro', 'frontend', 'dist', 'index.html')
+    
+    if not os.path.exists(casino_frontend_path):
+        return "Casino frontend not found", 404
+    
+    try:
+        with open(casino_frontend_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Replace the casino title with sportsbook branding
+        content = content.replace('KRYZEL CASINO', f"{operator['sportsbook_name']} CASINO")
+        
+        # Fix asset paths to be tenant-specific
+        content = content.replace('/casino/assets/', f'/{subdomain}/casino/assets/')
+        content = content.replace('./assets/', f'/{subdomain}/casino/assets/')
+        content = content.replace('src="./assets/', f'src="./{subdomain}/casino/assets/')
+        content = content.replace('href="./assets/', f'href="./{subdomain}/casino/assets/')
+        
+        return content
+        
+    except Exception as e:
+        return f"Error serving casino: {str(e)}", 500
+
+# Casino static assets - tenant-specific
+@clean_multitenant_bp.route('/<subdomain>/casino/assets/<path:filename>')
+def casino_assets(subdomain, filename):
+    """Serve casino static assets (CSS, JS, images)"""
+    operator, error = validate_subdomain(subdomain)
+    if not operator:
+        return f"Error: {error}", 404
+    
+    # Serve casino assets
+    casino_assets_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'casino-suite-pro', 'frontend', 'dist', 'assets', filename)
+    
+    if not os.path.exists(casino_assets_path):
+        return "Asset not found", 404
+    
+    try:
+        from flask import send_file
+        return send_file(casino_assets_path)
+    except Exception as e:
+        return f"Error serving asset: {str(e)}", 500
+
 # Customer login/register page
 @clean_multitenant_bp.route('/<subdomain>/login')
 def sportsbook_login(subdomain):
