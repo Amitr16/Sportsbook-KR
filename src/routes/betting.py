@@ -303,11 +303,21 @@ def place_bet():
                 'message': 'This betting option has been disabled by administrator'
             }), 403
         
-        # Check user balance
+        # Check user balance (both USD and USDT if Web3 enabled)
         if user.balance < stake:
             return jsonify({
                 'success': False,
-                'message': 'Insufficient balance'
+                'message': 'Insufficient USD balance'
+            }), 400
+        
+        # Check USDT balance if Web3 enabled
+        user_usdt_balance = getattr(user, 'usdt_balance', 0) or 0
+        user_web3_enabled = getattr(user, 'web3_enabled', False)
+        
+        if user_web3_enabled and user_usdt_balance < stake:
+            return jsonify({
+                'success': False,
+                'message': 'Insufficient USDT balance'
             }), 400
         
         # Create bet record using IDs only, not relationship objects
@@ -329,22 +339,62 @@ def place_bet():
             event_time=event_time  # UTC time when the event is scheduled
         )
         
-        # Deduct balance on the ORM user object
-        user.balance -= stake
-        
-        # Save to database
+        # Save bet to database first to get bet.id
         db.add(bet)
         db.flush()  # Get bet.id without committing
         
+        # Process hybrid wallet deduction (USD + USDT)
+        hybrid_result = None
+        if user_web3_enabled:
+            try:
+                from src.services.hybrid_wallet_service import HybridWalletService
+                import sqlite3
+                
+                hybrid_service = HybridWalletService()
+                
+                # Use raw database connection for hybrid operations
+                conn = sqlite3.connect('local_app.db')
+                hybrid_result = hybrid_service.process_bet_placement(
+                    user_id=user.id,
+                    stake=stake,
+                    bet_id=bet.id,
+                    conn=conn
+                )
+                conn.close()
+                
+                if hybrid_result['success']:
+                    logger.info(f"✅ Hybrid bet processing successful: USD {hybrid_result['usd_deducted']} + USDT {hybrid_result['usdt_deducted']}")
+                else:
+                    logger.error(f"❌ Hybrid bet processing failed: {hybrid_result.get('message')}")
+                    db.rollback()
+                    return jsonify({
+                        'success': False,
+                        'message': f'Bet processing failed: {hybrid_result.get("message")}'
+                    }), 500
+                    
+            except Exception as e:
+                logger.error(f"❌ Error in hybrid bet processing: {e}")
+                db.rollback()
+                return jsonify({
+                    'success': False,
+                    'message': 'Bet processing failed'
+                }), 500
+        else:
+            # Traditional Web2 only processing
+            user.balance -= stake
+        
         # Create transaction record using IDs only
         transaction = Transaction(
-            user_id=user.id,  # Use ID, not the user object
+            user_id=user.id,
             bet_id=bet.id,
             amount=-stake,
             transaction_type='bet',
             description=f'Bet placement - {selection}',
             balance_before=user.balance + stake,
-            balance_after=user.balance
+            balance_after=user.balance,
+            usdt_amount=-stake if user_web3_enabled else None,
+            aptos_transaction_hash=hybrid_result.get('usdt_transaction_hash') if hybrid_result else None,
+            web3_enabled=user_web3_enabled
         )
         
         db.add(transaction)
@@ -352,9 +402,9 @@ def place_bet():
         # Commit all changes atomically
         db.commit()
         
-        # DO NOT refresh g.current_user - it's a SimpleNamespace!
-        # Instead, get the new balance from the ORM user object
-        new_balance = float(user.balance)
+        # Get updated balances (both USD and USDT)
+        new_usd_balance = float(user.balance)
+        new_usdt_balance = float(getattr(user, 'usdt_balance', 0) or 0)
         
         # Update session cache with the new balance using the clean DTO approach
         try:
@@ -373,12 +423,17 @@ def place_bet():
                 'user_id': user.id,
                 'bet_id': bet.id,
                 'stake': stake,
-                'new_balance': new_balance
+                'new_usd_balance': new_usd_balance,
+                'new_usdt_balance': new_usdt_balance,
+                'web3_enabled': user_web3_enabled,
+                'usdt_transaction_hash': hybrid_result.get('usdt_transaction_hash') if hybrid_result else None
             }, to=f'user_{user.id}', namespace='/')
             
             emit('balance:update', {
                 'user_id': user.id,
-                'balance': new_balance
+                'usd_balance': new_usd_balance,
+                'usdt_balance': new_usdt_balance,
+                'web3_enabled': user_web3_enabled
             }, to=f'user_{user.id}', namespace='/')
             
             logger.info("Socket events emitted successfully")
@@ -389,7 +444,11 @@ def place_bet():
             'success': True,
             'message': 'Bet placed successfully',
             'bet_id': bet.id,
-            'new_balance': new_balance
+            'usd_balance': new_usd_balance,
+            'usdt_balance': new_usdt_balance,
+            'new_balance': new_usd_balance,  # Keep for backward compatibility
+            'web3_enabled': user_web3_enabled,
+            'usdt_transaction_hash': hybrid_result.get('usdt_transaction_hash') if hybrid_result else None
         })
         
     except Exception as e:
@@ -780,9 +839,40 @@ def settle_bets():
                 bet.status = BetStatus.WON
                 bet.actual_return = bet.potential_return
                 
-                # Credit user account
+                # Process hybrid settlement (USD + USDT)
                 user = bet.user
-                user.balance += bet.actual_return
+                user_web3_enabled = getattr(user, 'web3_enabled', False)
+                
+                if user_web3_enabled:
+                    try:
+                        from src.services.hybrid_wallet_service import HybridWalletService
+                        import sqlite3
+                        
+                        hybrid_service = HybridWalletService()
+                        
+                        # Use raw database connection for hybrid operations
+                        conn = sqlite3.connect('local_app.db')
+                        hybrid_result = hybrid_service.process_bet_settlement(
+                            bet_id=bet.id,
+                            payout=bet.actual_return,
+                            conn=conn
+                        )
+                        conn.close()
+                        
+                        if hybrid_result['success']:
+                            logger.info(f"✅ Hybrid settlement successful: USD {hybrid_result['usd_credited']} + USDT {hybrid_result['usdt_credited']}")
+                        else:
+                            logger.error(f"❌ Hybrid settlement failed: {hybrid_result.get('message')}")
+                            # Fall back to traditional processing
+                            user.balance += bet.actual_return
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error in hybrid settlement: {e}")
+                        # Fall back to traditional processing
+                        user.balance += bet.actual_return
+                else:
+                    # Traditional Web2 only processing
+                    user.balance += bet.actual_return
                 
                 # Create transaction
                 transaction = Transaction(
@@ -792,7 +882,9 @@ def settle_bets():
                     transaction_type='win',
                     description=f'Bet win - {bet.match_name}',
                     balance_before=user.balance - bet.actual_return,  # Balance before credit
-                    balance_after=user.balance  # Balance after credit
+                    balance_after=user.balance,  # Balance after credit
+                    usdt_amount=bet.actual_return if user_web3_enabled else None,
+                    web3_enabled=user_web3_enabled
                 )
                 current_app.db.session.add(transaction)
                 
@@ -1276,20 +1368,53 @@ def manual_settle_bets():
                 won_count += 1
                 total_payout += bet.actual_return
                 
-                # Credit user account
+                # Process hybrid settlement (USD + USDT)
                 user = bet.user
                 if user:
-                    user.balance += bet.actual_return
+                    user_web3_enabled = getattr(user, 'web3_enabled', False)
+                    
+                    if user_web3_enabled:
+                        try:
+                            from src.services.hybrid_wallet_service import HybridWalletService
+                            import sqlite3
+                            
+                            hybrid_service = HybridWalletService()
+                            
+                            # Use raw database connection for hybrid operations
+                            conn = sqlite3.connect('local_app.db')
+                            hybrid_result = hybrid_service.process_bet_settlement(
+                                bet_id=bet.id,
+                                payout=bet.actual_return,
+                                conn=conn
+                            )
+                            conn.close()
+                            
+                            if hybrid_result['success']:
+                                logger.info(f"✅ Manual hybrid settlement successful: USD {hybrid_result['usd_credited']} + USDT {hybrid_result['usdt_credited']}")
+                            else:
+                                logger.error(f"❌ Manual hybrid settlement failed: {hybrid_result.get('message')}")
+                                # Fall back to traditional processing
+                                user.balance += bet.actual_return
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Error in manual hybrid settlement: {e}")
+                            # Fall back to traditional processing
+                            user.balance += bet.actual_return
+                    else:
+                        # Traditional Web2 only processing
+                        user.balance += bet.actual_return
                     
                     # Create transaction
                     transaction = Transaction(
                         user_id=user.id,
                         bet_id=bet.id,
                         amount=bet.actual_return,
-                        transaction_type='win',
-                        description=f'Bet win - {bet.match_name} ({bet.selection})',
+                        transaction_type='manual_settle',
+                        description=f'Manual settlement - {bet.match_name} ({bet.selection})',
                         balance_before=user.balance - bet.actual_return,  # Balance before credit
-                        balance_after=user.balance  # Balance after credit
+                        balance_after=user.balance,  # Balance after credit
+                        usdt_amount=bet.actual_return if user_web3_enabled else None,
+                        web3_enabled=user_web3_enabled
                     )
                     current_app.db.session.add(transaction)
             else:
