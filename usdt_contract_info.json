@@ -1,0 +1,22 @@
+{
+  "contract_address": "0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745",
+  "contract_name": "simple_usdt",
+  "full_contract_id": "0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745::simple_usdt::SimpleUSDT",
+  "network": "testnet",
+  "deployment_tx": "0xe4e97ac75d0c2eebbb0f51ece95b8b0092672ac23530162c0b21d82916a79f95",
+  "initialization_tx": "0xf991eb125edff6a735ff87188b5b8bdc0ec02631455767205e1eb0e15e8543c2",
+  "deployed_at": 1759074881295887,
+  "initialized_at": 1759079472856474,
+  "explorer_url": "https://explorer.aptoslabs.com/account/0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745?network=testnet",
+  "functions": {
+    "initialize": "0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745::simple_usdt::initialize",
+    "mint_usdt": "0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745::simple_usdt::mint_usdt",
+    "transfer_usdt": "0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745::simple_usdt::transfer_usdt",
+    "get_balance": "0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745::simple_usdt::get_balance"
+  },
+  "token_info": {
+    "name": "Simple USDT",
+    "symbol": "SUSDT",
+    "decimals": 6
+  }
+}

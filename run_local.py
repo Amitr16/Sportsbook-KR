@@ -11,31 +11,26 @@ sys.path.insert(0, 'src')
 os.environ['FLASK_ENV'] = 'development'
 os.environ['FLASK_DEBUG'] = '1'
 
-from config import config
-from src.main import create_app
+from src.main import app
 
 def run_local():
     """Run the Flask application locally"""
     
     print("🚀 Starting local development server...")
-    config.print_config()
     
     try:
-        # Create Flask app
-        app = create_app()
-        
-        # Run the app
-        print(f"✅ App created successfully")
+        # Run the app (imported from main.py)
+        print(f"✅ App loaded successfully")
         print(f"🌐 Server will start at: http://localhost:5000")
-        print(f"📊 Database: {config.DATABASE_TYPE}")
-        print(f"🔧 Debug mode: {config.DEBUG}")
+        print(f"📊 Database: SQLite (local_app.db)")
+        print(f"🔧 Debug mode: True")
         print("\nPress Ctrl+C to stop the server")
         
         # Start the app
         app.run(
             host='0.0.0.0',
             port=5000,
-            debug=config.DEBUG,
+            debug=True,
             use_reloader=True
         )
         

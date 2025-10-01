@@ -1,0 +1,17 @@
+[package]
+name = "sportsbook_platform"
+version = "1.0.0"
+authors = ["Kryzel Sports Betting Platform"]
+
+[addresses]
+sportsbook_platform = "0x6fa59123f70611f2868a5262b22d8c62f354dd6acdf78444e914eb88e677a745"
+
+[dev-addresses]
+sportsbook_platform = "0x42"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-core.git"
+rev = "aptos-node-v1.4.0"
+subdir = "aptos-move/framework/aptos-framework"
+
+[dev-dependencies]

@@ -8,20 +8,43 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from src import sqlite3_shim as sqlite3
 from src.auth.session_utils import clear_operator_session
 import re
+import os
 from datetime import datetime, date
 import json
 import csv
 import io
 import uuid
 
+# Import Hybrid Wallet service for Web3 wallet creation (4-wallet system)
+try:
+    from src.services.hybrid_wallet_service import HybridWalletService
+    HYBRID_WALLET_AVAILABLE = True
+    print("✅ Hybrid Wallet service loaded - Web3 features enabled")
+except ImportError:
+    HybridWalletService = None
+    HYBRID_WALLET_AVAILABLE = False
+    print("⚠️ Hybrid Wallet service not available - Web3 features disabled")
+
 sportsbook_bp = Blueprint('sportsbook', __name__)
 
 DATABASE_PATH = 'src/database/app.db'
 
 def get_db_connection():
-    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
-    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
-    return conn
+    """Get database connection - SQLite direct connection to avoid PostgreSQL issues"""
+    import sqlite3 as direct_sqlite3
+    import os
+    
+    # Use direct SQLite connection to avoid PostgreSQL connection pool issues
+    database_url = os.getenv('DATABASE_URL', 'sqlite:///local_app.db')
+    if database_url.startswith('sqlite:///'):
+        db_path = database_url.replace('sqlite:///', '')
+        conn = direct_sqlite3.connect(db_path)
+        conn.row_factory = direct_sqlite3.Row
+        return conn
+    else:
+        # Fallback to original shim for PostgreSQL
+        conn = sqlite3.connect()
+        return conn
 
 def generate_subdomain(sportsbook_name, login):
     """Generate a unique subdomain from sportsbook name only"""
@@ -155,13 +178,13 @@ def create_operator_wallets(operator_id, conn):
     ))
     wallet3_id = cursor.lastrowid
     
-    # Wallet 4: Bookmaker's Earnings - starts at $0
+    # Wallet 4: Community - starts at $0
     cursor.execute("""
         INSERT INTO operator_wallets 
         (operator_id, wallet_type, current_balance, initial_balance, leverage_multiplier, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
-        operator_id, 'bookmaker_earnings', 0.0, 0.0, 1.0, 
+        operator_id, 'community', 0.0, 0.0, 1.0, 
         datetime.utcnow(), datetime.utcnow()
     ))
     wallet4_id = cursor.lastrowid
@@ -222,6 +245,24 @@ def create_operator_wallets(operator_id, conn):
         'wallet3_id': wallet3_id,
         'wallet4_id': wallet4_id
     }
+
+@sportsbook_bp.route('/register-sportsbook', methods=['GET'])
+def register_sportsbook_form():
+    """Serve the sportsbook registration form"""
+    try:
+        # Serve the registration HTML file
+        static_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
+        html_path = os.path.join(static_folder, 'register-sportsbook.html')
+        
+        with open(html_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        return content
+        
+    except FileNotFoundError:
+        return "Registration form not found", 404
+    except Exception as e:
+        return f"Error loading registration form: {str(e)}", 500
 
 @sportsbook_bp.route('/register-sportsbook', methods=['POST'])
 def register_sportsbook():
@@ -341,6 +382,53 @@ def register_sportsbook():
             # Create the 4 wallets for the new operator
             wallet_ids = create_operator_wallets(operator_id, conn)
             
+            # Create 4 hybrid wallets (USD + USDT) if Web3 is enabled
+            aptos_wallets = None
+            enable_web3 = data.get('enable_web3', True)  # Default to enabled
+            
+            if enable_web3 and email:
+                try:
+                    from src.services.hybrid_wallet_service import HybridWalletService
+                    
+                    hybrid_service = HybridWalletService()
+                    
+                    # Prepare operator data for hybrid wallet creation
+                    operator_data = {
+                        'operator_id': operator_id,
+                        'email': email,
+                        'sportsbook_name': sportsbook_name,
+                        'enable_web3': enable_web3
+                    }
+                    
+                    # Create hybrid wallets (this will handle both USD and USDT)
+                    hybrid_result = hybrid_service.create_operator_with_hybrid_wallets(
+                        operator_data=operator_data,
+                        conn=conn
+                    )
+                    
+                    if hybrid_result['success']:
+                        aptos_wallets = {
+                            'total_wallets': hybrid_result['total_wallets'],
+                            'total_usdt': hybrid_result['total_usdt_minted'],
+                            'wallets': {
+                                wallet_type: {
+                                    'address': wallet_info['address'],
+                                    'wallet_id': wallet_info['wallet_id'],
+                                    'usdt_balance': wallet_info['usdt_balance'],
+                                    'chain': 'aptos',
+                                    'token': 'USDT'
+                                }
+                                for wallet_type, wallet_info in hybrid_result['wallets'].items()
+                            }
+                        }
+                        print(f"✅ Created {hybrid_result['total_wallets']} hybrid wallets for operator {operator_id}")
+                        print(f"💰 Total USDT minted: {hybrid_result['total_usdt_minted']} USDT")
+                    else:
+                        print(f"⚠️ Hybrid wallet creation failed: {hybrid_result.get('message')}")
+                        
+                except Exception as e:
+                    print(f"⚠️ Error creating hybrid wallets: {e}")
+            
             conn.commit()
             
             return jsonify({
@@ -352,6 +440,8 @@ def register_sportsbook():
                 'operator_id': operator_id,
                 'admin_url': f'/{subdomain}/admin',
                 'sportsbook_url': f'/{subdomain}',
+                'aptos_wallets': aptos_wallets,
+                'web3_enabled': enable_web3 and aptos_wallets is not None,
                 'wallets': {
                     'bookmaker_capital': {
                         'id': wallet_ids['wallet1_id'],
@@ -369,10 +459,10 @@ def register_sportsbook():
                         'balance': 0.0,
                         'description': 'Daily revenue collection'
                     },
-                    'bookmaker_earnings': {
+                    'community': {
                         'id': wallet_ids['wallet4_id'],
                         'balance': 0.0,
-                        'description': 'Bookmaker\'s personal earnings'
+                        'description': 'Community share of profits'
                     }
                 }
             }), 201

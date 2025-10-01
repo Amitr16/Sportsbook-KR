@@ -12,6 +12,15 @@ from functools import wraps
 from datetime import datetime, timedelta
 from sqlalchemy import select
 from types import SimpleNamespace
+
+# Import Crossmint Aptos service for Web3 wallet creation
+try:
+    from src.services.crossmint_aptos_service import CrossmintAptosService
+    CROSSMINT_AVAILABLE = True
+except ImportError:
+    CrossmintAptosService = None
+    CROSSMINT_AVAILABLE = False
+    logging.warning("⚠️ Crossmint Aptos service not available - Web3 features disabled")
 logger = logging.getLogger(__name__)
 
 tenant_auth_bp = Blueprint('tenant_auth', __name__)
@@ -123,17 +132,75 @@ def tenant_register(subdomain):
         
         logger.info(f"New user registered for {operator['sportsbook_name']}: {username}")
         
-        return jsonify({
+        # Create hybrid wallet (USD + USDT) if Web3 is enabled
+        aptos_wallet = None
+        enable_web3 = data.get('enable_web3', True)  # Default to enabled
+        
+        if enable_web3:
+            try:
+                from src.services.hybrid_wallet_service import HybridWalletService
+                
+                hybrid_service = HybridWalletService()
+                
+                # Prepare user data for hybrid wallet creation
+                user_data = {
+                    'username': username,
+                    'email': email,
+                    'password_hash': password_hash,
+                    'initial_balance': default_balance,
+                    'enable_web3': enable_web3
+                }
+                
+                # Create hybrid wallet (this will handle both USD and USDT)
+                # We need to use raw database connection for this
+                import sqlite3
+                conn = sqlite3.connect('local_app.db')
+                
+                hybrid_result = hybrid_service.create_user_with_hybrid_wallet(
+                    user_data=user_data,
+                    operator_id=operator['id'],
+                    conn=conn
+                )
+                
+                conn.close()
+                
+                if hybrid_result['success']:
+                    # Update the ORM user object with hybrid wallet details
+                    new_user.usdt_balance = hybrid_result['usdt_balance']
+                    new_user.web3_enabled = hybrid_result['web3_enabled']
+                    
+                    if hybrid_result.get('aptos_wallet'):
+                        new_user.aptos_wallet_address = hybrid_result['aptos_wallet']['address']
+                        new_user.aptos_wallet_id = hybrid_result['aptos_wallet']['wallet_id']
+                        
+                        aptos_wallet = hybrid_result['aptos_wallet']
+                    
+                    current_app.db.session.commit()
+                    
+                    logger.info(f"✅ Hybrid wallet created for user {new_user.id}: USD {hybrid_result['usd_balance']} + USDT {hybrid_result['usdt_balance']}")
+                else:
+                    logger.warning(f"⚠️ Hybrid wallet creation failed for user {new_user.id}: {hybrid_result.get('message')}")
+                    
+            except Exception as e:
+                logger.error(f"⚠️ Error creating hybrid wallet for user {new_user.id}: {e}")
+        
+        response_data = {
             'success': True,
             'message': f'Welcome to {operator["sportsbook_name"]}! Account created successfully.',
             'user': {
                 'id': new_user.id,
                 'username': username,
                 'email': email,
-                'balance': default_balance,
-                'sportsbook': operator['sportsbook_name']
+                'usd_balance': new_user.balance,
+                'usdt_balance': getattr(new_user, 'usdt_balance', 0),
+                'balance': new_user.balance,  # Keep for backward compatibility
+                'sportsbook': operator['sportsbook_name'],
+                'aptos_wallet': aptos_wallet,
+                'web3_enabled': getattr(new_user, 'web3_enabled', False)
             }
-        })
+        }
+        
+        return jsonify(response_data)
         
     except Exception as e:
         logger.error(f"Registration error for {subdomain}: {e}")

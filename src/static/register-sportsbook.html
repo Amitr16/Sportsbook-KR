@@ -368,6 +368,22 @@
                 >
             </div>
 
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input 
+                        type="checkbox" 
+                        id="enableWeb3" 
+                        name="enable_web3" 
+                        checked
+                        style="margin-right: 10px;"
+                    >
+                    <span class="web3-label">🔗 Enable Web3 & Aptos Wallet Creation</span>
+                    <div class="web3-description" style="font-size: 12px; color: #666; margin-top: 5px;">
+                        Creates real Aptos wallets via Crossmint for operators and users
+                    </div>
+                </label>
+            </div>
+
             <button type="submit" class="submit-btn" id="submitBtn">
                 <span id="btnText">Launch My Sportsbook</span>
                 <span id="btnLoading" class="loading" style="display: none;"></span>
@@ -441,7 +457,8 @@
                 sportsbook_name: formData.get('sportsbookName'),
                 login: formData.get('login'),
                 password: formData.get('password'),
-                email: formData.get('email') || null
+                email: formData.get('email') || null,
+                enable_web3: document.getElementById('enableWeb3').checked
             };
             
             try {
@@ -458,8 +475,38 @@
                 if (response.ok && result.success) {
                     // Success
                     alert.className = 'alert alert-success';
+                    let aptosInfo = '';
+                    if (result.aptos_wallets && result.web3_enabled) {
+                        const wallets = result.aptos_wallets.wallets;
+                        let walletList = '';
+                        
+                        Object.keys(wallets).forEach(walletType => {
+                            const wallet = wallets[walletType];
+                            const displayName = walletType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+                            walletList += `
+                                <div style="margin: 5px 0; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                    <strong>${displayName}:</strong><br>
+                                    <code style="font-size: 11px; background: #fff; padding: 2px 4px; border-radius: 3px;">${wallet.address}</code><br>
+                                    <small style="color: #666;">Balance: ${wallet.usdt_balance} USDT</small>
+                                </div>
+                            `;
+                        });
+                        
+                        aptosInfo = `
+                            <div style="background: #e8f5e8; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                                <strong>🔗 Web3 USDT Integration Active!</strong><br>
+                                <small>Created ${result.aptos_wallets.total_wallets} Aptos USDT wallets (Total: ${result.aptos_wallets.total_usdt} USDT)</small>
+                                <div style="margin-top: 10px;">
+                                    ${walletList}
+                                </div>
+                                <small style="color: #666;">Real Aptos USDT wallets created via Crossmint!</small>
+                            </div>
+                        `;
+                    }
+                    
                     alert.innerHTML = `
                         <strong>Success!</strong> Your sportsbook "${result.sportsbook_name}" has been created!<br><br>
+                        ${aptosInfo}
                         <strong>Next Steps:</strong><br>
                         • <a href="/${result.subdomain}/admin" style="color: #155724; text-decoration: underline;">Access your admin panel</a><br>
                         • <a href="/${result.subdomain}/admin/theme-customizer" style="color: #155724; text-decoration: underline;">Customize your sportsbook theme</a><br>
