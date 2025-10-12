@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 print("db_compat loaded from:", __file__)
-import os, re
+import os, re, weakref, time, traceback
 import logging
 from contextlib import contextmanager
 from typing import Any, Iterable, Mapping, Sequence, Optional
@@ -212,6 +212,11 @@ class CompatConnection:
         self._pool = None
         self._closed = False
         self.row_factory = None
+        # Leak tracking / auto-return-on-GC for pooled conns
+        self._checked_out_at = time.time()
+        # Capture a short stack to help find who checked this out
+        self._checkout_stack = ''.join(traceback.format_stack(limit=6))
+        self._finalizer = None  # set later after we know _pool
     
     def cursor(self):
         """Return a cursor with lastrowid emulation"""
@@ -267,6 +272,13 @@ class CompatConnection:
                 raw.close()
             except Exception:
                 pass
+        finally:
+            # Cancel finalizer if any
+            try:
+                if self._finalizer is not None:
+                    self._finalizer.detach()
+            except Exception:
+                pass
     
     def __enter__(self):
         """Support for context manager protocol"""
@@ -283,6 +295,48 @@ class CompatConnection:
                     pass
             self.close()
         except:
+            pass
+    
+    def _attach_pool_finalizer(self, pool_obj):
+        """
+        Attach a GC finalizer that will return the connection to the pool
+        even if caller forgot to close it. Only used for pooled connections.
+        """
+        if self._finalizer is not None:
+            return
+        raw = self._conn
+        def _return_to_pool(raw_ref=raw, pool_ref=pool_obj):
+            try:
+                # Best-effort cleanup
+                try:
+                    if hasattr(raw_ref, 'info') and hasattr(raw_ref.info, 'transaction_status'):
+                        from psycopg import pq
+                        if raw_ref.info.transaction_status in (pq.TransactionStatus.INTRANS, pq.TransactionStatus.INERROR):
+                            raw_ref.rollback()
+                except Exception:
+                    pass
+                pool_ref.putconn(raw_ref)
+                logging.warning("🔁 GC finalizer returned leaked DB connection to pool")
+            except Exception as e:
+                try:
+                    raw_ref.close()
+                except Exception:
+                    pass
+                logging.warning(f"💥 GC finalizer closed leaked DB connection (pool put failed): {e}")
+        self._finalizer = weakref.finalize(self, _return_to_pool)
+        self._finalizer.atexit = False  # Don't duplicate atexit logs
+    
+    def __del__(self):
+        # As a secondary guard, log if a pooled connection lived too long
+        try:
+            held_ms = (time.time() - self._checked_out_at) * 1000.0
+            if held_ms > 5_000 and not self._closed:
+                logging.warning(
+                    "🕳️ DB connection object garbage-collected after %.0fms without close(); "
+                    "auto-returned by GC finalizer.\nCheckout stack:\n%s",
+                    held_ms, self._checkout_stack
+                )
+        except Exception:
             pass
     
     def __getattr__(self, name: str): 
@@ -619,9 +673,11 @@ def connect(dsn: Optional[str] = None, *, autocommit: bool = False, use_pool: bo
     Only use if caller will putconn() correctly.
     """
     if use_pool:
-        raw = pool().getconn()
+        p = pool()
+        raw = p.getconn()
         conn = CompatConnection(raw)
-        conn._pool = pool()
+        conn._pool = p
+        conn._attach_pool_finalizer(p)  # Ensure GC will putconn if caller forgets
         if autocommit:
             # Ensure no aborted transaction before toggling autocommit
             try:
