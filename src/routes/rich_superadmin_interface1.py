@@ -13,9 +13,28 @@ from sqlalchemy import text
 rich_superadmin_bp = Blueprint('rich_superadmin', __name__)
 
 def get_db_connection():
-    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
-    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
-    conn.row_factory = sqlite3.Row
+    """
+    LEGACY FUNCTION - Returns a CompatConnection from the pool.
+    IMPORTANT: Caller MUST call conn.close() when done!
+    New code should use connection_ctx() context manager instead.
+    """
+    from src.db_compat import pool, CompatConnection
+    raw = pool().getconn(timeout=10)
+    
+    # Clean any aborted transactions before use
+    try:
+        from psycopg import pq
+        ts = getattr(raw.info, "transaction_status", None)
+        if ts in (pq.TransactionStatus.INERROR, pq.TransactionStatus.INTRANS):
+            raw.rollback()
+    except Exception:
+        try:
+            raw.rollback()
+        except Exception:
+            pass
+    
+    conn = CompatConnection(raw)
+    conn._pool = pool()
     return conn
 
 def calculate_casino_revenue(operator_id, conn):
@@ -2106,10 +2125,9 @@ def export_pending_bets():
         import csv
         import io
         from datetime import datetime
+        from src.db_compat import connection_ctx
         
-        conn = get_db_connection()
-        
-        # Query pending bets with user information using SQLite3
+        # Query pending bets with user information
         # Only include bets where event_time is in the past (event has occurred)
         query = """
         SELECT 
@@ -2135,8 +2153,12 @@ def export_pending_bets():
         ORDER BY b.created_at DESC
         """
         
-        pending_bets = conn.execute(query).fetchall()
-        conn.close()
+        with connection_ctx(timeout=10) as conn:
+            with conn.cursor() as c:
+                c.execute("SET LOCAL statement_timeout = '8000ms'")
+            with conn.cursor() as cur:
+                cur.execute(query)
+                pending_bets = cur.fetchall()
         
         if not pending_bets:
             return jsonify({
