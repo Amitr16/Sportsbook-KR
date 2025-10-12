@@ -413,6 +413,7 @@ from src.routes.theme_customization import theme_bp
 from src.routes.public_apis import public_apis_bp
 from src.routes.casino_api import casino_bp
 from src.routes.health import health_bp
+from src.routes.health_dashboard import health_dashboard_bp
 
 # Register blueprints in correct order - tenant_auth first to avoid conflicts
 app.register_blueprint(tenant_auth_bp)  # Tenant auth routes first (more specific)
@@ -430,6 +431,7 @@ app.register_blueprint(prematch_odds_bp, url_prefix='/api/prematch-odds')
 app.register_blueprint(sportsbook_bp, url_prefix='/api')
 app.register_blueprint(casino_bp)  # Casino API routes
 app.register_blueprint(health_bp)  # Lightweight health check (no DB dependency)
+app.register_blueprint(health_dashboard_bp)  # Visual health dashboard
 # app.register_blueprint(multitenant_bp)  # Disable old multitenant routing - REMOVED
 app.register_blueprint(clean_multitenant_bp)  # New clean URL routing
 app.register_blueprint(superadmin_bp)
