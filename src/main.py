@@ -66,13 +66,13 @@ except Exception as e:
 # Redis sessions DISABLED - has issues with Flask SessionInterface
 # TODO: Fix RedisSessionInterface to properly inherit from SessionInterface
 try:
-    # redis_url = os.getenv('REDIS_URL')
-    # if redis_url:
-    #     from src.utils.redis_session import init_redis_sessions
-    #     init_redis_sessions(app, redis_url)
-    #     logger.info("✅ Redis session storage initialized")
-    # else:
-    logger.info("ℹ️ Using default Flask sessions (Redis sessions disabled)")
+    redis_url = os.getenv('REDIS_URL')
+    if redis_url:
+        from src.utils.redis_session import init_redis_sessions
+        init_redis_sessions(app, redis_url)
+        logger.info("✅ Redis session storage initialized")
+    else:
+        logger.info("ℹ️ Using default Flask sessions (REDIS_URL not set)")
 except Exception as e:
     logger.warning(f"⚠️ Failed to initialize Redis sessions, using default Flask sessions: {e}")
 

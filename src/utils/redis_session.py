@@ -38,6 +38,7 @@ class RedisSessionInterface(SessionInterface):
         self.prefix = prefix
         self.use_signer = use_signer
         self.permanent_session_lifetime = permanent_session_lifetime
+        self.serializer = None  # Will be set up when app is available
         
         if redis_url:
             try:
@@ -46,6 +47,19 @@ class RedisSessionInterface(SessionInterface):
                 logger.info("✅ Redis session storage initialized")
             except Exception as e:
                 logger.warning(f"Redis session storage unavailable: {e}")
+    
+    def get_signing_serializer(self, app):
+        """Get the signing serializer for session cookies"""
+        if not app.secret_key:
+            return None
+        if self.serializer is None:
+            from itsdangerous import URLSafeTimedSerializer
+            self.serializer = URLSafeTimedSerializer(
+                app.secret_key,
+                salt='flask-session',
+                signer_kwargs={'key_derivation': 'hmac', 'digest_method': 'sha1'}
+            )
+        return self.serializer
     
     def _get_redis_key(self, sid: str) -> str:
         """Generate Redis key for session"""
