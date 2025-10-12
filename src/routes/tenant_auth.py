@@ -403,6 +403,9 @@ def tenant_logout_redirect(subdomain):
         from flask import session, redirect, url_for
         from src.session_manager import get_session_manager
         
+        logger.info(f"🚪 Logout initiated for subdomain '{subdomain}'")
+        logger.info(f"🔍 Session before logout: {dict(session)}")
+        
         session_mgr = get_session_manager()
         
         # Remove the user's session from the session manager
@@ -412,31 +415,39 @@ def tenant_logout_redirect(subdomain):
         # Clear only tenant session data, leaving superadmin intact
         log_out_tenant(subdomain)
         
-        # CRITICAL: Also clear ALL user and operator session data
-        session.pop('user_id', None)
-        session.pop('username', None)
-        session.pop('email', None)
-        session.pop('balance', None)
-        session.pop('user_data', None)  # CRITICAL: This is what was missing!
-        session.pop('operator_id', None)
-        session.pop('operator_name', None)
-        session.pop('operator_subdomain', None)
-        session.pop('original_tenant', None)
-        session.pop('role', None)
-        session.pop('admin_id', None)
-        session.pop('admin_operator_id', None)
-        session.pop('admin_subdomain', None)
+        # CRITICAL: Clear ALL user and operator session data
+        # Save superadmin session if it exists
+        superadmin_session = session.get('sid:_superadmin')
         
-        # Mark session as modified to ensure changes are saved
+        # Clear the ENTIRE session (nuclear option)
+        session.clear()
+        
+        # Restore superadmin session if it existed
+        if superadmin_session:
+            session['sid:_superadmin'] = superadmin_session
+        
+        # Mark session as permanent and modified to force save
+        session.permanent = True
         session.modified = True
         
-        logger.info(f"User logged out from subdomain '{subdomain}' and redirected to main page")
+        logger.info(f"🔍 Session after logout: {dict(session)}")
+        logger.info(f"✅ User logged out from subdomain '{subdomain}' and redirected to main page")
         
-        # Redirect to the main betting page to show public interface with Google sign-in
-        return redirect(f'/{subdomain}')
+        # Create redirect response with cache-busting headers
+        response = redirect(f'/{subdomain}')
+        
+        # Add cache-busting headers to force browser to not cache the logout
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        
+        # Clear the session cookie explicitly
+        response.set_cookie('session', '', expires=0, max_age=0)
+        
+        return response
         
     except Exception as e:
-        logger.error(f"Logout redirect error for {subdomain}: {e}")
+        logger.error(f"❌ Logout redirect error for {subdomain}: {e}")
         # Fallback redirect to main page
         return redirect(f'/{subdomain}')
 

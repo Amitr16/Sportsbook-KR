@@ -380,42 +380,113 @@ _circuit_breaker_state = {
 }
 
 def is_db_circuit_breaker_open():
-    """Check if DB circuit breaker is open (pool >85% usage)"""
+    """Check if DB circuit breaker is open (pool >85% usage or timeout errors)"""
     try:
         p = pool()
-        usage_pct = (p.size / p.max_size) * 100 if p.max_size > 0 else 0
         
-        # Circuit breaker opens at 85% usage
-        if usage_pct > 85:
+        # Different pool types have different attributes
+        # psycopg_pool.ConnectionPool uses different API than NullPool
+        if hasattr(p, 'get_stats'):
+            # psycopg_pool API
+            stats = p.get_stats()
+            pool_size = stats.get('pool_size', 0)
+            pool_available = stats.get('pool_available', 0)
+            requests_waiting = stats.get('requests_waiting', 0)
+            max_size = getattr(p, 'max_size', 20)
+            usage_pct = (pool_size / max_size) * 100 if max_size > 0 else 0
+            waiting_connections = requests_waiting
+        elif hasattr(p, 'size'):
+            # Standard ConnectionPool attributes
+            pool_size = p.size()
+            max_size = p.max_size if hasattr(p, 'max_size') else 20
+            usage_pct = (pool_size / max_size) * 100 if max_size > 0 else 0
+            waiting_connections = getattr(p, 'waiting', 0)
+        else:
+            # NullPool or other pool types - always allow through
+            return False
+        
+        # Circuit breaker opens at 85% usage OR if we have waiting connections
+        if usage_pct > 85 or waiting_connections > 5:
             _circuit_breaker_state['tripped'] = True
             _circuit_breaker_state['failure_count'] += 1
-            logging.warning(f"🚨 DB Circuit Breaker OPEN: {usage_pct:.0f}% pool usage")
+            logging.warning(f"🚨 DB Circuit Breaker OPEN: {usage_pct:.0f}% usage, {waiting_connections} waiting")
             return True
         else:
             _circuit_breaker_state['tripped'] = False
             _circuit_breaker_state['success_count'] += 1
             return False
-    except Exception:
-        return True  # Fail closed
+    except Exception as e:
+        logging.debug(f"Circuit breaker check failed (safe to ignore): {e}")
+        return False  # Fail open for circuit breaker checks
+
+def should_bypass_db_for_reads():
+    """Check if we should bypass DB for non-critical reads"""
+    return is_db_circuit_breaker_open()
+
+def circuit_breaker_context(operation_type="read"):
+    """Context manager for circuit breaker protection"""
+    from contextlib import contextmanager
+    
+    @contextmanager
+    def _circuit_context():
+        if should_bypass_db_for_reads() and operation_type in ["read", "cache_miss"]:
+            logging.info(f"🚨 Circuit breaker: bypassing {operation_type} operation")
+            yield False  # Indicates DB operation should be skipped
+        else:
+            yield True  # Indicates DB operation should proceed
+    
+    return _circuit_context()
 
 def log_pool_metrics():
-    """Log pool usage metrics for monitoring (Phase 2)"""
+    """Log pool usage metrics for monitoring (Phase 2 + Prometheus)"""
     try:
         p = pool()
-        stats = {
-            'size': p.size,  # Current number of connections
-            'available': getattr(p, 'available', 0),  # Available connections
-            'waiting': getattr(p, 'waiting', 0),  # Requests waiting for connection
-        }
+        
+        # Get stats based on pool type
+        if hasattr(p, 'get_stats'):
+            # psycopg_pool API
+            pool_stats = p.get_stats()
+            stats = {
+                'size': pool_stats.get('pool_size', 0),
+                'available': pool_stats.get('pool_available', 0),
+                'waiting': pool_stats.get('requests_waiting', 0),
+            }
+            max_size = getattr(p, 'max_size', 20)
+        elif hasattr(p, 'size'):
+            # Standard ConnectionPool
+            stats = {
+                'size': p.size(),
+                'available': getattr(p, 'available', 0),
+                'waiting': getattr(p, 'waiting', 0),
+            }
+            max_size = p.max_size if hasattr(p, 'max_size') else 20
+        else:
+            # NullPool or other - no metrics
+            return {}
         
         # Calculate usage percentage
-        usage_pct = (stats['size'] / p.max_size) * 100 if p.max_size > 0 else 0
+        usage_pct = (stats['size'] / max_size) * 100 if max_size > 0 else 0
+        
+        # Update Prometheus metrics
+        try:
+            from src.utils.metrics import update_pool_metrics
+            update_pool_metrics()
+        except Exception as e:
+            logging.debug(f"Failed to update Prometheus metrics: {e}")
+        
+        # Update circuit breaker metrics
+        try:
+            from src.utils.metrics import update_circuit_breaker_state
+            is_open = is_db_circuit_breaker_open()
+            update_circuit_breaker_state('db_pool', is_open)
+        except Exception as e:
+            logging.debug(f"Failed to update circuit breaker metrics: {e}")
         
         # Log warning if pool is >80% utilized
         if usage_pct > 80:
-            logging.warning(f"⚠️ Pool usage HIGH: {usage_pct:.0f}% ({stats['size']}/{p.max_size}) - {stats['waiting']} waiting")
+            logging.warning(f"⚠️ Pool usage HIGH: {usage_pct:.0f}% ({stats['size']}/{max_size}) - {stats['waiting']} waiting")
         elif usage_pct > 50:
-            logging.info(f"📊 Pool usage: {usage_pct:.0f}% ({stats['size']}/{p.max_size})")
+            logging.info(f"📊 Pool usage: {usage_pct:.0f}% ({stats['size']}/{max_size})")
         
         return stats
     except Exception as e:

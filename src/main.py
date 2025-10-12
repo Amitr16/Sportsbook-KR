@@ -11,7 +11,7 @@ from src.config.env_loader import *  # noqa: F401 - just to execute the loader
 if not os.getenv("DATABASE_URL"):
     raise RuntimeError("DATABASE_URL is not set; production must use Postgres, not sqlite.")
 
-from flask import Flask, send_from_directory, send_file, request, redirect, session, current_app, jsonify
+from flask import Flask, send_from_directory, send_file, request, redirect, session, current_app, jsonify, g
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -53,6 +53,67 @@ app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'sta
 
 # Trust Fly's reverse proxy for scheme/host so Flask sees https
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Initialize structured logging and request middleware
+try:
+    from src.utils.logging_config import setup_structured_logging, get_correlation_id, set_tenant_context
+    setup_structured_logging()
+    logger.info("✅ Structured logging initialized")
+except Exception as e:
+    logger.warning(f"⚠️ Failed to initialize structured logging: {e}")
+
+# Initialize Redis session storage (optional - falls back to default if it fails)
+try:
+    redis_url = os.getenv('REDIS_URL')
+    if redis_url:
+        from src.utils.redis_session import init_redis_sessions
+        init_redis_sessions(app, redis_url)
+        logger.info("✅ Redis session storage initialized")
+    else:
+        logger.info("ℹ️ Redis URL not configured - using default Flask sessions")
+except Exception as e:
+    logger.warning(f"⚠️ Failed to initialize Redis sessions, using default Flask sessions: {e}")
+
+# Request middleware for correlation IDs and metrics
+@app.before_request
+def before_request():
+    """Set up request context with correlation ID and metrics"""
+    # Set correlation ID
+    try:
+        correlation_id = get_correlation_id()
+        
+        # Extract tenant from subdomain
+        host = request.host
+        if host:
+            subdomain = host.split('.')[0]
+            if subdomain not in ['localhost', '127.0.0.1', 'sportsbook']:
+                set_tenant_context(subdomain)
+        
+        # Set user context if authenticated
+        if session.get('user_id'):
+            g.user_id = session['user_id']
+        
+        # Log request start
+        logger.debug(f"Request started: {request.method} {request.path}")
+    except Exception as e:
+        logger.debug(f"Request middleware error: {e}")
+
+@app.after_request
+def after_request(response):
+    """Log request completion and add correlation ID to headers"""
+    try:
+        # Add correlation ID to response headers
+        if hasattr(g, 'correlation_id'):
+            response.headers['X-Correlation-ID'] = g.correlation_id
+            response.headers['X-Request-ID'] = getattr(g, 'request_id', '')
+        
+        # Log request completion
+        duration_ms = (time.time() - getattr(g, 'request_start_time', time.time())) * 1000
+        logger.debug(f"Request completed: {request.method} {request.path} - {response.status_code} ({duration_ms:.1f}ms)")
+    except Exception as e:
+        logger.debug(f"Response middleware error: {e}")
+    
+    return response
 
 # Create our own database instance
 db = SQLAlchemy()
@@ -390,7 +451,7 @@ def _remove_session(exc=None):
 
 @app.route("/health/db")
 def db_health():
-    """Check database connection health"""
+    """Check database connection health (legacy endpoint - use /healthz instead)"""
     db = None
     try:
         db = SessionLocal()
@@ -411,7 +472,7 @@ def db_health():
         }, 500
     finally:
         if db:
-            close_db(db)
+            db.close()
 
 # Bind the betting models to our database instance
 from src.models.betting import bind_models_to_db

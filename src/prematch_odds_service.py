@@ -581,8 +581,13 @@ class PrematchOddsService:
                     
                 # GoalServe rate limit: 60 seconds between ANY requests (per IP/API key)
                 # Wait 60 seconds between each sport to respect their global rate limits
-                logger.info(f"⏳ Waiting 60 seconds before next sport (GoalServe global rate limit)")
-                time.sleep(60)
+                # Wait with exponential backoff + jitter for rate limiting
+                import random
+                base_delay = 60
+                jitter = random.uniform(0.5, 1.5)  # 50-150% of base delay
+                actual_delay = base_delay * jitter
+                logger.info(f"⏳ Waiting {actual_delay:.1f} seconds before next sport (GoalServe global rate limit + jitter)")
+                time.sleep(actual_delay)
                 
             except Exception as e:
                 logger.error(f"❌ Error processing {sport_name}: {e}")
