@@ -1,18 +1,26 @@
 """
-Lightweight health check endpoint that doesn't depend on database
+BULLETPROOF health check endpoint - completely DB-free
 """
 
 from flask import Blueprint, jsonify
+import time
+import os
 
 health_bp = Blueprint("health", __name__)
 
 @health_bp.get("/health")
+@health_bp.get("/healthz")  # Kubernetes-style endpoint
 def health():
     """
-    Lightweight health check that doesn't touch the database.
+    BULLETPROOF health check - NO DB, NO Redis, NO external dependencies
     
-    This prevents transient DB hiccups from marking the entire instance
-    as unhealthy and triggering unnecessary restarts.
+    Returns 200 even during DB outages to prevent VM flapping.
+    This endpoint must NEVER import modules that initialize pools.
     """
-    return jsonify({"ok": True, "status": "healthy"}), 200
+    return jsonify({
+        "ok": True, 
+        "status": "healthy",
+        "timestamp": time.time(),
+        "version": os.getenv("APP_VERSION", "unknown")
+    }), 200
 

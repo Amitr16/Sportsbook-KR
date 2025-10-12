@@ -14,21 +14,43 @@ import logging
 
 branding_bp = Blueprint('branding', __name__)
 
-# Aggressive branding cache for multi-tenant scalability
+# Two-tier cache: Redis (distributed) + in-process (fallback)
 # Branding rarely changes - cache for 1 hour
-_BRANDING_CACHE = {}
+_BRANDING_CACHE = {}  # In-process fallback cache
 _CACHE_TTL = 3600  # 1 hour (branding changes are rare)
 
 def _get_cached(key, loader):
-    """Simple TTL cache"""
+    """
+    Two-tier cache: Redis (distributed) + in-process (fallback)
+    1. Try Redis first (shared across all instances)
+    2. Fall back to in-process cache
+    3. If both miss, call loader and populate both caches
+    """
+    from src.utils.redis_cache import redis_cache_get, redis_cache_set
+    
+    # Tier 1: Try Redis (distributed cache)
+    redis_value = redis_cache_get(key)
+    if redis_value is not None:
+        # Also update in-process cache for faster subsequent access
+        _BRANDING_CACHE[key] = (time.time(), redis_value)
+        return redis_value
+    
+    # Tier 2: Try in-process cache
     now = time.time()
     if key in _BRANDING_CACHE:
         cached_time, cached_data = _BRANDING_CACHE[key]
         if now - cached_time < _CACHE_TTL:
+            # Warm Redis cache from in-process cache
+            redis_cache_set(key, cached_data, _CACHE_TTL)
             return cached_data
     
+    # Both caches miss - load from DB
     data = loader()
+    
+    # Populate both caches
     _BRANDING_CACHE[key] = (now, data)
+    redis_cache_set(key, data, _CACHE_TTL)
+    
     return data
 
 def get_db_connection():
@@ -63,14 +85,25 @@ def _load_operator_branding_from_db(subdomain):
 def get_operator_branding_cached_only(subdomain):
     """
     Return cached branding if present; otherwise None (NEVER hits DB)
+    Checks both Redis and in-process cache
     Use this for public/high-traffic endpoints to guarantee DB-free operation
     """
+    from src.utils.redis_cache import redis_cache_get
+    
     key = f"branding:{subdomain}"
+    
+    # Try Redis first (distributed cache)
+    redis_value = redis_cache_get(key)
+    if redis_value is not None:
+        return redis_value
+    
+    # Fall back to in-process cache
     now = time.time()
     if key in _BRANDING_CACHE:
         cached_time, cached_data = _BRANDING_CACHE[key]
         if now - cached_time < _CACHE_TTL:
             return cached_data
+    
     return None
 
 def get_operator_branding(subdomain):
@@ -440,6 +473,17 @@ def update_branding(subdomain):
                 """, (json.dumps(current_settings), datetime.now(), subdomain))
                 
                 conn.commit()
+        
+        # Invalidate cache after update (both Redis and in-process)
+        from src.utils.redis_cache import invalidate_tenant_cache
+        invalidate_tenant_cache(subdomain)
+        
+        # Also clear in-process cache
+        cache_key = f"branding:{subdomain}"
+        if cache_key in _BRANDING_CACHE:
+            del _BRANDING_CACHE[cache_key]
+        
+        logger.info(f"🗑️ Invalidated branding cache for {subdomain} after update")
         
         return jsonify({
             'success': True,

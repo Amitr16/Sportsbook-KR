@@ -1747,3 +1747,28 @@ class BetSettlementService:
         except Exception as e:
             logger.error(f"Error determining cricket bet outcome: {e}")
             return False 
+
+if __name__ == "__main__":
+    """Entry point for running the bet settlement service as a standalone worker"""
+    logger.info("🚀 Starting Bet Settlement Service Worker...")
+    
+    try:
+        # Create and start the service
+        service = BetSettlementService()
+        service.start()
+        
+        # Keep the service running
+        logger.info("✅ Bet Settlement Service started successfully")
+        
+        # Wait for keyboard interrupt to stop
+        try:
+            while service.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("🛑 Received shutdown signal...")
+            service.stop()
+            logger.info("✅ Bet Settlement Service stopped")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to start Bet Settlement Service: {e}")
+        raise

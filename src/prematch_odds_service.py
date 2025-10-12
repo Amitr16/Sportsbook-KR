@@ -705,3 +705,28 @@ def get_prematch_odds_service():
     if prematch_odds_service is None:
         prematch_odds_service = PrematchOddsService()
     return prematch_odds_service
+
+if __name__ == "__main__":
+    """Entry point for running the prematch odds service as a standalone worker"""
+    logger.info("🚀 Starting Prematch Odds Service Worker...")
+    
+    try:
+        # Create and start the service
+        service = PrematchOddsService()
+        service.start()
+        
+        # Keep the service running
+        logger.info("✅ Prematch Odds Service started successfully")
+        
+        # Wait for keyboard interrupt to stop
+        try:
+            while service.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("🛑 Received shutdown signal...")
+            service.stop()
+            logger.info("✅ Prematch Odds Service stopped")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to start Prematch Odds Service: {e}")
+        raise

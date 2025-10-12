@@ -612,6 +612,14 @@ def save_theme_for_operator(subdomain):
         conn.commit()
         conn.close()
         
+        # Invalidate cache after theme update (Phase 2: Redis + in-process)
+        try:
+            from src.utils.redis_cache import invalidate_tenant_cache
+            invalidate_tenant_cache(subdomain)
+            print(f"🗑️ Invalidated cache for {subdomain} after theme update")
+        except Exception as cache_error:
+            print(f"⚠️ Cache invalidation failed (non-critical): {cache_error}")
+        
         print(f"✅ Theme saved successfully for operator: {subdomain}")
         return jsonify({'success': True, 'message': 'Theme saved successfully'})
         
@@ -692,51 +700,100 @@ def load_theme_for_operator(subdomain):
 @clean_multitenant_bp.route('/<subdomain>/api/public/load-theme', methods=['GET'])
 def load_public_theme_for_operator(subdomain):
     """
-    Load theme for public use - STRICTLY DB-FREE (cache-only)
+    Load theme for public use - BULLETPROOF DB-FREE with stale-while-revalidate
     Always returns 200 with defaults on cache miss (never blocks on pool)
     """
-    from flask import jsonify
+    from flask import jsonify, request, current_app
     from src.routes.branding import get_operator_branding_cached_only
+    from src.utils.redis_cache import redis_cache_get, redis_cache_set
+    import os
     
-    # CACHE-ONLY lookup - NEVER hits DB, even on miss
-    branding = get_operator_branding_cached_only(subdomain)
+    # Check for singleflight lock to prevent thundering herd
+    lock_key = f"lock:branding:{subdomain}"
+    cache_key = f"branding:{subdomain}"
     
-    if not branding:
-        # Cache miss - return defaults (never hit DB!)
-        return jsonify({
-            'primaryColor': '#22C55E',
-            'secondaryColor': '#3b82f6',
-            'accentColor': '#22C55E',
-            'backgroundColor': '#1A1A1A',
-            'textColor': '#FFFFFF',
-            'fontFamily': 'Inter, sans-serif',
-            'layoutStyle': 'modern',
-            'buttonStyle': 'rounded',
-            'cardStyle': 'shadow',
-            'logoType': 'default',
-            'logoUrl': '',
-            'sportsbookName': subdomain
-        }), 200
+    # Try to get cached value (stale is OK)
+    cached_branding = redis_cache_get(cache_key)
     
-    # Extract theme from cached branding (no DB query!)
-    theme_data = branding.get('theme', {})
-    operator_name = branding.get('operator', {}).get('name', subdomain)
+    if cached_branding:
+        # Serve cached value with stale-while-revalidate headers
+        response = jsonify(cached_branding)
+        response.headers['Cache-Control'] = 'public, max-age=300, stale-while-revalidate=600'
+        response.headers['ETag'] = f'"{hash(str(cached_branding))}"'
+        return response, 200
     
-    # Build response purely from cache
-    return jsonify({
-        'primaryColor': theme_data.get('primary_color') or '#22C55E',
-        'secondaryColor': theme_data.get('secondary_color') or '#3b82f6',
-        'accentColor': theme_data.get('accent_color') or '#22C55E',
-        'backgroundColor': theme_data.get('background_color') or '#1A1A1A',
-        'textColor': theme_data.get('text_color') or '#FFFFFF',
-        'fontFamily': theme_data.get('font_family') or 'Inter, sans-serif',
-        'layoutStyle': theme_data.get('layout_style') or 'modern',
-        'buttonStyle': theme_data.get('button_style') or 'rounded',
-        'cardStyle': theme_data.get('card_style') or 'shadow',
-        'logoType': theme_data.get('logo_type') or 'default',
-        'logoUrl': theme_data.get('logo_url') or '',
-        'sportsbookName': operator_name
-    }), 200
+    # Cache miss - check if someone else is already fetching (singleflight)
+    import redis
+    redis_client = redis.from_url(os.getenv('REDIS_URL')) if os.getenv('REDIS_URL') else None
+    
+    if redis_client:
+        try:
+            # Try to acquire lock (30 second expiry)
+            lock_acquired = redis_client.set(lock_key, "1", nx=True, ex=30)
+            if not lock_acquired:
+                # Someone else is fetching, serve defaults and let them refresh cache
+                current_app.logger.info(f"🔄 Singleflight: serving defaults while {subdomain} refreshes")
+                defaults = _get_default_theme_data()
+                response = jsonify(defaults)
+                response.headers['Cache-Control'] = 'public, max-age=60, stale-while-revalidate=300'
+                return response, 200
+        except Exception as e:
+            current_app.logger.warning(f"Redis singleflight failed: {e}")
+    
+    # We got the lock or Redis unavailable - serve defaults and trigger background refresh
+    defaults = _get_default_theme_data()
+    
+    # Trigger background refresh (non-blocking)
+    try:
+        import threading
+        threading.Thread(
+            target=_background_refresh_branding,
+            args=(subdomain, cache_key, lock_key),
+            daemon=True
+        ).start()
+    except Exception as e:
+        current_app.logger.warning(f"Background refresh failed: {e}")
+    
+    response = jsonify(defaults)
+    response.headers['Cache-Control'] = 'public, max-age=60, stale-while-revalidate=300'
+    return response, 200
+
+def _get_default_theme_data():
+    """Get default theme data - never hits DB"""
+    return {
+        'primaryColor': '#10B981',
+        'secondaryColor': '#1F2937',
+        'backgroundColor': '#111827',
+        'textColor': '#F9FAFB',
+        'accentColor': '#3B82F6',
+        'buttonStyle': 'rounded',
+        'cardStyle': 'shadow',
+        'logoType': 'default',
+        'logoUrl': '',
+        'sportsbookName': 'Your Sportsbook'
+    }
+
+def _background_refresh_branding(subdomain, cache_key, lock_key):
+    """Background refresh of branding cache"""
+    try:
+        # This will hit DB but in background thread
+        from src.routes.branding import get_operator_branding
+        fresh_branding = get_operator_branding(subdomain)
+        
+        # Update cache
+        from src.utils.redis_cache import redis_cache_set
+        redis_cache_set(cache_key, fresh_branding, ttl=3600)
+        
+        # Release lock
+        import redis
+        redis_client = redis.from_url(os.getenv('REDIS_URL')) if os.getenv('REDIS_URL') else None
+        if redis_client:
+            redis_client.delete(lock_key)
+            
+    except Exception as e:
+        import logging
+        logging.warning(f"Background branding refresh failed for {subdomain}: {e}")
+
 
 @clean_multitenant_bp.route('/api/theme-css/<subdomain>', methods=['GET'])
 def get_theme_css(subdomain):

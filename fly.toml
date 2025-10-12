@@ -46,6 +46,10 @@ primary_region = "iad"
   WEB_WORKERS = "1"
   WEB_THREADS = "1"
   GUNICORN_PRELOAD = "false"
+  
+  # Redis for distributed caching (Phase 2)
+  # Set via: fly redis create
+  # REDIS_URL will be set as a secret
 
 [processes]
   web = "python run.py"
@@ -64,7 +68,8 @@ primary_region = "iad"
   force_https = true
   auto_start_machines = true
   auto_stop_machines = false
-  min_machines_running = 1
+  min_machines_running = 2  # Phase 2: Horizontal scaling for high availability
+  max_machines_running = 10  # Auto-scale up to 10 instances under load
   processes = ["web"]
   
   [http_service.concurrency]

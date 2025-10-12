@@ -1078,6 +1078,22 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"⚠️ Failed to start cache warming: {e}")
     
+    # Start pool metrics logging (Phase 2)
+    try:
+        def log_pool_metrics_periodically():
+            while True:
+                try:
+                    from src.db_compat import log_pool_metrics
+                    log_pool_metrics()
+                except Exception as e:
+                    logger.error(f"Pool metrics error: {e}")
+                time.sleep(60)  # Log every minute
+        
+        threading.Thread(target=log_pool_metrics_periodically, daemon=True, name="pool-metrics").start()
+        logger.info("✅ Pool metrics logging started (every 60s)")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to start pool metrics: {e}")
+    
     try:
         print("🔧 Flask version:", Flask.__version__)
     except AttributeError:

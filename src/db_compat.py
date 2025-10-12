@@ -335,12 +335,29 @@ def pool() -> ConnectionPool:
 
 @contextmanager
 def connection_ctx(timeout=10):
-    """Canonical context manager for DB access - use everywhere"""
+    """
+    Canonical context manager for DB access - use everywhere
+    Includes connection leak detection (warns if held > 300ms)
+    """
+    import time
     p = pool()  # existing global Pool factory
+    start_time = time.time()
     raw = p.getconn(timeout=timeout)
+    
     try:
         yield raw
     finally:
+        # Calculate how long connection was held
+        hold_time_ms = (time.time() - start_time) * 1000
+        
+        # Warn if connection held too long (potential leak or slow query)
+        if hold_time_ms > 300:  # 300ms threshold
+            import traceback
+            logging.warning(
+                f"⚠️ Connection held for {hold_time_ms:.0f}ms (>{300}ms threshold). "
+                f"Potential leak or slow query. Stack:\n{''.join(traceback.format_stack()[-3:-1])}"
+            )
+        
         try:
             try:
                 raw.rollback()
@@ -353,6 +370,57 @@ def connection_ctx(timeout=10):
                 p.putconn(raw, close=True)
             except Exception:
                 pass
+
+# Circuit breaker state
+_circuit_breaker_state = {
+    'tripped': False,
+    'last_check': 0,
+    'failure_count': 0,
+    'success_count': 0
+}
+
+def is_db_circuit_breaker_open():
+    """Check if DB circuit breaker is open (pool >85% usage)"""
+    try:
+        p = pool()
+        usage_pct = (p.size / p.max_size) * 100 if p.max_size > 0 else 0
+        
+        # Circuit breaker opens at 85% usage
+        if usage_pct > 85:
+            _circuit_breaker_state['tripped'] = True
+            _circuit_breaker_state['failure_count'] += 1
+            logging.warning(f"🚨 DB Circuit Breaker OPEN: {usage_pct:.0f}% pool usage")
+            return True
+        else:
+            _circuit_breaker_state['tripped'] = False
+            _circuit_breaker_state['success_count'] += 1
+            return False
+    except Exception:
+        return True  # Fail closed
+
+def log_pool_metrics():
+    """Log pool usage metrics for monitoring (Phase 2)"""
+    try:
+        p = pool()
+        stats = {
+            'size': p.size,  # Current number of connections
+            'available': getattr(p, 'available', 0),  # Available connections
+            'waiting': getattr(p, 'waiting', 0),  # Requests waiting for connection
+        }
+        
+        # Calculate usage percentage
+        usage_pct = (stats['size'] / p.max_size) * 100 if p.max_size > 0 else 0
+        
+        # Log warning if pool is >80% utilized
+        if usage_pct > 80:
+            logging.warning(f"⚠️ Pool usage HIGH: {usage_pct:.0f}% ({stats['size']}/{p.max_size}) - {stats['waiting']} waiting")
+        elif usage_pct > 50:
+            logging.info(f"📊 Pool usage: {usage_pct:.0f}% ({stats['size']}/{p.max_size})")
+        
+        return stats
+    except Exception as e:
+        logging.error(f"Error getting pool metrics: {e}")
+        return {}
 
 def debug_pool(tag=""):
     """Debug helper to log pool stats"""

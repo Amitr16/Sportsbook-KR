@@ -26,6 +26,7 @@ sqlalchemy==2.0.23
 
 # HTTP & API
 requests==2.31.0
+redis==5.0.1
 httpx==0.25.2
 
 # Authentication & Security
