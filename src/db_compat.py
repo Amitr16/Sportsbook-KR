@@ -439,7 +439,8 @@ def connection_ctx(timeout=10):
     
     # Wrap raw connection in CompatConnection for auto-rollback on errors
     compat_conn = CompatConnection(raw)
-    compat_conn._pool = p
+    # DON'T set _pool - connection_ctx will handle putconn in finally block
+    # Setting _pool causes double-return attempts
     
     try:
         yield compat_conn
