@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Build casino frontend during Docker build
+# Build casino frontend
 RUN cd casino-suite-pro/frontend && \
     npm install && \
     npm run build

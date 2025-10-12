@@ -1,0 +1,108 @@
+================================================================================
+CROSSMINT API TEST SCRIPT - READY FOR YOUR DEV TEAM
+================================================================================
+
+FILES CREATED:
+--------------
+1. test_crossmint_credentials.py  - Standalone test script
+2. CROSSMINT_TEST_README.md       - Detailed instructions
+3. CROSSMINT_TEST_SUMMARY.txt     - This summary
+
+QUICK START FOR YOUR DEV:
+-------------------------
+
+1. Install requirements:
+   pip install requests python-dotenv
+
+2. Run the test:
+   python test_crossmint_credentials.py
+
+3. Enter credentials when prompted:
+   - CROSSMINT_API_KEY (server-side key starting with sk_staging_ or sk_production_)
+   - CROSSMINT_PROJECT_ID (UUID format)
+   - CROSSMINT_ENVIRONMENT (staging or production)
+
+WHAT IT TESTS:
+--------------
+- Validates API key and project ID
+- Tests wallet creation on Aptos blockchain
+- Verifies correct API permissions (wallets.create, wallets.read, wallets.transfer)
+- Provides clear error messages with fixes
+
+EXPECTED OUTPUT:
+----------------
+
+SUCCESS (Status 201):
+================================================================================
+SUCCESS! Wallet created successfully!
+================================================================================
+OK - Wallet Address: 0x1234...abcd
+OK - Wallet ID: cm_wallet_123...
+OK - Chain: aptos
+
+OK - Your Crossmint credentials are VALID and have the correct permissions!
+
+
+FAILURE (Status 403):
+================================================================================
+ERROR - AUTHENTICATION ERROR (403 Forbidden)
+================================================================================
+
+Possible causes:
+1. API key is invalid or expired
+2. API key doesn't have 'wallets.create' permission
+3. Project ID doesn't match the API key
+
+How to fix:
+1. Go to https://console.crossmint.com
+2. Navigate to 'API Keys' section
+3. Check if your API key has these scopes enabled:
+   - wallets.create
+   - wallets.read
+   - wallets.transfer
+4. If not, edit the API key and enable these scopes
+5. OR create a new API key with all wallet permissions
+
+CURRENT ISSUE:
+--------------
+Both API keys we've tried (original KR analysis + new credentials) return 403.
+This means:
+- API keys are expired/invalid
+- OR API keys don't have the required 'wallets.create' permission
+
+SOLUTION:
+---------
+Your dev needs to:
+1. Go to Crossmint console (https://console.crossmint.com)
+2. Create a NEW project OR use existing one
+3. Generate a NEW server-side API key
+4. Enable ALL wallet permissions:
+   - wallets.create ✓
+   - wallets.read ✓
+   - wallets.transfer ✓
+5. Copy the API key and Project ID
+6. Run test_crossmint_credentials.py with new credentials
+7. If test passes, update postgresql.env with working credentials
+8. Restart Flask app - operator registration will create Web3 wallets!
+
+IMPLEMENTATION STATUS:
+---------------------
+✓ Crossmint service implementation complete (src/services/crossmint_aptos_service.py)
+✓ Operator Web3 wallet creation integrated (src/routes/sportsbook_registration.py)
+✓ User Web3 wallet creation integrated (src/routes/tenant_auth.py)
+✓ Web3 debit/credit sync for bets and casino (multiple files)
+✓ Super admin reset Web3 wallets (src/routes/rich_superadmin_interface1.py)
+✓ Operator revenue calculator Web3 integration (rich_superadmin_interface1.py)
+✓ Headers fixed to include both X-API-KEY and X-PROJECT-ID
+
+ONLY MISSING: Valid Crossmint API credentials with correct permissions!
+
+CONTACT SUPPORT:
+----------------
+If your dev still gets 403 after creating new API key with correct permissions:
+- Crossmint Documentation: https://docs.crossmint.com
+- Crossmint Support: support@crossmint.com
+- Check Crossmint status: https://status.crossmint.com
+
+================================================================================
+

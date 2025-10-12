@@ -117,6 +117,10 @@ class User(db.Model):
     # Multi-tenant support
     sportsbook_operator_id = db.Column(db.Integer, db.ForeignKey('sportsbook_operators.id'), nullable=True)
     
+    # Web3 wallet support (Aptos blockchain)
+    web3_wallet_address = db.Column(db.String(255), unique=True, nullable=True)
+    web3_wallet_key = db.Column(db.Text, nullable=True)  # Encrypted private key
+    
     # Relationships
     bets = db.relationship('Bet', backref='user', lazy=True, cascade='all, delete-orphan')
     transactions = db.relationship('Transaction', backref='user', lazy=True, cascade='all, delete-orphan')

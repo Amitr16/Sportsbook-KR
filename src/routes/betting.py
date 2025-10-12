@@ -352,6 +352,13 @@ def place_bet():
         # Commit all changes atomically
         db.commit()
         
+        # Sync Web3 wallet debit (non-blocking)
+        try:
+            from src.services.web3_sync_service import sync_web3_debit
+            sync_web3_debit(user.id, stake, f"Bet placement - {selection}")
+        except Exception as web3_error:
+            logger.warning(f"Web3 sync failed for bet placement: {web3_error}")
+        
         # DO NOT refresh g.current_user - it's a SimpleNamespace!
         # Instead, get the new balance from the ORM user object
         new_balance = float(user.balance)
@@ -545,6 +552,13 @@ def place_combo_bet():
         # Commit all changes atomically
         db.commit()
         
+        # Sync Web3 wallet debit (non-blocking)
+        try:
+            from src.services.web3_sync_service import sync_web3_debit
+            sync_web3_debit(user.id, total_stake, f"Combo bet placement - {len(selections)} selections")
+        except Exception as web3_error:
+            logger.warning(f"Web3 sync failed for combo bet placement: {web3_error}")
+        
         # DO NOT refresh g.current_user - it's a SimpleNamespace!
         # Instead, get the new balance from the ORM user object
         new_balance = float(user.balance)
@@ -618,7 +632,7 @@ def get_user_bets():
             # Get paginated results
             select_query = f"""
                 SELECT id, match_name, selection, stake, odds, potential_return, 
-                       status, created_at, settled_at, sport_name, bet_timing
+                       status, created_at, settled_at, sport_name, bet_timing, combo_selections
                 {base_query}
                 ORDER BY created_at DESC
                 LIMIT %s OFFSET %s

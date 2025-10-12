@@ -37,6 +37,79 @@ def get_operator_wallet_balances(operator_id, conn):
     
     return bookmaker_capital, liquidity_pool
 
+def calculate_casino_revenue(operator_id, conn):
+    """Calculate casino revenue from game_round table for a specific operator"""
+    try:
+        # Calculate casino revenue from game_round table
+        # Revenue = Total stakes - Total payouts (same logic as sportsbook)
+        casino_query = """
+        SELECT 
+            SUM(gr.stake) as total_stakes,
+            SUM(gr.payout) as total_payouts
+        FROM game_round gr
+        JOIN users u ON gr.user_id = u.id::text
+        WHERE u.sportsbook_operator_id = ?
+        """
+        
+        result = conn.execute(casino_query, (operator_id,)).fetchone()
+        
+        total_stakes = float(result['total_stakes'] or 0)
+        total_payouts = float(result['total_payouts'] or 0)
+        
+        # Casino revenue = Money kept from losing games - Money paid to winners
+        casino_revenue = total_stakes - total_payouts
+        
+        return casino_revenue
+        
+    except Exception as e:
+        print(f"Error calculating casino revenue for operator {operator_id}: {e}")
+        return 0.0
+
+def calculate_sportsbook_revenue(operator_id, conn):
+    """Calculate sportsbook revenue from bets table for a specific operator"""
+    try:
+        # Calculate sportsbook revenue from settled bets
+        sportsbook_query = """
+        SELECT 
+            SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
+            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_net_payouts
+        FROM bets b
+        JOIN users u ON b.user_id = u.id
+        WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = ?
+        """
+        
+        result = conn.execute(sportsbook_query, (operator_id,)).fetchone()
+        
+        total_stakes_lost = float(result['total_stakes_lost'] or 0)
+        total_net_payouts = float(result['total_net_payouts'] or 0)
+        
+        # Sportsbook revenue = Money kept from losing bets - Extra money paid to winners
+        sportsbook_revenue = total_stakes_lost - total_net_payouts
+        
+        return sportsbook_revenue
+        
+    except Exception as e:
+        print(f"Error calculating sportsbook revenue for operator {operator_id}: {e}")
+        return 0.0
+
+def calculate_total_combined_revenue(operator_id, conn):
+    """Calculate total revenue combining both sportsbook and casino"""
+    try:
+        sportsbook_revenue = calculate_sportsbook_revenue(operator_id, conn)
+        casino_revenue = calculate_casino_revenue(operator_id, conn)
+        
+        total_revenue = sportsbook_revenue + casino_revenue
+        
+        print(f"   📊 Sportsbook revenue: ${sportsbook_revenue:.2f}")
+        print(f"   🎰 Casino revenue: ${casino_revenue:.2f}")
+        print(f"   💰 Total combined revenue: ${total_revenue:.2f}")
+        
+        return total_revenue
+        
+    except Exception as e:
+        print(f"Error calculating total combined revenue for operator {operator_id}: {e}")
+        return 0.0
+
 def calculate_revenue_distribution(profit, bookmaker_capital, liquidity_pool):
     """Calculate revenue distribution based on profit/loss and wallet balances"""
     
@@ -119,15 +192,16 @@ def update_daily_revenue_calculations():
             
             print(f"\n🏢 Processing operator: {operator_name} (ID: {operator_id})")
             
-            # Get current total_revenue from sportsbook_operators table
-            current_revenue_query = """
-            SELECT total_revenue 
-            FROM sportsbook_operators 
+            # Calculate current total revenue from both sportsbook and casino
+            current_total_revenue = calculate_total_combined_revenue(operator_id, conn)
+            
+            # Update the sportsbook_operators table with the new combined revenue
+            update_operator_revenue_query = """
+            UPDATE sportsbook_operators 
+            SET total_revenue = ? 
             WHERE id = ?
             """
-            
-            current_result = conn.execute(current_revenue_query, (operator_id,)).fetchone()
-            current_total_revenue = float(current_result['total_revenue'] or 0)
+            conn.execute(update_operator_revenue_query, (current_total_revenue, operator_id))
             
             # Get previous total_revenue from last revenue_calculations record
             previous_total_revenue = get_previous_total_revenue(operator_id, conn)

@@ -368,6 +368,23 @@
                 >
             </div>
 
+            <div class="form-group">
+                <label for="referralCode" class="form-label">Referral Code *</label>
+                <input 
+                    type="text" 
+                    id="referralCode" 
+                    name="referralCode" 
+                    class="form-input" 
+                    placeholder="Enter referral code"
+                    required
+                    maxlength="20"
+                    style="text-transform: uppercase;"
+                >
+                <small style="color: #666; font-size: 0.9rem; margin-top: 5px; display: block;">
+                    You need a valid referral code to register. Contact an existing operator for a referral code.
+                </small>
+            </div>
+
             <button type="submit" class="submit-btn" id="submitBtn">
                 <span id="btnText">Launch My Sportsbook</span>
                 <span id="btnLoading" class="loading" style="display: none;"></span>
@@ -441,7 +458,8 @@
                 sportsbook_name: formData.get('sportsbookName'),
                 login: formData.get('login'),
                 password: formData.get('password'),
-                email: formData.get('email') || null
+                email: formData.get('email') || null,
+                referral_code: formData.get('referralCode').toUpperCase()
             };
             
             try {
@@ -455,11 +473,13 @@
                 
                 const result = await response.json();
                 
-                if (response.ok && result.success) {
+                if (result.success) {
                     // Success
                     alert.className = 'alert alert-success';
                     alert.innerHTML = `
                         <strong>Success!</strong> Your sportsbook "${result.sportsbook_name}" has been created!<br><br>
+                        <strong>Your Referral Code:</strong> <span style="background: #f0f0f0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: bold; color: #155724;">${result.referral_code}</span><br>
+                        <small style="color: #666;">Share this code with others to help them register!</small><br><br>
                         <strong>Next Steps:</strong><br>
                         • <a href="/${result.subdomain}/admin" style="color: #155724; text-decoration: underline;">Access your admin panel</a><br>
                         • <a href="/${result.subdomain}/admin/theme-customizer" style="color: #155724; text-decoration: underline;">Customize your sportsbook theme</a><br>
@@ -510,6 +530,19 @@
         document.getElementById('password').addEventListener('input', function() {
             const value = this.value;
             const isValid = value.length >= 8;
+            
+            if (value && !isValid) {
+                this.style.borderColor = '#dc3545';
+            } else {
+                this.style.borderColor = '#e1e5e9';
+            }
+        });
+
+        // Referral code validation
+        document.getElementById('referralCode').addEventListener('input', function() {
+            const value = this.value.toUpperCase();
+            this.value = value; // Force uppercase
+            const isValid = /^[A-Z0-9]{6,20}$/.test(value);
             
             if (value && !isValid) {
                 this.style.borderColor = '#dc3545';

@@ -55,30 +55,7 @@ def check_fly_authentication():
     print("SUCCESS: Authenticated with Fly.io")
     return True
 
-def create_casino_tables():
-    """Create casino tables in production database"""
-    print("Creating casino tables in production database...")
-    
-    # Try different SSH approaches
-    commands = [
-        "flyctl ssh console -C 'python create_casino_tables_fly.py'",
-        "flyctl ssh console --command 'python create_casino_tables_fly.py'",
-        "flyctl ssh console -C python create_casino_tables_fly.py"
-    ]
-    
-    for i, cmd in enumerate(commands):
-        print(f"Trying SSH method {i+1}...")
-        if run_command(cmd, f"Creating casino tables (method {i+1})", check=False):
-            print("SUCCESS: Casino tables created successfully")
-            return True
-        else:
-            print(f"Method {i+1} failed, trying next...")
-    
-    print("ERROR: All SSH methods failed. You may need to create tables manually.")
-    print("To create tables manually:")
-    print("1. Run: flyctl ssh console")
-    print("2. Once connected, run: python create_casino_tables_fly.py")
-    return False
+# Casino tables already exist, no need to create them
 
 def update_requirements():
     """Update requirements.txt if needed"""
@@ -107,7 +84,7 @@ def update_requirements():
 def build_casino_frontend():
     """Build the casino frontend (now handled in Docker)"""
     print("INFO: Casino frontend will be built during Docker build process")
-    print("SUCCESS: Casino frontend build step skipped (handled in Docker)")
+    print("SUCCESS: Casino frontend build will be handled by Docker")
     return True
 
 def deploy_to_fly():
@@ -169,9 +146,8 @@ def main():
         sys.exit(1)
     
     # Step 6: Create casino tables (after deployment)
-    if not create_casino_tables():
-        print("ERROR: Casino table creation failed")
-        sys.exit(1)
+    # Casino tables already exist, no need to create them
+    print("INFO: Casino tables already exist, skipping table creation")
     
     # Step 7: Verify deployment
     if not verify_deployment():

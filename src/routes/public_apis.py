@@ -3,7 +3,7 @@ Public APIs for non-authenticated users to view sports data
 """
 
 from flask import Blueprint, request, jsonify
-from src.db_compat import connect
+from src.db_compat import connection_ctx
 import os
 import json
 import logging

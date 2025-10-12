@@ -39,6 +39,7 @@ def create_backup_tables():
             is_active BOOLEAN DEFAULT 1,
             user_count INTEGER DEFAULT 0,
             total_volume REAL DEFAULT 0,
+            trade_count INTEGER DEFAULT 0,
             backup_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             reset_operation_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -62,18 +63,37 @@ def backup_user_leaderboard(reset_operation_id=None):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Get current user leaderboard data (only settled bets)
+    # Get current user leaderboard data (sportsbook + casino)
     cursor.execute("""
         SELECT 
             u.username,
             u.email,
-            COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as staked,
-            COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) as payout,
-            COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
-            COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as profit
+            -- Sportsbook staked + Casino staked
+            (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0)) as staked,
+            -- Sportsbook payout + Casino payout
+            (COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) as payout,
+            -- Combined profit
+            ((COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) - (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0))) as profit
         FROM users u
-        LEFT JOIN bets b ON u.id = b.user_id
-        GROUP BY u.id, u.username, u.email
+        LEFT JOIN (
+            SELECT 
+                u.id as user_id,
+                SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END) as staked,
+                SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END) as payout
+            FROM users u
+            LEFT JOIN bets b ON u.id = b.user_id
+            GROUP BY u.id
+        ) sb ON u.id = sb.user_id
+        LEFT JOIN (
+            SELECT 
+                u.id::text as user_id,
+                SUM(gr.stake) as staked,
+                SUM(gr.payout) as payout
+            FROM users u
+            LEFT JOIN game_round gr ON u.id::text = gr.user_id
+            GROUP BY u.id::text
+        ) casino ON u.id::text = casino.user_id
+        GROUP BY u.id, u.username, u.email, sb.staked, sb.payout, casino.staked, casino.payout
         ORDER BY profit DESC
     """)
     
@@ -100,18 +120,52 @@ def backup_partner_leaderboard(reset_operation_id=None):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Get current partner leaderboard data (only settled bets for volume)
+    # Get current partner leaderboard data (sportsbook + casino volume and trade count)
     cursor.execute("""
         SELECT 
             so.sportsbook_name,
             so.subdomain,
             so.is_active,
             COUNT(DISTINCT u.id) as user_count,
-            COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as total_volume
+            -- Sportsbook volume + Casino volume
+            (COALESCE(sb_volume.volume, 0) + COALESCE(casino_volume.volume, 0)) as total_volume,
+            -- Sportsbook trade count + Casino trade count
+            (COALESCE(sb_trades.trade_count, 0) + COALESCE(casino_trades.trade_count, 0)) as trade_count
         FROM sportsbook_operators so
         LEFT JOIN users u ON so.id = u.sportsbook_operator_id
-        LEFT JOIN bets b ON u.id = b.user_id
-        GROUP BY so.id, so.sportsbook_name, so.subdomain, so.is_active
+        LEFT JOIN (
+            SELECT 
+                u.sportsbook_operator_id,
+                SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END) as volume
+            FROM users u
+            LEFT JOIN bets b ON u.id = b.user_id
+            GROUP BY u.sportsbook_operator_id
+        ) sb_volume ON so.id = sb_volume.sportsbook_operator_id
+        LEFT JOIN (
+            SELECT 
+                u.sportsbook_operator_id,
+                SUM(gr.stake) as volume
+            FROM users u
+            LEFT JOIN game_round gr ON u.id::text = gr.user_id
+            GROUP BY u.sportsbook_operator_id
+        ) casino_volume ON so.id = casino_volume.sportsbook_operator_id
+        LEFT JOIN (
+            SELECT 
+                u.sportsbook_operator_id,
+                SUM(CASE WHEN b.status IN ('won', 'lost') THEN 1 ELSE 0 END) as trade_count
+            FROM users u
+            LEFT JOIN bets b ON u.id = b.user_id
+            GROUP BY u.sportsbook_operator_id
+        ) sb_trades ON so.id = sb_trades.sportsbook_operator_id
+        LEFT JOIN (
+            SELECT 
+                u.sportsbook_operator_id,
+                COUNT(gr.id) as trade_count
+            FROM users u
+            LEFT JOIN game_round gr ON u.id::text = gr.user_id
+            GROUP BY u.sportsbook_operator_id
+        ) casino_trades ON so.id = casino_trades.sportsbook_operator_id
+        GROUP BY so.id, so.sportsbook_name, so.subdomain, so.is_active, sb_volume.volume, casino_volume.volume, sb_trades.trade_count, casino_trades.trade_count
         ORDER BY total_volume DESC
     """)
     
@@ -121,9 +175,9 @@ def backup_partner_leaderboard(reset_operation_id=None):
     backup_time = datetime.now()
     for partner in partners:
         cursor.execute("""
-            INSERT INTO Partner_leader_backup (sportsbook_name, subdomain, is_active, user_count, total_volume, backup_date, reset_operation_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (partner[0], partner[1], partner[2], partner[3], partner[4], backup_time, reset_operation_id))
+            INSERT INTO Partner_leader_backup (sportsbook_name, subdomain, is_active, user_count, total_volume, trade_count, backup_date, reset_operation_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (partner[0], partner[1], partner[2], partner[3], partner[4], partner[5], backup_time, reset_operation_id))
     
     conn.commit()
     conn.close()

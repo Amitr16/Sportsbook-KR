@@ -154,8 +154,8 @@ def google_login():
     # Validate that it's a known tenant by checking if it exists in database
     if tenant:
         try:
-            from src.db_compat import connect
-            with connect() as conn:
+            from src.db_compat import connection_ctx
+            with connection_ctx() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT id FROM sportsbook_operators WHERE subdomain = %s", (tenant,))
                     if cursor.fetchone():
@@ -262,20 +262,21 @@ def google_callback():
         # Get operator_id from subdomain
         operator_id = None
         if tenant:
-            from src.db_compat import connect
-            with connect() as conn:
+            from src.db_compat import connection_ctx
+            with connection_ctx() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT id FROM sportsbook_operators WHERE subdomain = %s", (tenant,))
                     operator_result = cursor.fetchone()
                     if operator_result:
-                        operator_id = operator_result[0]
+                        operator_id = operator_result['id']
                         logger.info(f"🔍 Found operator_id: {operator_id} for tenant: {tenant}")
                     else:
                         logger.warning(f"⚠️ No operator found for tenant: {tenant}")
         
         # 5) Find or create user; update last_login
-        from src.db_compat import connect
-        conn = connect()
+        from src.db_compat import connection_ctx
+        # LEGACY - use connection_ctx() context manager instead
+        conn = connection_ctx().__enter__()
         try:
             logger.info(f"🔍 Looking for existing user with email: {email} and operator_id: {operator_id}")
             user = conn.execute(
@@ -441,7 +442,7 @@ def google_callback():
 def get_user_profile():
     """Get current user profile from session"""
     from flask import session, request
-    from src.db_compat import connect
+    from src.db_compat import connection_ctx
     
     try:
         logger.info("=" * 50)
@@ -463,7 +464,7 @@ def get_user_profile():
             return jsonify({'error': 'Not authenticated'}), 401
         
         logger.info(f"🔍 Querying database for user_id: {user_id}")
-        with connect() as conn:
+        with connection_ctx() as conn:
             logger.info(f"🔍 Database connection established")
             with conn.cursor() as cursor:
                 logger.info(f"🔍 Database cursor created")

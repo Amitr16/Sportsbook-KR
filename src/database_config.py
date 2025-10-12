@@ -7,7 +7,7 @@ import psycopg2
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
-from src.db_compat import connect as db_compat_connect, get_global_pool
+from src.db_compat import connect as db_compat_connect, pool
 from contextlib import contextmanager
 
 def get_database_url():
@@ -185,8 +185,5 @@ def get_flask_database_config():
 
 def close_all_connections():
     """Close all database connections and pools (useful for cleanup)"""
-    try:
-        from src.db_compat import safe_close_global_pool
-        safe_close_global_pool()
-    except Exception as e:
-        print(f"DEBUG: Error closing pool: {e}")
+    # REMOVED: safe_close_global_pool() - pools should only close on process exit
+    # The pool will be automatically closed when the process exits

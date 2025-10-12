@@ -18,11 +18,38 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-def update_operator_revenue(operator_id, conn):
-    """Update the total_revenue field for an operator based on actual bet settlements"""
+def calculate_casino_revenue(operator_id, conn):
+    """Calculate casino revenue from game_round table for a specific operator"""
     try:
-        # Calculate current total revenue from actual bet settlements
-        revenue_query = """
+        # Calculate casino revenue from game_round table
+        casino_query = """
+        SELECT 
+            SUM(gr.stake) as total_stakes,
+            SUM(gr.payout) as total_payouts
+        FROM game_round gr
+        JOIN users u ON gr.user_id = u.id::text
+        WHERE u.sportsbook_operator_id = ?
+        """
+        
+        result = conn.execute(casino_query, (operator_id,)).fetchone()
+        
+        total_stakes = float(result['total_stakes'] or 0)
+        total_payouts = float(result['total_payouts'] or 0)
+        
+        # Casino revenue = Money kept from losing games - Money paid to winners
+        casino_revenue = total_stakes - total_payouts
+        
+        return casino_revenue
+        
+    except Exception as e:
+        print(f"Error calculating casino revenue for operator {operator_id}: {e}")
+        return 0.0
+
+def calculate_sportsbook_revenue(operator_id, conn):
+    """Calculate sportsbook revenue from bets table for a specific operator"""
+    try:
+        # Calculate sportsbook revenue from settled bets
+        sportsbook_query = """
         SELECT 
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
             SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_net_payouts
@@ -31,10 +58,31 @@ def update_operator_revenue(operator_id, conn):
         WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = ?
         """
         
-        result = conn.execute(revenue_query, (operator_id,)).fetchone()
+        result = conn.execute(sportsbook_query, (operator_id,)).fetchone()
+        
         total_stakes_lost = float(result['total_stakes_lost'] or 0)
         total_net_payouts = float(result['total_net_payouts'] or 0)
-        total_revenue = total_stakes_lost - total_net_payouts
+        
+        # Sportsbook revenue = Money kept from losing bets - Extra money paid to winners
+        sportsbook_revenue = total_stakes_lost - total_net_payouts
+        
+        return sportsbook_revenue
+        
+    except Exception as e:
+        print(f"Error calculating sportsbook revenue for operator {operator_id}: {e}")
+        return 0.0
+
+def update_operator_revenue(operator_id, conn):
+    """Update the total_revenue field for an operator based on both sportsbook and casino revenue"""
+    try:
+        # Calculate sportsbook revenue
+        sportsbook_revenue = calculate_sportsbook_revenue(operator_id, conn)
+        
+        # Calculate casino revenue
+        casino_revenue = calculate_casino_revenue(operator_id, conn)
+        
+        # Combined total revenue
+        total_revenue = sportsbook_revenue + casino_revenue
         
         # Update the operator's total_revenue field
         conn.execute("""
@@ -44,6 +92,7 @@ def update_operator_revenue(operator_id, conn):
         """, (total_revenue, operator_id))
         
         print(f"✅ Updated operator {operator_id} total_revenue to: {total_revenue}")
+        print(f"   📊 Sportsbook: ${sportsbook_revenue:.2f}, 🎰 Casino: ${casino_revenue:.2f}")
         
     except Exception as e:
         print(f"❌ Error updating operator revenue: {e}")
@@ -499,15 +548,85 @@ def get_global_users():
         per_page = int(request.args.get('per_page', 20))
         offset = (page - 1) * per_page
         
-        # Get all users with operator information
+        # Get all users with operator information and Web3 wallet balance
         users_query = """
         SELECT u.id, u.username, u.email, u.balance, u.created_at, u.is_active,
+               u.web3_wallet_address, u.web3_wallet_key,
                so.sportsbook_name as operator_name,
                (SELECT COUNT(*) FROM bets WHERE user_id = u.id) as total_bets,
                (SELECT COALESCE(SUM(stake), 0) FROM bets WHERE user_id = u.id AND status IN ('won', 'lost', 'void')) as total_staked,
                (SELECT COALESCE(SUM(potential_return), 0) FROM bets WHERE user_id = u.id AND status = 'won') as total_payout,
                (SELECT COALESCE(SUM(CASE WHEN status IN ('won', 'lost', 'void') THEN stake ELSE 0 END), 0) - 
                 COALESCE(SUM(CASE WHEN status = 'won' THEN potential_return ELSE 0 END), 0) FROM bets WHERE user_id = u.id) as profit
+        FROM users u
+        LEFT JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+        ORDER BY u.created_at DESC
+        LIMIT ? OFFSET ?
+        """
+        
+        users = conn.execute(users_query, (per_page, offset)).fetchall()
+        
+        # Get total count
+        total_count = conn.execute("SELECT COUNT(*) as count FROM users").fetchone()['count']
+        
+        conn.close()
+        
+        # Round financial values to 2 decimal places and get Web3 balance
+        processed_users = []
+        for user in users:
+            user_dict = dict(user)
+            user_dict['balance'] = round(float(user_dict['balance'] or 0), 2)
+            user_dict['total_staked'] = round(float(user_dict['total_staked'] or 0), 2)
+            user_dict['total_payout'] = round(float(user_dict['total_payout'] or 0), 2)
+            user_dict['profit'] = round(float(user_dict['profit'] or 0), 2)
+            
+            # Get Web3 wallet balance if wallet exists
+            # NOTE: Web3 balance fetching disabled for performance - fetching balance for all users is too slow
+            # TODO: Implement async/cached Web3 balance fetching or load on-demand
+            web3_balance = 0.0
+            # if user_dict.get('web3_wallet_address'):
+            #     try:
+            #         from src.services.web3_sync_service import get_web3_balance
+            #         balance = get_web3_balance(user_dict['id'])
+            #         web3_balance = balance if balance is not None else 0.0
+            #     except Exception as e:
+            #         print(f"Failed to get Web3 balance for user {user_dict['id']}: {e}")
+            #         web3_balance = 0.0
+            user_dict['web3_balance'] = round(web3_balance, 2)
+            
+            processed_users.append(user_dict)
+        
+        return jsonify({
+            'users': processed_users,
+            'total': total_count,
+            'page': page,
+            'per_page': per_page
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/global-casino-users')
+@check_superadmin_auth
+def get_global_casino_users():
+    """Get all casino users across all operators"""
+    
+    try:
+        conn = get_db_connection()
+        
+        # Get pagination parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+        offset = (page - 1) * per_page
+        
+        # Get all users with casino-specific stats
+        users_query = """
+        SELECT u.id, u.username, u.email, u.balance, u.created_at, u.is_active,
+               so.sportsbook_name as operator_name,
+               (SELECT COUNT(*) FROM game_round WHERE user_id = u.id::text) as total_games,
+               (SELECT COALESCE(SUM(stake), 0) FROM game_round WHERE user_id = u.id::text) as total_staked,
+               (SELECT COALESCE(SUM(payout), 0) FROM game_round WHERE user_id = u.id::text) as total_payout,
+               (SELECT COALESCE(SUM(stake - payout), 0) FROM game_round WHERE user_id = u.id::text) as profit
         FROM users u
         LEFT JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
         ORDER BY u.created_at DESC
@@ -537,6 +656,191 @@ def get_global_users():
             'page': page,
             'per_page': per_page
         })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/operator-wallets')
+@check_superadmin_auth
+def get_operator_wallets():
+    """Get all operator wallets with Web2 and Web3 balances"""
+    
+    try:
+        conn = get_db_connection()
+        
+        # Get all operators with their wallet information
+        operators_query = """
+        SELECT 
+            so.id,
+            so.sportsbook_name,
+            so.subdomain,
+            -- Web2 balances
+            ow_capital.current_balance as bookmaker_capital_web2,
+            ow_liquidity.current_balance as bookmaker_liquidity_web2,
+            ow_revenue.current_balance as revenue_pool_web2,
+            ow_earnings.current_balance as earnings_pool_web2,
+            -- Web3 wallet addresses
+            ow_capital.web3_wallet_address as capital_web3_address,
+            ow_liquidity.web3_wallet_address as liquidity_web3_address,
+            ow_revenue.web3_wallet_address as revenue_web3_address,
+            ow_earnings.web3_wallet_address as earnings_web3_address
+        FROM sportsbook_operators so
+        LEFT JOIN operator_wallets ow_capital ON so.id = ow_capital.operator_id AND ow_capital.wallet_type = 'bookmaker_capital'
+        LEFT JOIN operator_wallets ow_liquidity ON so.id = ow_liquidity.operator_id AND ow_liquidity.wallet_type = 'bookmaker_liquidity'
+        LEFT JOIN operator_wallets ow_revenue ON so.id = ow_revenue.operator_id AND ow_revenue.wallet_type = 'revenue_pool'
+        LEFT JOIN operator_wallets ow_earnings ON so.id = ow_earnings.operator_id AND ow_earnings.wallet_type = 'earnings_pool'
+        ORDER BY so.sportsbook_name
+        """
+        
+        operators = conn.execute(operators_query).fetchall()
+        conn.close()
+        
+        # Process operators and get Web3 balances
+        processed_operators = []
+        for operator in operators:
+            operator_dict = dict(operator)
+            
+            # Round Web2 balances
+            operator_dict['bookmaker_capital_web2'] = round(float(operator_dict['bookmaker_capital_web2'] or 0), 2)
+            operator_dict['bookmaker_liquidity_web2'] = round(float(operator_dict['bookmaker_liquidity_web2'] or 0), 2)
+            operator_dict['revenue_pool_web2'] = round(float(operator_dict['revenue_pool_web2'] or 0), 2)
+            operator_dict['earnings_pool_web2'] = round(float(operator_dict['earnings_pool_web2'] or 0), 2)
+            
+            # Get Web3 balances
+            # NOTE: Web3 balance fetching disabled for performance - API calls to Crossmint are too slow
+            # TODO: Implement async/cached Web3 balance fetching or load on-demand
+            web3_balances = {
+                'bookmaker_capital_web3': 0.0,
+                'bookmaker_liquidity_web3': 0.0,
+                'revenue_pool_web3': 0.0,
+                'earnings_pool_web3': 0.0
+            }
+            
+            # try:
+            #     from src.services.crossmint_aptos_service import get_crossmint_service
+            #     crossmint_service = get_crossmint_service()
+            #     
+            #     # Get Web3 balance for each wallet type if address exists
+            #     if operator_dict.get('capital_web3_address'):
+            #         balance = crossmint_service.get_balance(operator_dict['capital_web3_address'])
+            #         web3_balances['bookmaker_capital_web3'] = balance if balance is not None else 0.0
+            #     if operator_dict.get('liquidity_web3_address'):
+            #         balance = crossmint_service.get_balance(operator_dict['liquidity_web3_address'])
+            #         web3_balances['bookmaker_liquidity_web3'] = balance if balance is not None else 0.0
+            #     if operator_dict.get('revenue_web3_address'):
+            #         balance = crossmint_service.get_balance(operator_dict['revenue_web3_address'])
+            #         web3_balances['revenue_pool_web3'] = balance if balance is not None else 0.0
+            #     if operator_dict.get('earnings_web3_address'):
+            #         balance = crossmint_service.get_balance(operator_dict['earnings_web3_address'])
+            #         web3_balances['earnings_pool_web3'] = balance if balance is not None else 0.0
+            #         
+            # except Exception as e:
+            #     print(f"Failed to get Web3 balances for operator {operator_dict['id']}: {e}")
+            
+            # Add Web3 balances to operator dict
+            for key, value in web3_balances.items():
+                operator_dict[key] = round(value, 2)
+            
+            processed_operators.append(operator_dict)
+        
+        return jsonify({
+            'operators': processed_operators,
+            'total': len(processed_operators)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/web3-balances/users', methods=['POST'])
+@check_superadmin_auth
+def get_users_web3_balances():
+    """Get Web3 balances for a list of user IDs (async endpoint)"""
+    try:
+        data = request.get_json()
+        user_ids = data.get('user_ids', [])
+        
+        if not user_ids:
+            return jsonify({'balances': {}})
+        
+        from src.services.web3_sync_service import get_web3_balance
+        
+        balances = {}
+        for user_id in user_ids:
+            try:
+                balance = get_web3_balance(user_id)
+                balances[str(user_id)] = round(balance, 2) if balance is not None else 0.0
+            except Exception as e:
+                print(f"Failed to get Web3 balance for user {user_id}: {e}")
+                balances[str(user_id)] = 0.0
+        
+        return jsonify({'balances': balances})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@rich_superadmin_bp.route('/superadmin/api/web3-balances/operators', methods=['POST'])
+@check_superadmin_auth
+def get_operators_web3_balances():
+    """Get Web3 balances for operator wallets (async endpoint)"""
+    try:
+        data = request.get_json()
+        operator_ids = data.get('operator_ids', [])
+        
+        if not operator_ids:
+            return jsonify({'balances': {}})
+        
+        conn = get_db_connection()
+        
+        # Get wallet addresses for all requested operators
+        placeholders = ','.join(['?' for _ in operator_ids])
+        query = f"""
+        SELECT 
+            so.id,
+            ow_capital.web3_wallet_address as capital_web3_address,
+            ow_liquidity.web3_wallet_address as liquidity_web3_address,
+            ow_revenue.web3_wallet_address as revenue_web3_address,
+            ow_earnings.web3_wallet_address as earnings_web3_address
+        FROM sportsbook_operators so
+        LEFT JOIN operator_wallets ow_capital ON so.id = ow_capital.operator_id AND ow_capital.wallet_type = 'bookmaker_capital'
+        LEFT JOIN operator_wallets ow_liquidity ON so.id = ow_liquidity.operator_id AND ow_liquidity.wallet_type = 'bookmaker_liquidity'
+        LEFT JOIN operator_wallets ow_revenue ON so.id = ow_revenue.operator_id AND ow_revenue.wallet_type = 'revenue_pool'
+        LEFT JOIN operator_wallets ow_earnings ON so.id = ow_earnings.operator_id AND ow_earnings.wallet_type = 'earnings_pool'
+        WHERE so.id IN ({placeholders})
+        """
+        
+        operators = conn.execute(query, operator_ids).fetchall()
+        conn.close()
+        
+        from src.services.crossmint_aptos_service import get_crossmint_service
+        crossmint_service = get_crossmint_service()
+        
+        balances = {}
+        for operator in operators:
+            operator_id = str(operator['id'])
+            balances[operator_id] = {
+                'bookmaker_capital_web3': 0.0,
+                'bookmaker_liquidity_web3': 0.0,
+                'revenue_pool_web3': 0.0,
+                'earnings_pool_web3': 0.0
+            }
+            
+            try:
+                if operator['capital_web3_address']:
+                    balance = crossmint_service.get_balance(operator['capital_web3_address'])
+                    balances[operator_id]['bookmaker_capital_web3'] = round(balance, 2) if balance is not None else 0.0
+                if operator['liquidity_web3_address']:
+                    balance = crossmint_service.get_balance(operator['liquidity_web3_address'])
+                    balances[operator_id]['bookmaker_liquidity_web3'] = round(balance, 2) if balance is not None else 0.0
+                if operator['revenue_web3_address']:
+                    balance = crossmint_service.get_balance(operator['revenue_web3_address'])
+                    balances[operator_id]['revenue_pool_web3'] = round(balance, 2) if balance is not None else 0.0
+                if operator['earnings_web3_address']:
+                    balance = crossmint_service.get_balance(operator['earnings_web3_address'])
+                    balances[operator_id]['earnings_pool_web3'] = round(balance, 2) if balance is not None else 0.0
+            except Exception as e:
+                print(f"Failed to get Web3 balances for operator {operator_id}: {e}")
+        
+        return jsonify({'balances': balances})
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -642,16 +946,36 @@ def reset_all_global_users():
         conn.commit()
         conn.close()
         
+        # RESET ALL WEB3 WALLETS
+        print("🔄 RESET CONTEST: Starting Web3 wallet reset...")
+        web3_stats = None
+        try:
+            from src.services.web3_reset_service import reset_all_web3_wallets
+            web3_stats = reset_all_web3_wallets(new_balance)
+            print(f"✅ RESET CONTEST: Web3 wallet reset completed! Reset {web3_stats['wallets_reset']} wallets, {web3_stats['wallets_failed']} failed")
+        except Exception as e:
+            print(f"⚠️ RESET CONTEST: Warning - Failed to reset Web3 wallets: {e}")
+            web3_stats = {'wallets_reset': 0, 'wallets_failed': 0, 'errors': [str(e)]}
+        
         print(f"✅ RESET CONTEST: Successfully completed! Cancelled {bets_cancelled} bets, reset {users_reset} users to balance {new_balance}")
         
-        return jsonify({
+        response_data = {
             'success': True,
             'message': f'Contest reset completed successfully! Contest end date saved.',
             'bets_cancelled': bets_cancelled,
             'users_reset': users_reset,
             'new_balance': new_balance,
             'contest_end_date': contest_end_date
-        })
+        }
+        
+        # Add Web3 reset stats to response
+        if web3_stats:
+            response_data['web3_wallets_reset'] = web3_stats['wallets_reset']
+            response_data['web3_wallets_failed'] = web3_stats['wallets_failed']
+            if web3_stats['errors']:
+                response_data['web3_errors'] = web3_stats['errors']
+        
+        return jsonify(response_data)
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -680,6 +1004,37 @@ def run_daily_revenue_calculator():
         # Call the main function from the script
         update_daily_revenue_calculations()
         
+        # Create parallel Web3 revenue calculations
+        try:
+            from src.services.web3_operator_wallet_service import create_web3_revenue_calculation
+            with connection_ctx() as conn:
+                with conn.cursor() as cursor:
+                    # Get all operators and their revenue calculations for today
+                    cursor.execute("""
+                        SELECT DISTINCT rc.operator_id, rc.calculation_date, 
+                               rc.bookmaker_own_share, rc.community_share_30
+                        FROM revenue_calculations rc
+                        WHERE rc.calculation_metadata = 'false' 
+                        AND DATE(rc.calculation_date) = CURRENT_DATE
+                    """)
+                    
+                    web2_calculations = cursor.fetchall()
+                    
+                    # Create parallel Web3 calculations
+                    web3_calculations_created = 0
+                    for calc in web2_calculations:
+                        if create_web3_revenue_calculation(
+                            calc['operator_id'], 
+                            calc['calculation_date'],
+                            float(calc['bookmaker_own_share'] or 0),
+                            float(calc['community_share_30'] or 0)
+                        ):
+                            web3_calculations_created += 1
+                    
+                    print(f"✅ Created {web3_calculations_created} parallel Web3 revenue calculations")
+        except Exception as web3_error:
+            print(f"⚠️ Web3 revenue calculation creation failed: {web3_error}")
+        
         # Get statistics after running
         conn = get_db_connection()
         try:
@@ -699,12 +1054,20 @@ def run_daily_revenue_calculator():
             """
             calculations_created = conn.execute(calculations_query).fetchone()['count']
             
-            return jsonify({
+            response_data = {
                 'success': True,
                 'message': 'Daily revenue calculator completed successfully',
                 'operators_processed': operators_processed,
                 'calculations_created': calculations_created
-            })
+            }
+            
+            # Add Web3 statistics if available
+            try:
+                response_data['web3_calculations_created'] = web3_calculations_created
+            except:
+                pass  # Web3 stats not available
+            
+            return jsonify(response_data)
             
         finally:
             conn.close()
@@ -750,12 +1113,73 @@ def run_update_operator_wallets():
             
             conn.commit()
             
-            return jsonify({
+            # Process parallel Web3 wallet updates
+            try:
+                from src.services.web3_operator_wallet_service import (
+                    get_unprocessed_web3_revenue_calculations,
+                    sync_web3_operator_wallet_credit,
+                    sync_web3_operator_wallet_debit,
+                    mark_web3_revenue_calculation_processed
+                )
+                
+                web3_calculations = get_unprocessed_web3_revenue_calculations()
+                web3_wallets_updated = 0
+                
+                for web3_calc in web3_calculations:
+                    try:
+                        operator_id = web3_calc['operator_id']
+                        bookmaker_share = float(web3_calc['bookmaker_own_share'] or 0)
+                        community_share = float(web3_calc['community_share_30'] or 0)
+                        
+                        print(f"🔄 Processing Web3 wallet updates for operator {operator_id}")
+                        
+                        # Update bookmaker_capital (credit)
+                        if bookmaker_share > 0:
+                            tx_hash = sync_web3_operator_wallet_credit(
+                                operator_id, 'bookmaker_capital', bookmaker_share, 
+                                f"Revenue share - {web3_calc['calculation_date']}"
+                            )
+                            if tx_hash:
+                                web3_wallets_updated += 1
+                        
+                        # Update revenue wallet (credit for community share)
+                        if community_share > 0:
+                            tx_hash = sync_web3_operator_wallet_credit(
+                                operator_id, 'revenue', community_share,
+                                f"Community share - {web3_calc['calculation_date']}"
+                            )
+                            if tx_hash:
+                                web3_wallets_updated += 1
+                        
+                        # Mark Web3 calculation as processed
+                        mark_web3_revenue_calculation_processed(web3_calc['id'])
+                        
+                        print(f"✅ Web3 wallet updates completed for operator {operator_id}")
+                        
+                    except Exception as e:
+                        print(f"⚠️ Web3 wallet update failed for operator {web3_calc['operator_id']}: {e}")
+                        continue
+                
+                print(f"✅ Web3 wallet updates completed: {web3_wallets_updated} wallets updated")
+                
+            except Exception as web3_error:
+                print(f"⚠️ Web3 wallet update process failed: {web3_error}")
+            
+            response_data = {
                 'success': True,
                 'message': 'Update operator wallets completed successfully',
                 'calculations_processed': calculations_processed,
                 'wallets_updated': wallets_updated
-            })
+            }
+            
+            # Add Web3 statistics if available
+            try:
+                response_data['web3_wallets_updated'] = web3_wallets_updated
+                response_data['web3_calculations_processed'] = len(web3_calculations)
+            except:
+                pass  # Web3 stats not available
+            
+            return jsonify(response_data)
             
         finally:
             conn.close()
@@ -872,7 +1296,8 @@ def get_operators():
                so.created_at, so.is_active,
                (SELECT COUNT(*) FROM users WHERE sportsbook_operator_id = so.id) as user_count,
                (SELECT COUNT(*) FROM bets b JOIN users u ON b.user_id = u.id WHERE u.sportsbook_operator_id = so.id) as bet_count,
-               (SELECT COALESCE(SUM(stake), 0) - COALESCE(SUM(actual_return), 0) FROM bets b JOIN users u ON b.user_id = u.id WHERE u.sportsbook_operator_id = so.id AND b.status IN ('won', 'lost')) as revenue
+               (SELECT COALESCE(SUM(stake), 0) - COALESCE(SUM(actual_return), 0) FROM bets b JOIN users u ON b.user_id = u.id WHERE u.sportsbook_operator_id = so.id AND b.status IN ('won', 'lost')) as sportsbook_revenue,
+               (SELECT COALESCE(SUM(gr.stake), 0) - COALESCE(SUM(gr.payout), 0) FROM game_round gr JOIN users u ON gr.user_id = u.id::text WHERE u.sportsbook_operator_id = so.id) as casino_revenue
         FROM sportsbook_operators so
         ORDER BY so.created_at DESC
         """
@@ -1146,21 +1571,47 @@ def generate_global_custom_report():
         
         # Generate report based on type
         if report_type == 'revenue':
+            # Combined sportsbook and casino revenue analysis
             query = f"""
-            SELECT 
-                b.created_at::date as bet_date,
-                b.sport_name,
-                COUNT(*) as total_bets,
-                SUM(b.stake) as total_stakes,
-                SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
-            FROM bets b
-            JOIN users u ON b.user_id = u.id
-            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE {base_where}
-            GROUP BY b.created_at::date, b.sport_name
-            ORDER BY bet_date DESC, revenue DESC
+            WITH sportsbook_revenue AS (
+                SELECT 
+                    b.created_at::date as report_date,
+                    b.sport_name as category,
+                    'Sportsbook' as platform,
+                    COUNT(*) as total_bets,
+                    SUM(b.stake) as total_stakes,
+                    SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
+                    SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
+                FROM bets b
+                JOIN users u ON b.user_id = u.id
+                JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+                WHERE op.is_active = TRUE
+                {f"AND b.created_at::date >= '{date_from}'" if date_from else ""}
+                {f"AND b.created_at::date <= '{date_to}'" if date_to else ""}
+                GROUP BY b.created_at::date, b.sport_name
+            ),
+            casino_revenue AS (
+                SELECT 
+                    gr.created_at::date as report_date,
+                    gr.game_key as category,
+                    'Casino' as platform,
+                    COUNT(*) as total_bets,
+                    SUM(gr.stake) as total_stakes,
+                    SUM(gr.stake) - SUM(gr.payout) as revenue
+                FROM game_round gr
+                JOIN users u ON gr.user_id = u.id::text
+                JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+                WHERE op.is_active = TRUE
+                {f"AND gr.created_at::date >= '{date_from}'" if date_from else ""}
+                {f"AND gr.created_at::date <= '{date_to}'" if date_to else ""}
+                GROUP BY gr.created_at::date, gr.game_key
+            )
+            SELECT * FROM sportsbook_revenue
+            UNION ALL
+            SELECT * FROM casino_revenue
+            ORDER BY report_date DESC, revenue DESC
             """
+            params = []  # Reset params for combined query
             
         elif report_type == 'user-activity':
             query = f"""
@@ -1217,6 +1668,27 @@ def generate_global_custom_report():
             GROUP BY b.sport_name
             ORDER BY sport_revenue DESC
             """
+            
+        elif report_type == 'casino-performance':
+            query = f"""
+            SELECT 
+                gr.game_key as game_name,
+                COUNT(*) as total_games,
+                SUM(gr.stake) as total_stakes,
+                COUNT(CASE WHEN gr.payout > gr.stake THEN 1 END) as won_games,
+                COUNT(CASE WHEN gr.payout <= gr.stake THEN 1 END) as lost_games,
+                SUM(gr.stake) - SUM(gr.payout) as casino_revenue,
+                (COUNT(CASE WHEN gr.payout > gr.stake THEN 1 END) * 100.0 / COUNT(*)) as win_rate
+            FROM game_round gr
+            JOIN users u ON gr.user_id = u.id::text
+            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+            WHERE op.is_active = TRUE
+            {f"AND gr.created_at::date >= '{date_from}'" if date_from else ""}
+            {f"AND gr.created_at::date <= '{date_to}'" if date_to else ""}
+            GROUP BY gr.game_key
+            ORDER BY casino_revenue DESC
+            """
+            params = []  # Reset params for casino query
         
         else:
             return jsonify({'error': 'Invalid report type'}), 400
@@ -2630,6 +3102,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
             <button class="nav-tab" onclick="showSection('global-betting-events')">📊 Global Betting Events</button>
             <button class="nav-tab" onclick="showSection('manual-settlement')">💰 Manual Settlement</button>
             <button class="nav-tab" onclick="showSection('global-user-management')">👥 Global User Management</button>
+            <button class="nav-tab" onclick="showSection('operator-wallets')">💰 Operator Wallets</button>
             <button class="nav-tab" onclick="showSection('global-reports')">📈 Global Reports</button>
             <button class="nav-tab" onclick="showSection('operator-management')">🏢 Operator Management</button>
             <button class="nav-tab" onclick="showSection('global-report-builder')">🔧 Global Report Builder</button>
@@ -2882,88 +3355,178 @@ RICH_SUPERADMIN_TEMPLATE = '''
             <h2>Global User Management</h2>
             <p>Manage users across all sportsbook operators with global admin powers</p>
             
-            <div class="controls">
-                <button onclick="loadGlobalUsers()">🔄 Refresh Global Users</button>
+            <!-- Sub-tabs for Sportsbook and Casino -->
+            <div class="sub-tabs" style="margin-bottom: 1.5rem; border-bottom: 2px solid #e2e8f0;">
+                <button class="sub-tab active" onclick="switchGlobalUserTab('sportsbook')" id="global-sportsbook-tab" style="padding: 0.75rem 1.5rem; background: transparent; border: none; border-bottom: 3px solid #4ade80; color: #1e293b; font-weight: 600; cursor: pointer; margin-right: 1rem;">
+                    ⚽ Sportsbook
+                </button>
+                <button class="sub-tab" onclick="switchGlobalUserTab('casino')" id="global-casino-tab" style="padding: 0.75rem 1.5rem; background: transparent; border: none; border-bottom: 3px solid transparent; color: #64748b; font-weight: 600; cursor: pointer;">
+                    🎰 Casino
+                </button>
+            </div>
+            
+            <!-- Sportsbook Users Table -->
+            <div id="global-sportsbook-users" class="user-tab-content">
+                <div class="controls">
+                    <button onclick="loadGlobalUsers()">🔄 Refresh Global Users</button>
                 
-                <div class="reset-contest-controls" style="display: inline-block; margin-left: 20px;">
-                    <input type="number" id="global-reset-balance-amount" placeholder="Enter balance amount" 
-                           style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 150px;">
-                    <input type="datetime-local" id="contest-end-date" placeholder="Contest End Date" 
-                           style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 200px;">
-                    <button onclick="resetContest()" style="background: #dc2626; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
-                        🏆 Reset Contest
-                    </button>
-                    <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                        ⚠️ This will cancel all pending bets (refund stakes), reset ALL user balances across ALL operators, set default balance for new users, and save contest end date
+                    <div class="reset-contest-controls" style="display: inline-block; margin-left: 20px;">
+                        <input type="number" id="global-reset-balance-amount" placeholder="Enter balance amount" 
+                               style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 150px;">
+                        <input type="datetime-local" id="contest-end-date" placeholder="Contest End Date" 
+                               style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 200px;">
+                        <button onclick="resetContest()" style="background: #dc2626; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
+                            🏆 Reset Contest
+                        </button>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                            ⚠️ This will cancel all pending bets (refund stakes), reset ALL user balances AND Web3 wallets across ALL operators, set default balance for new users, and save contest end date
+                        </div>
                     </div>
+                </div>
+                
+                <!-- Pagination Controls -->
+                <div class="pagination-controls">
+                    <label for="global-users-per-page">Users per page:</label>
+                    <select id="global-users-per-page" onchange="changeGlobalUsersPerPage()">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <span id="global-users-pagination-info" class="pagination-info">Loading...</span>
+                </div>
+                
+                <div class="table-container">
+                    <table id="global-users-table">
+                        <thead>
+                            <tr>
+                                 <th onclick="sortTable('global-users-table', 0)" style="cursor: pointer;">
+                                     ID <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 1)" style="cursor: pointer;">
+                                     Username <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 2)" style="cursor: pointer;">
+                                     Email <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 3)" style="cursor: pointer;">
+                                     Operator <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 4)" style="cursor: pointer;">
+                                     Balance <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 5)" style="cursor: pointer;">
+                                     Web3 Balance <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 6)" style="cursor: pointer;">
+                                     Bets <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 7)" style="cursor: pointer;">
+                                     Staked <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 8)" style="cursor: pointer;">
+                                     Payout <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 9)" style="cursor: pointer;">
+                                     Profit <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 10)" style="cursor: pointer;">
+                                     Joined <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-users-table', 11)" style="cursor: pointer;">
+                                     Status <span class="sort-icon">↕</span>
+                                 </th>
+                                <th style="min-width: 120px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="global-users-tbody">
+                            <tr><td colspan="13" class="loading">Loading global users...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination -->
+                <div id="global-users-pagination" class="pagination" style="display: none;">
+                    <button onclick="goToGlobalUsersPage(1)" id="global-users-first-page">« First</button>
+                    <button onclick="goToGlobalUsersPage(currentGlobalUsersPage - 1)" id="global-users-prev-page">‹ Previous</button>
+                    <div id="global-users-page-numbers"></div>
+                    <button onclick="goToGlobalUsersPage(currentGlobalUsersPage + 1)" id="global-users-next-page">Next ›</button>
+                    <button onclick="goToGlobalUsersPage(totalGlobalUsersPages)" id="global-users-last-page">Last »</button>
                 </div>
             </div>
             
-            <!-- Pagination Controls -->
-            <div class="pagination-controls">
-                <label for="global-users-per-page">Users per page:</label>
-                <select id="global-users-per-page" onchange="changeGlobalUsersPerPage()">
-                    <option value="10">10</option>
-                    <option value="20" selected>20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                </select>
-                <span id="global-users-pagination-info" class="pagination-info">Loading...</span>
-            </div>
-            
-            <div class="table-container">
-                <table id="global-users-table">
-                    <thead>
-                        <tr>
-                             <th onclick="sortTable('global-users-table', 0)" style="cursor: pointer;">
-                                 ID <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 1)" style="cursor: pointer;">
-                                 Username <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 2)" style="cursor: pointer;">
-                                 Email <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 3)" style="cursor: pointer;">
-                                 Operator <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 4)" style="cursor: pointer;">
-                                 Balance <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 5)" style="cursor: pointer;">
-                                 Bets <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 6)" style="cursor: pointer;">
-                                 Staked <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 7)" style="cursor: pointer;">
-                                 Payout <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 8)" style="cursor: pointer;">
-                                 Profit <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 9)" style="cursor: pointer;">
-                                 Joined <span class="sort-icon">↕</span>
-                             </th>
-                             <th onclick="sortTable('global-users-table', 10)" style="cursor: pointer;">
-                                 Status <span class="sort-icon">↕</span>
-                             </th>
-                            <th style="min-width: 120px;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="global-users-tbody">
-                        <tr><td colspan="12" class="loading">Loading global users...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-            
-            <!-- Pagination -->
-            <div id="global-users-pagination" class="pagination" style="display: none;">
-                <button onclick="goToGlobalUsersPage(1)" id="global-users-first-page">« First</button>
-                <button onclick="goToGlobalUsersPage(currentGlobalUsersPage - 1)" id="global-users-prev-page">‹ Previous</button>
-                <div id="global-users-page-numbers"></div>
-                <button onclick="goToGlobalUsersPage(currentGlobalUsersPage + 1)" id="global-users-next-page">Next ›</button>
-                <button onclick="goToGlobalUsersPage(totalGlobalUsersPages)" id="global-users-last-page">Last »</button>
+            <!-- Casino Users Table -->
+            <div id="global-casino-users" class="user-tab-content" style="display: none;">
+                <div class="controls">
+                    <button onclick="loadGlobalCasinoUsers()">🔄 Refresh Global Casino Users</button>
+                </div>
+                
+                <!-- Pagination Controls for Casino -->
+                <div class="pagination-controls">
+                    <label for="global-casino-users-per-page">Users per page:</label>
+                    <select id="global-casino-users-per-page" onchange="changeGlobalCasinoUsersPerPage()">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <span id="global-casino-users-pagination-info" class="pagination-info">Loading...</span>
+                </div>
+                
+                <div class="table-container">
+                    <table id="global-casino-users-table">
+                        <thead>
+                            <tr>
+                                 <th onclick="sortTable('global-casino-users-table', 0)" style="cursor: pointer;">
+                                     ID <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 1)" style="cursor: pointer;">
+                                     Username <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 2)" style="cursor: pointer;">
+                                     Email <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 3)" style="cursor: pointer;">
+                                     Operator <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 4)" style="cursor: pointer;">
+                                     Balance <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 5)" style="cursor: pointer;">
+                                     Games <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 6)" style="cursor: pointer;">
+                                     Staked <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 7)" style="cursor: pointer;">
+                                     Payout <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 8)" style="cursor: pointer;">
+                                     Profit <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 9)" style="cursor: pointer;">
+                                     Joined <span class="sort-icon">↕</span>
+                                 </th>
+                                 <th onclick="sortTable('global-casino-users-table', 10)" style="cursor: pointer;">
+                                     Status <span class="sort-icon">↕</span>
+                                 </th>
+                                <th style="min-width: 120px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="global-casino-users-tbody">
+                            <tr><td colspan="12" class="loading">Loading global casino users...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination for Casino -->
+                <div id="global-casino-users-pagination" class="pagination" style="display: none;">
+                    <button onclick="goToGlobalCasinoUsersPage(1)" id="global-casino-users-first-page">« First</button>
+                    <button onclick="goToGlobalCasinoUsersPage(currentGlobalCasinoUsersPage - 1)" id="global-casino-users-prev-page">‹ Previous</button>
+                    <div id="global-casino-users-page-numbers"></div>
+                    <button onclick="goToGlobalCasinoUsersPage(currentGlobalCasinoUsersPage + 1)" id="global-casino-users-next-page">Next ›</button>
+                    <button onclick="goToGlobalCasinoUsersPage(totalGlobalCasinoUsersPages)" id="global-casino-users-last-page">Last »</button>
+                </div>
             </div>
         </div>
         
@@ -3002,19 +3565,71 @@ RICH_SUPERADMIN_TEMPLATE = '''
                                  Bets <span class="sort-icon">↕</span>
                              </th>
                              <th onclick="sortTable('operators-table', 7)" style="cursor: pointer;">
-                                 Revenue <span class="sort-icon">↕</span>
+                                 Sportsbook Revenue <span class="sort-icon">↕</span>
                              </th>
                              <th onclick="sortTable('operators-table', 8)" style="cursor: pointer;">
-                                 Created <span class="sort-icon">↕</span>
+                                 Casino Revenue <span class="sort-icon">↕</span>
                              </th>
                              <th onclick="sortTable('operators-table', 9)" style="cursor: pointer;">
+                                 Created <span class="sort-icon">↕</span>
+                             </th>
+                             <th onclick="sortTable('operators-table', 10)" style="cursor: pointer;">
                                  Status <span class="sort-icon">↕</span>
                              </th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="operators-tbody">
-                        <tr><td colspan="11" class="loading">Loading operators...</td></tr>
+                        <tr><td colspan="12" class="loading">Loading operators...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Operator Wallets Section -->
+        <div id="operator-wallets" class="content-section">
+            <h2>💰 Operator Wallets</h2>
+            <p>View Web2 and Web3 wallet balances for all operators</p>
+            
+            <div class="controls">
+                <button onclick="loadOperatorWallets()">🔄 Refresh Wallets</button>
+            </div>
+            
+            <div class="table-container">
+                <table id="operator-wallets-table">
+                    <thead>
+                        <tr>
+                            <th onclick="sortTable('operator-wallets-table', 0)" style="cursor: pointer;">
+                                Operator <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 1)" style="cursor: pointer;">
+                                Bookmaker Capital <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 2)" style="cursor: pointer;">
+                                Bookmaker Liquidity <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 3)" style="cursor: pointer;">
+                                Revenue Pool <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 4)" style="cursor: pointer;">
+                                Earnings Pool <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 5)" style="cursor: pointer;">
+                                Web3 Bookmaker Capital <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 6)" style="cursor: pointer;">
+                                Web3 Bookmaker Liquidity <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 7)" style="cursor: pointer;">
+                                Web3 Revenue Pool <span class="sort-icon">↕</span>
+                            </th>
+                            <th onclick="sortTable('operator-wallets-table', 8)" style="cursor: pointer;">
+                                Web3 Earnings Pool <span class="sort-icon">↕</span>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody id="operator-wallets-tbody">
+                        <tr><td colspan="9" class="loading">Loading operator wallets...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -3075,10 +3690,11 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 <div class="form-group">
                     <label for="global-report-type">Report Type:</label>
                     <select id="global-report-type">
-                        <option value="revenue">Revenue Report</option>
+                        <option value="revenue">Revenue Analysis (Sportsbook + Casino)</option>
                         <option value="user-activity">User Activity Report</option>
                         <option value="betting-patterns">Betting Patterns Report</option>
                         <option value="sport-performance">Sport Performance Report</option>
+                        <option value="casino-performance">Casino Performance Report</option>
                     </select>
                 </div>
                 
@@ -3090,13 +3706,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 <div class="form-group">
                     <label for="global-date-to">Date To:</label>
                     <input type="date" id="global-date-to">
-                </div>
-                
-                <div class="form-group">
-                    <label for="global-reports-sport-filter">Sport Filter:</label>
-                    <select id="global-reports-sport-filter">
-                        <option value="">All Sports</option>
-                    </select>
                 </div>
                 
                 <div class="form-group">
@@ -3154,6 +3763,8 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 loadGlobalBettingEvents();
             } else if (sectionId === 'global-user-management') {
                 loadGlobalUsers();
+            } else if (sectionId === 'operator-wallets') {
+                loadOperatorWallets();
             } else if (sectionId === 'global-reports') {
                 loadGlobalReports();
             } else if (sectionId === 'operator-management') {
@@ -3276,7 +3887,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
                 if (data.error) {
                     document.getElementById('global-users-tbody').innerHTML = 
-                        `<tr><td colspan="12" class="error">Error: ${data.error}</td></tr>`;
+                        `<tr><td colspan="13" class="error">Error: ${data.error}</td></tr>`;
                     return;
                 }
                 
@@ -3287,7 +3898,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
                 const tbody = document.getElementById('global-users-tbody');
                 if (data.users.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="12" class="loading">No users found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="13" class="loading">No users found</td></tr>';
                 } else {
                     console.log('🎯 Rendering users table with', data.users.length, 'users');
                     const userRows = data.users.map(user => `
@@ -3297,6 +3908,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                             <td>${user.email}</td>
                             <td><span class="operator-name">${user.operator_name || 'Default Sportsbook'}</span></td>
                             <td>$${user.balance}</td>
+                            <td>$${user.web3_balance || '0.00'}</td>
                             <td>${user.total_bets}</td>
                             <td>$${user.total_staked}</td>
                             <td>$${user.total_payout}</td>
@@ -3321,6 +3933,9 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     actionButtons.forEach((btn, index) => {
                         console.log(`🔘 Button ${index}:`, btn.textContent, 'Classes:', btn.className);
                     });
+                    
+                    // Load Web3 balances asynchronously
+                    loadUsersWeb3Balances(data.users);
                 }
                 
                 // Update pagination controls
@@ -3370,6 +3985,293 @@ RICH_SUPERADMIN_TEMPLATE = '''
         function changeGlobalUsersPerPage() {
             currentGlobalUsersPage = 1;
             loadGlobalUsers(1);
+        }
+        
+        // Async load Web3 balances for users
+        async function loadUsersWeb3Balances(users) {
+            console.log('💰 Loading Web3 balances for', users.length, 'users...');
+            
+            // Extract user IDs
+            const userIds = users.map(user => user.id);
+            
+            if (userIds.length === 0) return;
+            
+            try {
+                const response = await fetch('/superadmin/api/web3-balances/users', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ user_ids: userIds })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    console.error('❌ Error loading Web3 balances:', data.error);
+                    return;
+                }
+                
+                // Update the table cells with Web3 balances
+                const tbody = document.getElementById('global-users-tbody');
+                const rows = tbody.querySelectorAll('tr');
+                
+                rows.forEach((row, index) => {
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length > 5) {
+                        const userId = users[index].id;
+                        const web3Balance = data.balances[userId] || 0.0;
+                        
+                        // Web3 balance is in the 6th column (index 5)
+                        cells[5].innerHTML = `<span style="color: #22c55e;">$${web3Balance.toFixed(2)}</span>`;
+                    }
+                });
+                
+                console.log('✅ Web3 balances loaded successfully');
+                
+            } catch (error) {
+                console.error('❌ Error loading Web3 balances:', error);
+            }
+        }
+        
+        // Load Operator Wallets Function
+        async function loadOperatorWallets() {
+            console.log('💰 loadOperatorWallets function called');
+            try {
+                const response = await fetch('/superadmin/api/operator-wallets');
+                const data = await response.json();
+                
+                if (data.error) {
+                    document.getElementById('operator-wallets-tbody').innerHTML = 
+                        `<tr><td colspan="9" class="error">Error: ${data.error}</td></tr>`;
+                    return;
+                }
+                
+                const tbody = document.getElementById('operator-wallets-tbody');
+                if (data.operators.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="9" class="loading">No operators found</td></tr>';
+                } else {
+                    const operatorRows = data.operators.map(operator => `
+                        <tr data-operator-id="${operator.id}">
+                            <td><strong>${operator.sportsbook_name}</strong></td>
+                            <td>$${operator.bookmaker_capital_web2 || '0.00'}</td>
+                            <td>$${operator.bookmaker_liquidity_web2 || '0.00'}</td>
+                            <td>$${operator.revenue_pool_web2 || '0.00'}</td>
+                            <td>$${operator.earnings_pool_web2 || '0.00'}</td>
+                            <td class="web3-balance">$0.00</td>
+                            <td class="web3-balance">$0.00</td>
+                            <td class="web3-balance">$0.00</td>
+                            <td class="web3-balance">$0.00</td>
+                        </tr>
+                    `).join('');
+                    
+                    tbody.innerHTML = operatorRows;
+                    
+                    // Load Web3 balances asynchronously
+                    loadOperatorsWeb3Balances(data.operators);
+                }
+                
+            } catch (error) {
+                document.getElementById('operator-wallets-tbody').innerHTML = 
+                    `<tr><td colspan="9" class="error">Error loading operator wallets: ${error.message}</td></tr>`;
+            }
+        }
+        
+        // Async load Web3 balances for operators
+        async function loadOperatorsWeb3Balances(operators) {
+            console.log('💰 Loading Web3 balances for', operators.length, 'operators...');
+            
+            // Extract operator IDs
+            const operatorIds = operators.map(op => op.id);
+            
+            if (operatorIds.length === 0) return;
+            
+            try {
+                const response = await fetch('/superadmin/api/web3-balances/operators', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ operator_ids: operatorIds })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    console.error('❌ Error loading operator Web3 balances:', data.error);
+                    return;
+                }
+                
+                // Update the table cells with Web3 balances
+                const tbody = document.getElementById('operator-wallets-tbody');
+                const rows = tbody.querySelectorAll('tr');
+                
+                rows.forEach((row) => {
+                    const operatorId = row.getAttribute('data-operator-id');
+                    const balances = data.balances[operatorId];
+                    
+                    if (balances) {
+                        const cells = row.querySelectorAll('td');
+                        // Web3 columns are indices 5, 6, 7, 8
+                        cells[5].innerHTML = `<span style="color: #22c55e;">$${balances.bookmaker_capital_web3.toFixed(2)}</span>`;
+                        cells[6].innerHTML = `<span style="color: #22c55e;">$${balances.bookmaker_liquidity_web3.toFixed(2)}</span>`;
+                        cells[7].innerHTML = `<span style="color: #22c55e;">$${balances.revenue_pool_web3.toFixed(2)}</span>`;
+                        cells[8].innerHTML = `<span style="color: #22c55e;">$${balances.earnings_pool_web3.toFixed(2)}</span>`;
+                    }
+                });
+                
+                console.log('✅ Operator Web3 balances loaded successfully');
+                
+            } catch (error) {
+                console.error('❌ Error loading operator Web3 balances:', error);
+            }
+        }
+        
+        // Global Casino Users Pagination Variables
+        let currentGlobalCasinoUsersPage = 1;
+        let totalGlobalCasinoUsersPages = 1;
+        let globalCasinoUsersPerPage = 20;
+        
+        // Sub-tab switching function for global users
+        function switchGlobalUserTab(tabName) {
+            // Hide all tab contents
+            document.getElementById('global-sportsbook-users').style.display = 'none';
+            document.getElementById('global-casino-users').style.display = 'none';
+            
+            // Remove active class from all tabs
+            document.getElementById('global-sportsbook-tab').classList.remove('active');
+            document.getElementById('global-casino-tab').classList.remove('active');
+            document.getElementById('global-sportsbook-tab').style.borderBottomColor = 'transparent';
+            document.getElementById('global-casino-tab').style.borderBottomColor = 'transparent';
+            document.getElementById('global-sportsbook-tab').style.color = '#64748b';
+            document.getElementById('global-casino-tab').style.color = '#64748b';
+            
+            // Show selected tab and update styles
+            if (tabName === 'sportsbook') {
+                document.getElementById('global-sportsbook-users').style.display = 'block';
+                document.getElementById('global-sportsbook-tab').classList.add('active');
+                document.getElementById('global-sportsbook-tab').style.borderBottomColor = '#4ade80';
+                document.getElementById('global-sportsbook-tab').style.color = '#1e293b';
+            } else if (tabName === 'casino') {
+                document.getElementById('global-casino-users').style.display = 'block';
+                document.getElementById('global-casino-tab').classList.add('active');
+                document.getElementById('global-casino-tab').style.borderBottomColor = '#4ade80';
+                document.getElementById('global-casino-tab').style.color = '#1e293b';
+                loadGlobalCasinoUsers(); // Load casino users when switching to casino tab
+            }
+        }
+        
+        // Load Global Casino Users Function
+        async function loadGlobalCasinoUsers(page = 1) {
+            console.log('🔍 loadGlobalCasinoUsers function called');
+            try {
+                currentGlobalCasinoUsersPage = page;
+                const perPage = parseInt(document.getElementById('global-casino-users-per-page').value) || 20;
+                globalCasinoUsersPerPage = perPage;
+                
+                console.log('🌐 Fetching from /superadmin/api/global-casino-users');
+                const response = await fetch(`/superadmin/api/global-casino-users?page=${page}&per_page=${perPage}`);
+                console.log('📡 Response status:', response.status);
+                
+                const data = await response.json();
+                console.log('📊 API Response data:', data);
+                
+                if (data.error) {
+                    document.getElementById('global-casino-users-tbody').innerHTML = 
+                        `<tr><td colspan="12" class="error">Error: ${data.error}</td></tr>`;
+                    return;
+                }
+                
+                // Update pagination info
+                totalGlobalCasinoUsersPages = Math.ceil(data.total / perPage);
+                document.getElementById('global-casino-users-pagination-info').textContent = 
+                    `Showing ${((page - 1) * perPage) + 1}-${Math.min(page * perPage, data.total)} of ${data.total} users`;
+                
+                const tbody = document.getElementById('global-casino-users-tbody');
+                if (data.users.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="12" class="loading">No casino users found</td></tr>';
+                } else {
+                    console.log('🎯 Rendering casino users table with', data.users.length, 'users');
+                    const userRows = data.users.map(user => `
+                        <tr>
+                            <td>${user.id}</td>
+                            <td>${user.username}</td>
+                            <td>${user.email}</td>
+                            <td><span class="operator-name">${user.operator_name || 'Default Sportsbook'}</span></td>
+                            <td>$${user.balance}</td>
+                            <td>${user.total_games || 0}</td>
+                            <td>$${user.total_staked}</td>
+                            <td>$${user.total_payout}</td>
+                            <td>$${user.profit}</td>
+                            <td>${new Date(user.created_at).toLocaleDateString()}</td>
+                            <td><span class="status-badge status-${user.is_active ? 'active' : 'disabled'}">${user.is_active ? 'Active' : 'Disabled'}</span></td>
+                            <td>
+                                <button class="action-btn ${user.is_active ? 'btn-disable' : 'btn-enable'}" 
+                                        onclick="toggleGlobalUserStatus(${user.id})">
+                                    ${user.is_active ? 'Disable' : 'Enable'}
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                    
+                    console.log('🎯 Casino user rows HTML:', userRows);
+                    tbody.innerHTML = userRows;
+                    
+                    // Debug: Check if buttons are actually in the DOM
+                    const actionButtons = tbody.querySelectorAll('.action-btn');
+                    console.log('🔘 Found casino action buttons:', actionButtons.length);
+                    actionButtons.forEach((btn, index) => {
+                        console.log(`🔘 Casino Button ${index}:`, btn.textContent, 'Classes:', btn.className);
+                    });
+                }
+                
+                // Update pagination controls
+                updateGlobalCasinoUsersPagination();
+                
+            } catch (error) {
+                document.getElementById('global-casino-users-tbody').innerHTML = 
+                    `<tr><td colspan="12" class="error">Error loading casino users: ${error.message}</td></tr>`;
+            }
+        }
+        
+        function updateGlobalCasinoUsersPagination() {
+            const pagination = document.getElementById('global-casino-users-pagination');
+            const pageNumbers = document.getElementById('global-casino-users-page-numbers');
+            
+            if (totalGlobalCasinoUsersPages <= 1) {
+                pagination.style.display = 'none';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            
+            // Update button states
+            document.getElementById('global-casino-users-first-page').disabled = currentGlobalCasinoUsersPage === 1;
+            document.getElementById('global-casino-users-prev-page').disabled = currentGlobalCasinoUsersPage === 1;
+            document.getElementById('global-casino-users-next-page').disabled = currentGlobalCasinoUsersPage === totalGlobalCasinoUsersPages;
+            document.getElementById('global-casino-users-last-page').disabled = currentGlobalCasinoUsersPage === totalGlobalCasinoUsersPages;
+            
+            // Generate page numbers
+            let pageNumbersHtml = '';
+            const startPage = Math.max(1, currentGlobalCasinoUsersPage - 2);
+            const endPage = Math.min(totalGlobalCasinoUsersPages, currentGlobalCasinoUsersPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageNumbersHtml += `<button onclick="goToGlobalCasinoUsersPage(${i})" class="${i === currentGlobalCasinoUsersPage ? 'active' : ''}">${i}</button>`;
+            }
+            
+            pageNumbers.innerHTML = pageNumbersHtml;
+        }
+        
+        function goToGlobalCasinoUsersPage(page) {
+            if (page >= 1 && page <= totalGlobalCasinoUsersPages) {
+                loadGlobalCasinoUsers(page);
+            }
+        }
+        
+        function changeGlobalCasinoUsersPerPage() {
+            currentGlobalCasinoUsersPage = 1;
+            loadGlobalCasinoUsers(1);
         }
         
         async function loadGlobalOverview() {
@@ -3528,7 +4430,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 return;
             }
             
-            if (!confirm(`⚠️ WARNING: This will:\n\n1. Cancel ALL pending bets (refund stakes) across ALL operators\n2. Reset ALL user balances to $${resetAmount} across ALL operators\n3. Set default balance for NEW users to $${resetAmount}\n4. Create backup snapshot of current leaderboards\n5. Save contest end date: ${new Date(contestEndDate).toLocaleString()}\n6. This action cannot be undone!\n\nAre you sure you want to continue?`)) {
+            if (!confirm(`⚠️ WARNING: This will:\n\n1. Cancel ALL pending bets (refund stakes) across ALL operators\n2. Reset ALL user balances to $${resetAmount} across ALL operators\n3. Reset ALL Web3 wallets to ${resetAmount} USDT across ALL operators\n4. Set default balance for NEW users to $${resetAmount}\n5. Create backup snapshot of current leaderboards\n6. Save contest end date: ${new Date(contestEndDate).toLocaleString()}\n7. This action cannot be undone!\n\nAre you sure you want to continue?`)) {
                 return;
             }
             
@@ -3547,7 +4449,20 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert(`✅ Successfully reset all users across all operators!\n\n- ${data.bets_cancelled} pending bets cancelled (refunded)\n- ${data.users_reset} user balances reset to $${resetAmount}\n- New users will now get $${resetAmount} by default`);
+                    let successMessage = `✅ Successfully reset all users across all operators!\n\n- ${data.bets_cancelled} pending bets cancelled (refunded)\n- ${data.users_reset} user balances reset to $${resetAmount}\n- New users will now get $${resetAmount} by default`;
+                    
+                    // Add Web3 reset statistics if available
+                    if (data.web3_wallets_reset !== undefined) {
+                        successMessage += `\n\n🌐 Web3 Wallets Reset:\n- ${data.web3_wallets_reset} Web3 wallets reset to ${resetAmount} USDT`;
+                        if (data.web3_wallets_failed > 0) {
+                            successMessage += `\n- ${data.web3_wallets_failed} Web3 wallets failed to reset`;
+                        }
+                        if (data.web3_errors && data.web3_errors.length > 0) {
+                            successMessage += `\n- Web3 errors: ${data.web3_errors.slice(0, 3).join(', ')}${data.web3_errors.length > 3 ? '...' : ''}`;
+                        }
+                    }
+                    
+                    alert(successMessage);
                     loadGlobalUsers(); // Reload the users table
                 } else {
                     alert('❌ Error: ' + data.error);
@@ -3565,13 +4480,13 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
                 if (data.error) {
                     document.getElementById('operators-tbody').innerHTML = 
-                        `<tr><td colspan="11" class="error">Error: ${data.error}</td></tr>`;
+                        `<tr><td colspan="12" class="error">Error: ${data.error}</td></tr>`;
                     return;
                 }
                 
                 const tbody = document.getElementById('operators-tbody');
                 if (data.operators.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="11" class="loading">No operators found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="12" class="loading">No operators found</td></tr>';
                 } else {
                     tbody.innerHTML = data.operators.map(op => `
                         <tr>
@@ -3582,7 +4497,8 @@ RICH_SUPERADMIN_TEMPLATE = '''
                             <td>${op.email}</td>
                             <td>${op.user_count}</td>
                             <td>${op.bet_count}</td>
-                            <td>$${op.revenue.toFixed(2)}</td>
+                            <td class="${(op.sportsbook_revenue || 0) >= 0 ? 'positive' : 'negative'}">$${(op.sportsbook_revenue || 0).toFixed(2)}</td>
+                            <td class="${(op.casino_revenue || 0) >= 0 ? 'positive' : 'negative'}">$${(op.casino_revenue || 0).toFixed(2)}</td>
                             <td>${new Date(op.created_at).toLocaleDateString()}</td>
                             <td><span class="status-badge status-${op.is_active ? 'active' : 'disabled'}">${op.is_active ? 'Active' : 'Disabled'}</span></td>
                             <td>
@@ -3597,7 +4513,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 
             } catch (error) {
                 document.getElementById('operators-tbody').innerHTML = 
-                    `<tr><td colspan="11" class="error">Error loading operators: ${error.message}</td></tr>`;
+                    `<tr><td colspan="12" class="error">Error loading operators: ${error.message}</td></tr>`;
             }
         }
         
@@ -3642,18 +4558,6 @@ RICH_SUPERADMIN_TEMPLATE = '''
         
         async function loadGlobalReportBuilder() {
             try {
-                // Load available sports for filtering
-                const response = await fetch('/superadmin/api/global-reports/available-sports');
-                const data = await response.json();
-                
-                if (data.sports) {
-                    const sportSelect = document.getElementById('global-reports-sport-filter');
-                    sportSelect.innerHTML = '<option value="">All Sports</option>';
-                    data.sports.forEach(sport => {
-                        sportSelect.innerHTML += `<option value="${sport}">${sport}</option>`;
-                    });
-                }
-                
                 // Set default dates (last 30 days)
                 const today = new Date();
                 const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
@@ -3662,7 +4566,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 document.getElementById('global-date-to').value = today.toISOString().split('T')[0];
                 
             } catch (error) {
-                console.error('Error loading report builder:', error);
+                console.error('Error loading global report builder:', error);
             }
         }
         
@@ -3671,14 +4575,12 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const reportType = document.getElementById('global-report-type').value;
                 const dateFrom = document.getElementById('global-date-from').value;
                 const dateTo = document.getElementById('global-date-to').value;
-                const sportFilter = document.getElementById('global-reports-sport-filter').value;
                 const groupBy = document.getElementById('global-group-by').value;
                 
                 const requestData = {
                     report_type: reportType,
                     date_from: dateFrom,
                     date_to: dateTo,
-                    sport_filter: sportFilter,
                     group_by: groupBy
                 };
                 
@@ -3716,13 +4618,15 @@ RICH_SUPERADMIN_TEMPLATE = '''
             // Set headers based on report type
             let headers = [];
             if (reportType === 'revenue') {
-                headers = ['Date', 'Sport', 'Total Bets', 'Total Stakes', 'Revenue'];
+                headers = ['Date', 'Category', 'Platform', 'Total Bets', 'Total Stakes', 'Revenue', 'Profit Margin'];
             } else if (reportType === 'user-activity') {
                 headers = ['Username', 'Email', 'Total Bets', 'Total Staked', 'Payout', 'Profit', 'Join Date'];
             } else if (reportType === 'betting-patterns') {
                 headers = ['Date', 'Sport', 'Bet Type', 'Count', 'Total Amount', 'Win Rate'];
             } else if (reportType === 'sport-performance') {
                 headers = ['Sport', 'Total Bets', 'Total Stakes', 'Won Bets', 'Lost Bets', 'Revenue', 'Win Rate'];
+            } else if (reportType === 'casino-performance') {
+                headers = ['Game', 'Total Games', 'Total Stakes', 'Won Games', 'Lost Games', 'Revenue', 'Win Rate'];
             }
             
             // Create header row
@@ -3735,17 +4639,28 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 body.innerHTML = data.map(row => {
                     const cells = headers.map(header => {
                         let value = '';
-                        if (header === 'Date' && row.bet_date) {
-                            value = row.bet_date;
+                        if (header === 'Date' && (row.bet_date || row.report_date)) {
+                            value = row.bet_date || row.report_date;
+                        } else if (header === 'Category' && (row.sport_name || row.category)) {
+                            value = row.sport_name || row.category;
+                        } else if (header === 'Platform' && row.platform) {
+                            value = row.platform;
                         } else if (header === 'Sport' && row.sport_name) {
                             value = row.sport_name;
+                        } else if (header === 'Game' && row.game_name) {
+                            value = row.game_name;
                         } else if (header === 'Total Bets' && row.total_bets !== undefined) {
                             value = row.total_bets;
+                        } else if (header === 'Total Games' && row.total_games !== undefined) {
+                            value = row.total_games;
                         } else if (header === 'Total Stakes' && row.total_stakes !== undefined) {
                             value = `$${(row.total_stakes || 0).toFixed(2)}`;
                         } else if (header === 'Revenue' && row.revenue !== undefined) {
                             const revenueClass = (row.revenue || 0) >= 0 ? 'positive' : 'negative';
                             value = `<span class="${revenueClass}">$${(row.revenue || 0).toFixed(2)}</span>`;
+                        } else if (header === 'Profit Margin' && row.revenue !== undefined && row.total_stakes !== undefined) {
+                            const margin = ((row.revenue || 0) / Math.max(row.total_stakes || 1, 1) * 100).toFixed(1);
+                            value = `${margin}%`;
                         } else if (header === 'Username' && row.username) {
                             value = row.username;
                         } else if (header === 'Email' && row.email) {
@@ -3771,6 +4686,10 @@ RICH_SUPERADMIN_TEMPLATE = '''
                             value = row.won_bets;
                         } else if (header === 'Lost Bets' && row.lost_bets !== undefined) {
                             value = row.lost_bets;
+                        } else if (header === 'Won Games' && row.won_games !== undefined) {
+                            value = row.won_games;
+                        } else if (header === 'Lost Games' && row.lost_games !== undefined) {
+                            value = row.lost_games;
                         } else {
                             value = row[Object.keys(row).find(key => key.toLowerCase().includes(header.toLowerCase().replace(' ', '_')))] || '';
                         }
@@ -3786,13 +4705,11 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const reportType = document.getElementById('global-report-type').value;
                 const dateFrom = document.getElementById('global-date-from').value;
                 const dateTo = document.getElementById('global-date-to').value;
-                const sportFilter = document.getElementById('global-reports-sport-filter').value;
                 
                 const requestData = {
                     report_type: reportType,
                     date_from: dateFrom,
                     date_to: dateTo,
-                    sport_filter: sportFilter,
                     format: 'csv'
                 };
                 
@@ -3833,7 +4750,10 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const data = await response.json();
                 
                 if (data.success) {
-                    loadGlobalUsers(); // Reload the users table
+                    // Reload both tables since disabling affects both sportsbook and casino
+                    loadGlobalUsers();
+                    loadGlobalCasinoUsers();
+                    alert(data.message || 'User status updated successfully');
                 } else {
                     alert('Error: ' + data.error);
                 }

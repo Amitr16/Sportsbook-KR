@@ -49,12 +49,15 @@ def get_current_operator():
 
 def validate_subdomain(subdomain):
     """Validate if subdomain exists and is active"""
-    conn = get_db_connection()
-    operator = conn.execute(
-        "SELECT id, sportsbook_name, is_active FROM sportsbook_operators WHERE subdomain = ?", 
-        (subdomain,)
-    ).fetchone()
-    conn.close()
+    from src.db_compat import connection_ctx
+    
+    with connection_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, sportsbook_name, is_active FROM sportsbook_operators WHERE subdomain = %s", 
+                (subdomain,)
+            )
+            operator = cur.fetchone()
     
     if not operator:
         return None, "Sportsbook not found"
@@ -90,40 +93,36 @@ def sportsbook_home_clean(subdomain):
         
         operator = branding['operator']
         
-        # Replace basic branding
-        content = content.replace('GoalServe Sports Betting Platform', f"{operator['name']} - Sports Betting")
-        content = content.replace('GoalServe', operator['name'])
+        # CRITICAL: Do NOT do global string replaces - they corrupt JavaScript!
+        # Instead, inject branding via safe config block
+        
+        # Inject API base into meta tag for robust initialization
+        api_base = os.getenv('API_BASE_URL', request.host_url.rstrip('/'))
+        content = content.replace('<meta name="api-base" content="">', 
+                                f'<meta name="api-base" content="{api_base}">')
         
         # Inject custom CSS
         custom_css = generate_custom_css(branding)
         content = content.replace('</head>', f'{custom_css}</head>')
         
-        # Inject custom JavaScript with operator context
+        # Inject branding config BEFORE any app scripts (safe injection)
+        branding_config = f"""
+    <script>
+      // Safe branding injection - does not touch JS code
+      window.__BRANDING__ = {{
+        siteName: "{operator['name']}",
+        siteTitle: "{operator['name']} - Sports Betting",
+        logoText: "{subdomain}",
+        subdomain: "{subdomain}"
+      }};
+      window.OPERATOR_SUBDOMAIN = '{subdomain}';
+      console.log('🎨 Operator branding initialized for:', window.__BRANDING__.siteName);
+    </script>
+"""
+        
+        # Inject custom JavaScript
         custom_js = generate_custom_js(branding)
-        
-        # Fix authentication redirects to maintain operator context
-        auth_fix_js = f"""
-        <script>
-        // Override authentication redirects to maintain operator context
-        window.OPERATOR_SUBDOMAIN = '{subdomain}';
-        
-        // Override the original auth functions
-        window.showLogin = function() {{ window.location.href = '/{subdomain}/login'; }};
-        window.showRegister = function() {{ window.location.href = '/{subdomain}/login'; }};
-        
-        // Fix the DOMContentLoaded authentication check
-        document.addEventListener('DOMContentLoaded', function() {{
-            const token = localStorage.getItem('token');
-            if (!token) {{ 
-                window.location.href = '/{subdomain}/login'; 
-                return; 
-            }}
-            // Continue with normal authentication flow...
-        }}, true);
-        </script>
-        """
-        
-        content = content.replace('</body>', f'{auth_fix_js}{custom_js}</body>')
+        content = content.replace('</body>', f'{branding_config}{custom_js}</body>')
         
         return content
         
@@ -411,9 +410,9 @@ def sportsbook_home(subdomain):
         
         operator = branding['operator']
         
-        # Replace basic branding
+        # Replace basic branding - SAFE: Only specific strings, not JavaScript identifiers
         content = content.replace('GoalServe Sports Betting Platform', f"{operator['name']} - Sports Betting")
-        content = content.replace('GoalServe', operator['name'])
+        # REMOVED: content.replace('GoalServe', operator['name']) - DANGEROUS: corrupts JavaScript
         
         # Inject custom CSS
         custom_css = generate_custom_css(branding)
@@ -587,6 +586,35 @@ def get_users(subdomain):
             'success': False,
             'error': str(e)
         }), 500
+
+@multitenant_bp.route('/api/<subdomain>/casino-enabled')
+def get_casino_enabled(subdomain):
+    """Check if casino is enabled for this operator"""
+    try:
+        operator, error = validate_subdomain(subdomain)
+        if not operator:
+            return jsonify({'error': error}), 404
+        
+        conn = get_db_connection()
+        
+        # Get casino setting for this operator
+        casino_setting = conn.execute("""
+            SELECT casino_enabled FROM sportsbook_operators 
+            WHERE id = ?
+        """, (operator['id'],)).fetchone()
+        
+        conn.close()
+        
+        if casino_setting:
+            return jsonify({
+                'success': True,
+                'casino_enabled': casino_setting['casino_enabled']
+            })
+        else:
+            return jsonify({'error': 'Operator not found'}), 404
+        
+    except Exception as e:
+        return jsonify({'error': 'Failed to get casino setting'}), 500
 
 @multitenant_bp.route('/api/admin/<subdomain>/bets')
 @require_admin_auth

@@ -4,6 +4,16 @@ from dotenv import load_dotenv
 
 # Load env for local overrides (safe in dev; production ignores env.local via env_loader)
 load_dotenv("env.local", override=False)
+load_dotenv("postgresql.env", override=False)  # Load PostgreSQL and Crossmint credentials
+
+# Run database migrations on startup
+try:
+    print("🔧 Running database migrations...")
+    from add_trade_count_migration import add_trade_count_column
+    add_trade_count_column()
+except Exception as e:
+    print(f"⚠️  Migration warning: {e}")
+    print("   Continuing with application startup...")
 
 from src.main import app, socketio
 

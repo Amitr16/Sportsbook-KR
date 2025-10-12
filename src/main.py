@@ -77,7 +77,13 @@ class CustomJSONProvider(DefaultJSONProvider):
 app.json = CustomJSONProvider(app)
 
 # Enable CORS for all routes with proper credentials support
-CORS(app, origins=["http://localhost:5000", "http://127.0.0.1:5000"], 
+CORS(app, 
+     origins=[
+         "http://localhost:5000", 
+         "http://127.0.0.1:5000",
+         "https://sportsbook.kryzel.io",
+         "https://goalserve-sportsbook-backend.fly.dev",
+     ], 
      supports_credentials=True, 
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
@@ -88,6 +94,7 @@ app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 app.config['JSONIFY_MIMETYPE'] = 'application/json; charset=utf-8'
 
 # Initialize SocketIO with proper CORS for production
+# Use wildcard for sportsbook.kryzel.io to allow all subdomain paths
 cors_origins = [
     "https://sportsbook.kryzel.io",
     "https://www.sportsbook.kryzel.io",
@@ -101,12 +108,15 @@ cors_origins = [
 
 socketio = SocketIO(
     app,
-    async_mode="threading",
+    async_mode="eventlet",  # CRITICAL: eventlet required for WebSocket support
     cors_allowed_origins=cors_origins,
+    message_queue=os.getenv("REDIS_URL"),  # For multi-instance deployments
     logger=True,
     engineio_logger=True,
     ping_timeout=60,
     ping_interval=25,
+    cookie=None,  # Use Flask session cookies instead
+    manage_session=False,  # Use Flask sessions, not SocketIO sessions
     engineio_options={
         "allow_upgrades": True,  # Allow WebSocket upgrades
         "transports": ["polling", "websocket"],  # Allow both transports
@@ -114,10 +124,25 @@ socketio = SocketIO(
     }
 )
 
-# Add health check endpoint
+# Add lightweight health check endpoint (no DB access)
 @app.route('/health')
+@app.route('/healthz')
 def health_check():
-    return {'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()}
+    """Lightweight health check - NO database access to avoid pool saturation"""
+    return {'ok': True, 'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()}
+
+# Serve favicon without touching DB
+@app.route('/favicon.ico')
+def favicon():
+    """Serve favicon without DB hit - return 204 if not found"""
+    from flask import send_from_directory
+    static_dir = os.path.join(app.root_path, 'static')
+    favicon_path = os.path.join(static_dir, 'favicon.ico')
+    if os.path.exists(favicon_path):
+        return send_from_directory(static_dir, 'favicon.ico', mimetype='image/x-icon')
+    else:
+        # Return 204 No Content to prevent 404 in console
+        return '', 204
 
 @app.route('/user-leaderboard')
 def user_leaderboard_page():
@@ -166,9 +191,9 @@ def websocket_health_check():
     """Check WebSocket service health"""
     return {
         'status': 'healthy', 
-        'websocket_enabled': False,
-        'async_mode': 'threading',
-        'transport': 'polling',
+        'websocket_enabled': True,
+        'async_mode': 'eventlet',
+        'transport': 'websocket',
         'timestamp': datetime.now(timezone.utc).isoformat()
     }
 
@@ -221,11 +246,11 @@ app.config.update(
     SECRET_KEY=os.getenv("SECRET_KEY", "please_set_me_and_keep_constant"),
     PREFERRED_URL_SCHEME="https",  # url_for(..., _external=True) defaults to https
     
-    # Cookies should work over http://localhost and https://production
+    # Cookies: support both local dev and production
     SESSION_COOKIE_NAME="session",
-    SESSION_COOKIE_SECURE=False,       # Allow HTTP for local development
+    SESSION_COOKIE_SECURE=os.getenv("IS_PRODUCTION", "false").lower() == "true",  # True in production
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",       # don't set "None" unless you're on https + Secure
+    SESSION_COOKIE_SAMESITE="None" if os.getenv("IS_PRODUCTION", "false").lower() == "true" else "Lax",  # None for cross-origin in prod
     SESSION_COOKIE_DOMAIN=None,          # let browser default to host; avoid '.localhost'
     SESSION_COOKIE_PATH="/",
     
@@ -324,6 +349,7 @@ from src.routes.rich_superadmin_interface1 import rich_superadmin_bp
 from src.routes.theme_customization import theme_bp
 from src.routes.public_apis import public_apis_bp
 from src.routes.casino_api import casino_bp
+from src.routes.health import health_bp
 
 # Register blueprints in correct order - tenant_auth first to avoid conflicts
 app.register_blueprint(tenant_auth_bp)  # Tenant auth routes first (more specific)
@@ -340,6 +366,7 @@ app.register_blueprint(sports_bp, url_prefix='/api/sports')  # Fix: should be /a
 app.register_blueprint(prematch_odds_bp, url_prefix='/api/prematch-odds')
 app.register_blueprint(sportsbook_bp, url_prefix='/api')
 app.register_blueprint(casino_bp)  # Casino API routes
+app.register_blueprint(health_bp)  # Lightweight health check (no DB dependency)
 # app.register_blueprint(multitenant_bp)  # Disable old multitenant routing - REMOVED
 app.register_blueprint(clean_multitenant_bp)  # New clean URL routing
 app.register_blueprint(superadmin_bp)
@@ -488,7 +515,8 @@ def handle_connect():
     """Handle WebSocket connection and join user to personal room"""
     try:
         from flask import session
-        user_id = session.get('user_id')
+        # Check both possible session formats: user_id directly or user_data.id
+        user_id = session.get('user_id') or (session.get('user_data', {}).get('id') if session.get('user_data') else None)
         if user_id:
             # Join user to their personal room for balance updates
             from flask_socketio import join_room
@@ -496,6 +524,7 @@ def handle_connect():
             print(f"✅ User {user_id} joined WebSocket room: user_{user_id}")
         else:
             print("⚠️ WebSocket connected but no user_id in session")
+            print(f"⚠️ Session keys: {list(session.keys())}")
     except Exception as e:
         print(f"❌ Error in WebSocket connect handler: {e}")
 
@@ -687,10 +716,10 @@ def prematch_odds_status():
 def db_pool_status():
     """Database connection pool status endpoint"""
     try:
-        from src.db_compat import get_global_pool
+        from src.db_compat import pool as get_pool
         
         # Get pool status
-        pool = get_global_pool()
+        pool = get_pool()
         
         # Get SQLAlchemy pool info
         sqlalchemy_pool_info = {}
@@ -757,17 +786,15 @@ def db_pool_status():
 def db_pool_reset():
     """Reset database connection pools (emergency recovery)"""
     try:
-        from src.db_compat import get_global_pool, close_all_connections
+        from src.db_compat import pool as get_pool
         
-        # Close all existing pools
-        close_all_connections()
-        
-        # Force recreation of pools
+        # Force recreation of pools (emergency only - not recommended)
+        # Note: Pool recreation is now handled automatically
         import gc
         gc.collect()
         
-        # Test new pool
-        pool = get_global_pool()
+        # Test pool is accessible
+        test_pool = get_pool()
         
         return {
             'status': 'success',
@@ -1042,6 +1069,15 @@ def serve(path):
 if __name__ == '__main__':
     print("🚀 Starting GoalServe Sports Betting Platform...")
     print("🔧 Environment: Python", sys.version)
+    
+    # Pre-warm branding cache in background to prevent stampeding
+    try:
+        import threading
+        from src.routes.branding import warm_branding_cache
+        threading.Thread(target=warm_branding_cache, daemon=True).start()
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to start cache warming: {e}")
+    
     try:
         print("🔧 Flask version:", Flask.__version__)
     except AttributeError:
@@ -1073,8 +1109,8 @@ if __name__ == '__main__':
         def monitor_loop():
             while True:
                 try:
-                    from src.db_compat import get_global_pool
-                    pool = get_global_pool()
+                    from src.db_compat import pool as get_pool
+                    db_pool = get_pool()
                     
                     if hasattr(pool, 'get_pool_stats'):
                         stats = pool.get_pool_stats()

@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-base" content="">
     <title>Kryzel Sports Betting Platform</title>
     
     <!-- Public betting page - no authentication required -->
@@ -16,13 +17,51 @@
         
         // Expose tenant globally for other snippets
         window.__TENANT__ = tenant();
+        
+        // CRITICAL: API routes are GLOBAL (/api/*), not tenant-prefixed
+        // Initialize API_BASE from server injection, meta tag, or default to same-origin
+        const fromServer = window.__API_BASE__;
+        const fromMeta = document.querySelector('meta[name="api-base"]')?.content;
+        const guess = location.origin;  // Default to same origin
+        
+        window.API_BASE = (fromServer || fromMeta || guess || '').replace(/\/+$/, '');
+        window.TENANT_BASE = window.__TENANT__ ? `/${window.__TENANT__}` : "";  // For tenant-specific routes
+        
+        console.log("[CONFIG] API_BASE:", window.API_BASE);
+        console.log("[CONFIG] TENANT_BASE:", window.TENANT_BASE);
         console.log("[PUBLIC] Public betting page loaded for tenant:", window.__TENANT__);
         
-        // Update casino link to use tenant-specific URL
+        // Update casino link to use tenant-specific URL and check if casino is enabled
         function updateCasinoLink() {
           const casinoLink = document.getElementById('casinoLink');
           if (casinoLink && window.__TENANT__) {
             casinoLink.href = `/${window.__TENANT__}/casino`;
+            
+            // Show casino button by default
+            casinoLink.style.display = 'inline-block';
+            
+            // Check if casino is enabled for this operator
+            fetch(`/api/${window.__TENANT__}/casino-enabled`)
+              .then(response => response.json())
+              .then(data => {
+                if (data.success) {
+                  // Show or hide casino button based on operator setting
+                  if (data.casino_enabled) {
+                    casinoLink.style.display = 'inline-block';
+                  } else {
+                    casinoLink.style.display = 'none';
+                  }
+                } else {
+                  console.warn('Casino setting check failed, keeping casino button visible');
+                  // Keep casino button visible if there's an error
+                  casinoLink.style.display = 'inline-block';
+                }
+              })
+              .catch(error => {
+                console.error('Error checking casino setting:', error);
+                // Keep casino button visible on error
+                casinoLink.style.display = 'inline-block';
+              });
           }
         }
         
@@ -35,9 +74,7 @@
       })();
     </script>
     
-    <!-- Dynamic Theme CSS -->
-    <link rel="preload" as="style" href="" id="theme-css-preload" 
-          onload="this.onload=null;document.getElementById('theme-css').href=this.href">
+    <!-- Dynamic Theme CSS - loaded dynamically, no preload needed -->
     <link id="theme-css" rel="stylesheet" type="text/css" href="">
     
     <!-- Anti-flicker styles -->
@@ -57,9 +94,9 @@
     </style>
 
     <script>
-        // API base configuration with fallback
-        const API_BASE = '';
-        console.log('[CONFIG] API_BASE:', API_BASE);
+        // API base configuration - use window.API_BASE set earlier (no shadowing)
+        const API_BASE = window.API_BASE || location.origin;
+        console.log('[CONFIG] API_BASE (reaffirmed):', API_BASE);
         
         // Old theme loading functions removed - now handled by loadThemeCSSAndData()
         
@@ -6488,8 +6525,10 @@
                 background: #1a1a2e;
                 border-radius: 12px;
                 padding: 2rem;
-                max-width: 90%;
-                max-height: 80%;
+                width: 90%;
+                max-width: 1200px;
+                height: 80vh;
+                max-height: 800px;
                 overflow: hidden;
                 border: 1px solid rgba(255, 255, 255, 0.1);
                 display: flex;
@@ -6514,9 +6553,78 @@
             const scrollableContent = document.createElement('div');
             scrollableContent.style.cssText = `
                 overflow-y: auto;
+                overflow-x: hidden;
                 flex: 1;
+                min-height: 0;
                 padding-right: 0.5rem;
+                /* Custom scrollbar styling for better visibility */
+                scrollbar-width: thin;
+                scrollbar-color: rgba(255, 255, 255, 0.5) rgba(255, 255, 255, 0.1);
             `;
+            
+            // Add webkit scrollbar styles for better cross-browser support
+            const style = document.createElement('style');
+            style.textContent = `
+                .trade-history-scroll::-webkit-scrollbar {
+                    width: 12px;
+                }
+                .trade-history-scroll::-webkit-scrollbar-track {
+                    background: rgba(255, 255, 255, 0.1);
+                    border-radius: 6px;
+                    margin: 4px;
+                }
+                .trade-history-scroll::-webkit-scrollbar-thumb {
+                    background: rgba(255, 255, 255, 0.4);
+                    border-radius: 6px;
+                    border: 2px solid rgba(255, 255, 255, 0.1);
+                }
+                .trade-history-scroll::-webkit-scrollbar-thumb:hover {
+                    background: rgba(255, 255, 255, 0.6);
+                    border: 2px solid rgba(255, 255, 255, 0.2);
+                }
+                .trade-history-scroll::-webkit-scrollbar-corner {
+                    background: rgba(255, 255, 255, 0.1);
+                }
+            `;
+            document.head.appendChild(style);
+            scrollableContent.className = 'trade-history-scroll';
+
+            // Add scroll indicator for better UX
+            const addScrollIndicator = () => {
+                const scrollIndicator = document.createElement('div');
+                scrollIndicator.style.cssText = `
+                    position: absolute;
+                    bottom: 10px;
+                    right: 20px;
+                    background: rgba(34, 197, 94, 0.8);
+                    color: white;
+                    padding: 0.5rem 1rem;
+                    border-radius: 8px;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                    z-index: 5;
+                    pointer-events: none;
+                    transition: opacity 0.3s ease;
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+                `;
+                scrollIndicator.textContent = '📜 Scroll for more trades';
+                
+                const updateScrollIndicator = () => {
+                    const { scrollTop, scrollHeight, clientHeight } = scrollableContent;
+                    const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10;
+                    const isAtTop = scrollTop <= 10;
+                    
+                    if (isAtBottom || isAtTop || clientHeight >= scrollHeight) {
+                        scrollIndicator.style.opacity = '0';
+                    } else {
+                        scrollIndicator.style.opacity = '1';
+                    }
+                };
+                
+                scrollableContent.addEventListener('scroll', updateScrollIndicator);
+                modalContent.appendChild(scrollIndicator);
+                updateScrollIndicator();
+            };
 
             modalContent.appendChild(header);
 
@@ -6548,6 +6656,10 @@
                     z-index: 10;
                     border-bottom: 2px solid rgba(255, 255, 255, 0.2);
                     margin-bottom: 0.5rem;
+                    /* Ensure header stays above content when scrolling */
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+                    /* Smooth transition for better UX */
+                    transition: box-shadow 0.2s ease;
                 `;
                 
                 const headerRow = document.createElement('div');
@@ -6565,7 +6677,7 @@
                     <div>Trade Selection</div>
                     <div style="text-align: center;">Odds</div>
                     <div style="text-align: center;">Stake</div>
-                    <div style="text-align: center;">Potential Return</div>
+                    <div style="text-align: center;">Payout</div>
                     <div style="text-align: center;">Status</div>
                 `;
                 tableHeader.appendChild(headerRow);
@@ -6574,97 +6686,240 @@
                 const table = document.createElement('div');
                 table.style.cssText = `
                     color: #ffffff;
+                    min-height: 400px; /* Ensure minimum height to trigger scroll */
                 `;
 
                 bets.forEach(bet => {
-                    const row = document.createElement('div');
-                    row.style.cssText = `
-                        display: grid;
-                        grid-template-columns: 1.5fr 2fr 1.5fr 0.8fr 0.8fr 1fr 1fr;
-                        gap: 1rem;
-                        padding: 0.75rem;
-                        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-                        transition: background-color 0.2s ease;
-                        align-items: center;
-                    `;
-                    row.onmouseenter = () => row.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
-                    row.onmouseleave = () => row.style.backgroundColor = 'transparent';
-
-                    const statusColor = {
-                        'pending': '#f59e0b',
-                        'won': '#10b981',
-                        'lost': '#ef4444',
-                        'void': '#6b7280',
-                        'voided': '#8b5cf6',
-                        'cashed_out': '#8b5cf6'
-                    };
-
-                    const statusText = {
-                        'pending': 'Pending',
-                        'won': 'Won',
-                        'lost': 'Lost',
-                        'void': 'Void',
-                        'voided': 'Cancelled',
-                        'cashed_out': 'Cashed Out'
-                    };
-
-                    // Format UTC ISO-8601 timestamp to user's local timezone (bulletproof)
-                    function formatLocalDateTime(isoUtcString) {
-                        // relies on browser TZ; `Z` ensures Date parses as UTC then converts locally
-                        const dt = new Date(isoUtcString); // e.g. "2025-09-08T15:57:00Z"
-                        // Use the user's locale and timezone automatically
-                        return new Intl.DateTimeFormat(undefined, {
-                            dateStyle: "medium",
-                            timeStyle: "short"
-                        }).format(dt);
-                    }
+                    // Check if this is a combo bet
+                    const isComboBet = bet.combo_selections && bet.match_name && bet.match_name.includes('Combo');
                     
-                    // Guardrail for legacy data (no `Z`)
-                    function coerceToISOZ(s) {
-                        // If it looks like "YYYY-MM-DD HH:MM:SS" without timezone, assume UTC and add Z
-                        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
-                            return s.replace(" ", "T") + "Z";
+                    if (isComboBet) {
+                        // Create combo bet display with individual selections
+                        const comboContainer = document.createElement('div');
+                        comboContainer.style.cssText = `
+                            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                            padding: 0.75rem;
+                            transition: background-color 0.2s ease;
+                        `;
+                        comboContainer.onmouseenter = () => comboContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+                        comboContainer.onmouseleave = () => comboContainer.style.backgroundColor = 'transparent';
+
+                        // Parse combo selections
+                        let selections = [];
+                        try {
+                            selections = JSON.parse(bet.combo_selections || '[]');
+                        } catch (e) {
+                            console.warn('Failed to parse combo selections:', e);
                         }
-                        return s;
-                    }
-                    
-                    const raw = bet.created_at_iso || bet.created_at; // prefer the new field
-                    const safe = raw ? coerceToISOZ(raw) : null;
-                    let localTime = 'N/A';
-                    if (safe) {
-                        localTime = formatLocalDateTime(safe);
-                    }
 
-                    // Get proper match name (prefer match_name over match_id)
-                    let matchName = bet.match_name || bet.match_id || 'N/A';
-                    
-                    // Fix terminology: Change "Combo Bet" to "Combo Trade"
-                    if (matchName.includes('Combo Bet')) {
-                        matchName = matchName.replace('Combo Bet', 'Combo Trade');
-                    }
+                        // Main combo bet row
+                        const mainRow = document.createElement('div');
+                        mainRow.style.cssText = `
+                            display: grid;
+                            grid-template-columns: 1.5fr 2fr 1.5fr 0.8fr 0.8fr 1fr 1fr;
+                            gap: 1rem;
+                            padding: 0.5rem 0;
+                            align-items: center;
+                            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                        `;
 
-                    row.innerHTML = `
-                        <div style="font-size: 0.9rem;">${localTime}</div>
-                        <div style="font-weight: 500;">${matchName}</div>
-                        <div style="color: #4ade80;">${bet.selection || 'N/A'}</div>
-                        <div style="text-align: center;">${bet.odds || 'N/A'}</div>
-                        <div style="text-align: center;">$${bet.stake?.toFixed(2) || 'N/A'}</div>
-                        <div style="text-align: center;">$${bet.potential_return?.toFixed(2) || 'N/A'}</div>
-                        <div style="text-align: center;">
-                            <span style="
-                                background: ${statusColor[bet.status] || '#6b7280'};
-                                color: white;
-                                padding: 0.25rem 0.5rem;
-                                border-radius: 4px;
-                                font-size: 0.8rem;
-                                font-weight: 500;
-                            ">${statusText[bet.status] || bet.status}</span>
-                        </div>
-                    `;
-                    table.appendChild(row);
+                        // Format UTC ISO-8601 timestamp to user's local timezone (bulletproof)
+                        function formatLocalDateTime(isoUtcString) {
+                            const dt = new Date(isoUtcString);
+                            return new Intl.DateTimeFormat(undefined, {
+                                dateStyle: "medium",
+                                timeStyle: "short"
+                            }).format(dt);
+                        }
+                        
+                        function coerceToISOZ(s) {
+                            if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+                                return s.replace(" ", "T") + "Z";
+                            }
+                            return s;
+                        }
+                        
+                        const raw = bet.created_at_iso || bet.created_at;
+                        const safe = raw ? coerceToISOZ(raw) : null;
+                        let localTime = 'N/A';
+                        if (safe) {
+                            localTime = formatLocalDateTime(safe);
+                        }
+
+                        const statusColor = {
+                            'pending': '#f59e0b',
+                            'won': '#10b981',
+                            'lost': '#ef4444',
+                            'void': '#6b7280',
+                            'voided': '#8b5cf6',
+                            'cashed_out': '#8b5cf6'
+                        };
+
+                        const statusText = {
+                            'pending': 'Pending',
+                            'won': 'Won',
+                            'lost': 'Lost',
+                            'void': 'Void',
+                            'voided': 'Cancelled',
+                            'cashed_out': 'Cashed Out'
+                        };
+
+                        mainRow.innerHTML = `
+                            <div style="font-size: 0.9rem;">${localTime}</div>
+                            <div style="font-weight: 500;">Combo Trade (${selections.length} selections)</div>
+                            <div style="color: #4ade80;">Combo: ${selections.length} selections</div>
+                            <div style="text-align: center;">${bet.odds || 'N/A'}</div>
+                            <div style="text-align: center;">$${bet.stake?.toFixed(2) || 'N/A'}</div>
+                            <div style="text-align: center;">$${bet.potential_return?.toFixed(2) || 'N/A'}</div>
+                            <div style="text-align: center;">
+                                <span style="
+                                    background: ${statusColor[bet.status] || '#6b7280'};
+                                    color: white;
+                                    padding: 0.25rem 0.5rem;
+                                    border-radius: 4px;
+                                    font-size: 0.8rem;
+                                    font-weight: 500;
+                                ">${statusText[bet.status] || bet.status}</span>
+                            </div>
+                        `;
+
+                        comboContainer.appendChild(mainRow);
+
+                        // Individual selection rows
+                        selections.forEach((selection, index) => {
+                            const selectionRow = document.createElement('div');
+                            selectionRow.style.cssText = `
+                                display: grid;
+                                grid-template-columns: 1.5fr 2fr 1.5fr 0.8fr 0.8fr 1fr 1fr;
+                                gap: 1rem;
+                                padding: 0.5rem 0;
+                                align-items: center;
+                                background: rgba(255, 255, 255, 0.02);
+                                margin-left: 1rem;
+                                border-left: 2px solid rgba(74, 222, 128, 0.3);
+                                padding-left: 0.5rem;
+                            `;
+
+                            selectionRow.innerHTML = `
+                                <div style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.6);">Leg ${index + 1}</div>
+                                <div style="font-size: 0.9rem; color: rgba(255, 255, 255, 0.8);">${selection.match_name || 'N/A'}</div>
+                                <div style="color: #4ade80; font-size: 0.9rem;">${selection.selection || 'N/A'}</div>
+                                <div style="text-align: center; font-size: 0.9rem;">${selection.odds || 'N/A'}</div>
+                                <div style="text-align: center; font-size: 0.8rem; color: rgba(255, 255, 255, 0.6);">-</div>
+                                <div style="text-align: center; font-size: 0.8rem; color: rgba(255, 255, 255, 0.6);">-</div>
+                                <div style="text-align: center; font-size: 0.8rem; color: rgba(255, 255, 255, 0.6);">-</div>
+                            `;
+
+                            comboContainer.appendChild(selectionRow);
+                        });
+
+                        table.appendChild(comboContainer);
+                    } else {
+                        // Regular single bet
+                        const row = document.createElement('div');
+                        row.style.cssText = `
+                            display: grid;
+                            grid-template-columns: 1.5fr 2fr 1.5fr 0.8fr 0.8fr 1fr 1fr;
+                            gap: 1rem;
+                            padding: 0.75rem;
+                            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                            transition: background-color 0.2s ease;
+                            align-items: center;
+                        `;
+                        row.onmouseenter = () => row.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+                        row.onmouseleave = () => row.style.backgroundColor = 'transparent';
+
+                        const statusColor = {
+                            'pending': '#f59e0b',
+                            'won': '#10b981',
+                            'lost': '#ef4444',
+                            'void': '#6b7280',
+                            'voided': '#8b5cf6',
+                            'cashed_out': '#8b5cf6'
+                        };
+
+                        const statusText = {
+                            'pending': 'Pending',
+                            'won': 'Won',
+                            'lost': 'Lost',
+                            'void': 'Void',
+                            'voided': 'Cancelled',
+                            'cashed_out': 'Cashed Out'
+                        };
+
+                        // Format UTC ISO-8601 timestamp to user's local timezone (bulletproof)
+                        function formatLocalDateTime(isoUtcString) {
+                            // relies on browser TZ; `Z` ensures Date parses as UTC then converts locally
+                            const dt = new Date(isoUtcString); // e.g. "2025-09-08T15:57:00Z"
+                            // Use the user's locale and timezone automatically
+                            return new Intl.DateTimeFormat(undefined, {
+                                dateStyle: "medium",
+                                timeStyle: "short"
+                            }).format(dt);
+                        }
+                        
+                        // Guardrail for legacy data (no `Z`)
+                        function coerceToISOZ(s) {
+                            // If it looks like "YYYY-MM-DD HH:MM:SS" without timezone, assume UTC and add Z
+                            if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+                                return s.replace(" ", "T") + "Z";
+                            }
+                            return s;
+                        }
+                        
+                        const raw = bet.created_at_iso || bet.created_at; // prefer the new field
+                        const safe = raw ? coerceToISOZ(raw) : null;
+                        let localTime = 'N/A';
+                        if (safe) {
+                            localTime = formatLocalDateTime(safe);
+                        }
+
+                        // Get proper match name (prefer match_name over match_id)
+                        let matchName = bet.match_name || bet.match_id || 'N/A';
+                        
+                        // Fix terminology: Change "Combo Bet" to "Combo Trade"
+                        if (matchName.includes('Combo Bet')) {
+                            matchName = matchName.replace('Combo Bet', 'Combo Trade');
+                        }
+
+                        row.innerHTML = `
+                            <div style="font-size: 0.9rem;">${localTime}</div>
+                            <div style="font-weight: 500;">${matchName}</div>
+                            <div style="color: #4ade80;">${bet.selection || 'N/A'}</div>
+                            <div style="text-align: center;">${bet.odds || 'N/A'}</div>
+                            <div style="text-align: center;">$${bet.stake?.toFixed(2) || 'N/A'}</div>
+                            <div style="text-align: center;">$${bet.potential_return?.toFixed(2) || 'N/A'}</div>
+                            <div style="text-align: center;">
+                                <span style="
+                                    background: ${statusColor[bet.status] || '#6b7280'};
+                                    color: white;
+                                    padding: 0.25rem 0.5rem;
+                                    border-radius: 4px;
+                                    font-size: 0.8rem;
+                                    font-weight: 500;
+                                ">${statusText[bet.status] || bet.status}</span>
+                            </div>
+                        `;
+                        table.appendChild(row);
+                    }
                 });
                 scrollableContent.appendChild(table);
                 modalContent.appendChild(scrollableContent);
+                
+                // Add scroll indicator after content is loaded
+                addScrollIndicator();
+                
+                // Force scrollbar to be visible if content overflows
+                setTimeout(() => {
+                    const { scrollHeight, clientHeight } = scrollableContent;
+                    if (scrollHeight > clientHeight) {
+                        console.log(`📊 Trade History: Content height ${scrollHeight}px > container height ${clientHeight}px - scrollbar should be visible`);
+                        // Ensure scrollbar is visible
+                        scrollableContent.style.overflowY = 'scroll';
+                    } else {
+                        console.log(`📊 Trade History: Content fits (${scrollHeight}px ≤ ${clientHeight}px) - no scrollbar needed`);
+                    }
+                }, 100);
             }
 
             modal.appendChild(modalContent);
@@ -6795,16 +7050,26 @@
                 return;
             }
             
+            console.log('🔌 Starting WebSocket initialization...');
+            console.log('🔌 Current URL:', window.location.href);
+            console.log('🔌 Protocol:', window.location.protocol);
+            console.log('🔌 Socket.IO path: /socket.io/');
+            
             try {
+                // Same-origin connection - no hardcoded URL, uses current page origin
                 socket = io({
-                    transports: ['websocket'],      // avoid long-poll behind LBs
+                    path: '/socket.io/',           // Same-origin path
+                    transports: ['websocket', 'polling'],  // Prefer websocket, fallback to polling
+                    withCredentials: true,         // Send cookies for authentication
                     reconnection: true,
                     reconnectionAttempts: Infinity,
                     reconnectionDelay: 500,
                     reconnectionDelayMax: 10000,
-                    withCredentials: true,
-                    path: '/socket.io/',
+                    upgrade: true,                 // Allow transport upgrades
+                    rememberUpgrade: true,         // Remember successful upgrade
                 });
+                
+                console.log('✅ Socket.IO client created successfully (same-origin)');
                 
                 // Handle transport errors and force reconnection
                 socket.on('transport error', () => {
@@ -6852,13 +7117,21 @@
                 });
                 
                 socket.on('error', function(data) {
-                    console.error('WebSocket error:', data);
+                    console.error('❌ WebSocket error:', data);
+                    console.error('❌ Error type:', typeof data);
+                    console.error('❌ Error details:', JSON.stringify(data));
                     // If we get a 400 error, it might be a stale session ID
                     if (data && data.message && data.message.includes('400')) {
                         console.log('[WS] Stale session ID detected, forcing reconnection');
                         socket.disconnect();
                         setTimeout(() => socket.connect(), 1000);
                     }
+                });
+                
+                socket.on('connect_error', function(error) {
+                    console.error('❌ WebSocket connection error:', error);
+                    console.error('❌ Connection error type:', typeof error);
+                    console.error('❌ Connection error details:', JSON.stringify(error));
                 });
                 
                 socket.on('live_odds_response', function(data) {

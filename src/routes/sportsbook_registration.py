@@ -133,6 +133,8 @@ def create_operator_wallets(operator_id, conn):
     ))
     wallet1_id = cursor.lastrowid
     
+    # Web3 wallet creation moved to separate function to prevent rollback issues
+    
     # Wallet 2: Liquidity Pool Allocation - $40,000 default (5x leverage)
     cursor.execute("""
         INSERT INTO operator_wallets 
@@ -143,6 +145,8 @@ def create_operator_wallets(operator_id, conn):
         datetime.utcnow(), datetime.utcnow()
     ))
     wallet2_id = cursor.lastrowid
+    
+    # Web3 wallet creation moved to separate function to prevent rollback issues
     
     # Wallet 3: Revenue Wallet - starts at $0
     cursor.execute("""
@@ -155,6 +159,8 @@ def create_operator_wallets(operator_id, conn):
     ))
     wallet3_id = cursor.lastrowid
     
+    # Web3 wallet creation moved to separate function to prevent rollback issues
+    
     # Wallet 4: Bookmaker's Earnings - starts at $0
     cursor.execute("""
         INSERT INTO operator_wallets 
@@ -165,6 +171,8 @@ def create_operator_wallets(operator_id, conn):
         datetime.utcnow(), datetime.utcnow()
     ))
     wallet4_id = cursor.lastrowid
+    
+    # Web3 wallet creation moved to separate function to prevent rollback issues
     
     # Create initial daily balance records for wallets with non-zero balances
     today = date.today()
@@ -223,6 +231,83 @@ def create_operator_wallets(operator_id, conn):
         'wallet4_id': wallet4_id
     }
 
+def create_web3_wallets_for_operator(operator_id):
+    """
+    Create Web3 wallets for an operator (separate from Web2 wallet creation)
+    This function runs AFTER Web2 data is committed to prevent rollback issues
+    Deposits initial balances via custodial USDT contract
+    """
+    try:
+        from src.services.crossmint_aptos_service import get_crossmint_service
+        from src.services.web3_operator_wallet_service import store_operator_web3_wallet
+        crossmint_service = get_crossmint_service()
+        
+        # Create Web3 wallet for bookmaker_capital ($10,000 initial balance)
+        web3_address, web3_wallet_id = crossmint_service.create_wallet(
+            user_id=operator_id, 
+            email=f"operator_{operator_id}_bookmaker_capital@kryzel.io", 
+            username=f"operator_{operator_id}_bookmaker_capital",
+            operator_id=operator_id
+        )
+        store_operator_web3_wallet(operator_id, 'bookmaker_capital', web3_address, web3_wallet_id)
+        print(f"✅ Web3 bookmaker_capital: {web3_address}")
+        
+        # Deposit initial balance via custodial USDT contract
+        try:
+            tx_hash = crossmint_service.deposit(web3_address, 10000.0)
+            if tx_hash:
+                print(f"✅ Deposited $10,000 to bookmaker_capital - tx: {tx_hash}")
+            else:
+                print(f"⚠️ Failed to deposit to bookmaker_capital - admin wallet may not be configured")
+        except Exception as deposit_error:
+            print(f"⚠️ Deposit error for bookmaker_capital: {deposit_error}")
+        
+        # Create Web3 wallet for liquidity_pool ($40,000 initial balance)
+        web3_address, web3_wallet_id = crossmint_service.create_wallet(
+            user_id=operator_id, 
+            email=f"operator_{operator_id}_liquidity_pool@kryzel.io", 
+            username=f"operator_{operator_id}_liquidity_pool",
+            operator_id=operator_id
+        )
+        store_operator_web3_wallet(operator_id, 'liquidity_pool', web3_address, web3_wallet_id)
+        print(f"✅ Web3 liquidity_pool: {web3_address}")
+        
+        # Deposit initial balance via custodial USDT contract
+        try:
+            tx_hash = crossmint_service.deposit(web3_address, 40000.0)
+            if tx_hash:
+                print(f"✅ Deposited $40,000 to liquidity_pool - tx: {tx_hash}")
+            else:
+                print(f"⚠️ Failed to deposit to liquidity_pool - admin wallet may not be configured")
+        except Exception as deposit_error:
+            print(f"⚠️ Deposit error for liquidity_pool: {deposit_error}")
+        
+        # Create Web3 wallet for revenue ($0 initial balance)
+        web3_address, web3_wallet_id = crossmint_service.create_wallet(
+            user_id=operator_id, 
+            email=f"operator_{operator_id}_revenue@kryzel.io", 
+            username=f"operator_{operator_id}_revenue",
+            operator_id=operator_id
+        )
+        store_operator_web3_wallet(operator_id, 'revenue', web3_address, web3_wallet_id)
+        print(f"✅ Web3 revenue: {web3_address}, no initial balance")
+        
+        # Create Web3 wallet for bookmaker_earnings ($0 initial balance)
+        web3_address, web3_wallet_id = crossmint_service.create_wallet(
+            user_id=operator_id, 
+            email=f"operator_{operator_id}_bookmaker_earnings@kryzel.io", 
+            username=f"operator_{operator_id}_bookmaker_earnings",
+            operator_id=operator_id
+        )
+        store_operator_web3_wallet(operator_id, 'bookmaker_earnings', web3_address, web3_wallet_id)
+        print(f"✅ Web3 bookmaker_earnings: {web3_address}, no initial balance")
+        
+    except Exception as e:
+        print(f"⚠️ Web3 wallet creation failed for operator {operator_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise e
+
 @sportsbook_bp.route('/register-sportsbook', methods=['POST'])
 def register_sportsbook():
     """Register a new sportsbook operator with wallet initialization"""
@@ -271,7 +356,40 @@ def register_sportsbook():
                 'error': 'Invalid email address'
             }), 400
         
+        # Validate referral code
+        referral_code = data.get('referral_code', '').strip().upper()
+        if not referral_code:
+            return jsonify({
+                'success': False,
+                'error': 'Referral code is required'
+            }), 400
+        
+        if not re.match(r'^[A-Z0-9]{6,20}$', referral_code):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid referral code format'
+            }), 400
+        
         conn = get_db_connection()
+        
+        # Check if referral code exists
+        print(f"🔍 DEBUG: Checking referral code: '{referral_code}'")
+        referral_check = conn.execute("""
+            SELECT id, operator_name, operator_id FROM referral_table 
+            WHERE referral_generated = ?
+        """, (referral_code,)).fetchone()
+        
+        print(f"🔍 DEBUG: Referral check result: {referral_check}")
+        
+        if not referral_check:
+            conn.close()
+            print(f"❌ DEBUG: Invalid referral code '{referral_code}' - registration rejected")
+            return jsonify({
+                'success': False,
+                'error': 'Invalid referral code. Please contact an existing operator for a valid referral code.'
+            }), 400
+        
+        print(f"✅ DEBUG: Valid referral code '{referral_code}' - registration proceeding")
         
         try:
             # Check if sportsbook name already exists
@@ -338,10 +456,37 @@ def register_sportsbook():
             
             operator_id = cursor.lastrowid
             
-            # Create the 4 wallets for the new operator
+            # Create the 4 Web2 wallets for the new operator
             wallet_ids = create_operator_wallets(operator_id, conn)
             
+            # Generate new referral code for the new operator
+            import secrets
+            import string
+            new_referral_code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+            print(f"🔍 DEBUG: Generated new referral code: '{new_referral_code}' for operator '{sportsbook_name}'")
+            
+            # Add new referral entry
+            cursor.execute("""
+                INSERT INTO referral_table 
+                (operator_name, operator_id, referral_used, referral_generated)
+                VALUES (?, ?, ?, ?)
+            """, (sportsbook_name, operator_id, referral_code, new_referral_code))
+            print(f"🔍 DEBUG: Added referral entry - used: '{referral_code}', generated: '{new_referral_code}'")
+            
+            # Commit Web2 data FIRST (operator + wallets + referral)
             conn.commit()
+            print(f"✅ DEBUG: Web2 data committed for operator {operator_id}")
+            
+            # Now create Web3 wallets SEPARATELY (don't rollback Web2 if this fails)
+            try:
+                print(f"🔍 DEBUG: Starting Web3 wallet creation for operator {operator_id}")
+                create_web3_wallets_for_operator(operator_id)
+                print(f"✅ DEBUG: Web3 wallets created successfully for operator {operator_id}")
+            except Exception as web3_error:
+                # Log the error but don't fail the registration
+                print(f"⚠️ DEBUG: Web3 wallet creation failed for operator {operator_id}: {web3_error}")
+                import traceback
+                traceback.print_exc()
             
             return jsonify({
                 'success': True,
@@ -352,6 +497,7 @@ def register_sportsbook():
                 'operator_id': operator_id,
                 'admin_url': f'/{subdomain}/admin',
                 'sportsbook_url': f'/{subdomain}',
+                'referral_code': new_referral_code,
                 'wallets': {
                     'bookmaker_capital': {
                         'id': wallet_ids['wallet1_id'],

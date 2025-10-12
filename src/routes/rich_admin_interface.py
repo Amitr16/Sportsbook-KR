@@ -34,11 +34,38 @@ def require_admin_auth(f):
         return f(*args, **kwargs)
     return decorated_function
 
-def update_operator_revenue(operator_id, conn):
-    """Update the total_revenue field for an operator based on actual bet settlements"""
+def calculate_casino_revenue(operator_id, conn):
+    """Calculate casino revenue from game_round table for a specific operator"""
     try:
-        # Calculate current total revenue from actual bet settlements
-        revenue_query = """
+        # Calculate casino revenue from game_round table
+        casino_query = """
+        SELECT 
+            SUM(gr.stake) as total_stakes,
+            SUM(gr.payout) as total_payouts
+        FROM game_round gr
+        JOIN users u ON gr.user_id = u.id::text
+        WHERE u.sportsbook_operator_id = ?
+        """
+        
+        result = conn.execute(casino_query, (operator_id,)).fetchone()
+        
+        total_stakes = float(result['total_stakes'] or 0)
+        total_payouts = float(result['total_payouts'] or 0)
+        
+        # Casino revenue = Money kept from losing games - Money paid to winners
+        casino_revenue = total_stakes - total_payouts
+        
+        return casino_revenue
+        
+    except Exception as e:
+        print(f"Error calculating casino revenue for operator {operator_id}: {e}")
+        return 0.0
+
+def calculate_sportsbook_revenue(operator_id, conn):
+    """Calculate sportsbook revenue from bets table for a specific operator"""
+    try:
+        # Calculate sportsbook revenue from settled bets
+        sportsbook_query = """
         SELECT 
             SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
             SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_net_payouts
@@ -47,10 +74,31 @@ def update_operator_revenue(operator_id, conn):
         WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = ?
         """
         
-        result = conn.execute(revenue_query, (operator_id,)).fetchone()
+        result = conn.execute(sportsbook_query, (operator_id,)).fetchone()
+        
         total_stakes_lost = float(result['total_stakes_lost'] or 0)
         total_net_payouts = float(result['total_net_payouts'] or 0)
-        total_revenue = total_stakes_lost - total_net_payouts
+        
+        # Sportsbook revenue = Money kept from losing bets - Extra money paid to winners
+        sportsbook_revenue = total_stakes_lost - total_net_payouts
+        
+        return sportsbook_revenue
+        
+    except Exception as e:
+        print(f"Error calculating sportsbook revenue for operator {operator_id}: {e}")
+        return 0.0
+
+def update_operator_revenue(operator_id, conn):
+    """Update the total_revenue field for an operator based on both sportsbook and casino revenue"""
+    try:
+        # Calculate sportsbook revenue
+        sportsbook_revenue = calculate_sportsbook_revenue(operator_id, conn)
+        
+        # Calculate casino revenue
+        casino_revenue = calculate_casino_revenue(operator_id, conn)
+        
+        # Combined total revenue
+        total_revenue = sportsbook_revenue + casino_revenue
         
         # Update the operator's total_revenue field
         conn.execute("""
@@ -60,6 +108,7 @@ def update_operator_revenue(operator_id, conn):
         """, (total_revenue, operator_id))
         
         print(f"✅ Updated operator {operator_id} total_revenue to: {total_revenue}")
+        print(f"   📊 Sportsbook: ${sportsbook_revenue:.2f}, 🎰 Casino: ${casino_revenue:.2f}")
         
     except Exception as e:
         print(f"❌ Error updating operator revenue: {e}")
@@ -148,29 +197,20 @@ def calculate_event_financials(event_id, market_id, sport_name, operator_id):
         return 0.0, 0.0
 
 def calculate_total_revenue(operator_id):
-    """Calculate total revenue from settled bets for a specific operator"""
+    """Calculate total revenue from both sportsbook and casino for a specific operator"""
     try:
         conn = get_db_connection()
         
-        # Calculate revenue from settled bets for this operator's users
-        # Revenue = Total stakes from losing bets - Total payouts to winning bets
-        query = """
-        SELECT 
-            SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) as total_stakes_lost,
-            SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as total_payouts_won
-        FROM bets b
-        JOIN users u ON b.user_id = u.id
-        WHERE b.status IN ('won', 'lost') AND u.sportsbook_operator_id = ?
-        """
+        # Calculate sportsbook revenue
+        sportsbook_revenue = calculate_sportsbook_revenue(operator_id, conn)
         
-        result = conn.execute(query, (operator_id,)).fetchone()
+        # Calculate casino revenue
+        casino_revenue = calculate_casino_revenue(operator_id, conn)
+        
+        # Combined total revenue
+        total_revenue = sportsbook_revenue + casino_revenue
+        
         conn.close()
-        
-        total_stakes_lost = result['total_stakes_lost'] or 0
-        total_payouts_won = result['total_payouts_won'] or 0
-        
-        # Revenue = Money kept from losing bets - Extra money paid to winners
-        total_revenue = total_stakes_lost - total_payouts_won
         
         return total_revenue
         
@@ -964,9 +1004,76 @@ def get_tenant_users(subdomain):
         print(f"❌ DEBUG: Error in get_tenant_users: {e}")
         return jsonify({'error': str(e)}), 500
 
+@rich_admin_bp.route('/<subdomain>/admin/api/casino-users')
+def get_casino_users(subdomain):
+    """Get casino users filtered by tenant"""
+    print(f"🔍 DEBUG: get_casino_users called for subdomain: {subdomain}")
+    
+    operator = get_operator_from_session()
+    print(f"🔍 DEBUG: Operator from session: {operator}")
+    
+    if not operator:
+        print("❌ DEBUG: No operator found in session")
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    try:
+        conn = get_db_connection()
+        
+        # Get pagination parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+        offset = (page - 1) * per_page
+        
+        print(f"🔍 DEBUG: Looking for casino users with sportsbook_operator_id = {operator['id']}")
+        
+        # Get users for this operator only with casino-specific stats
+        users_query = """
+        SELECT id, username, email, balance, created_at, is_active,
+               (SELECT COUNT(*) FROM game_round WHERE user_id = users.id::text) as total_games,
+               (SELECT COALESCE(SUM(stake), 0) FROM game_round WHERE user_id = users.id::text) as total_staked,
+               (SELECT COALESCE(SUM(payout), 0) FROM game_round WHERE user_id = users.id::text) as total_payout,
+               (SELECT COALESCE(SUM(payout - stake), 0) FROM game_round WHERE user_id = users.id::text) as profit
+        FROM users 
+        WHERE sportsbook_operator_id = ?
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+        """
+        
+        users = conn.execute(users_query, (operator['id'], per_page, offset)).fetchall()
+        print(f"🔍 DEBUG: Found {len(users)} casino users for operator {operator['id']}")
+        
+        # Get total count
+        total_count = conn.execute(
+            "SELECT COUNT(*) as count FROM users WHERE sportsbook_operator_id = ?",
+            (operator['id'],)
+        ).fetchone()['count']
+        
+        conn.close()
+        
+        # Round financial values to 2 decimal places
+        processed_users = []
+        for user in users:
+            user_dict = dict(user)
+            user_dict['balance'] = round(float(user_dict['balance'] or 0), 2)
+            user_dict['total_staked'] = round(float(user_dict['total_staked'] or 0), 2)
+            user_dict['total_payout'] = round(float(user_dict['total_payout'] or 0), 2)
+            user_dict['profit'] = round(float(user_dict['profit'] or 0), 2)
+            processed_users.append(user_dict)
+        
+        return jsonify({
+            'users': processed_users,
+            'total': total_count,
+            'page': page,
+            'per_page': per_page
+        })
+        
+    except Exception as e:
+        print(f"❌ DEBUG: Error in get_casino_users: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @rich_admin_bp.route('/<subdomain>/admin/api/user/<int:user_id>/toggle', methods=['POST'])
 def toggle_user_status(subdomain, user_id):
-    """Toggle user active status (tenant-filtered)"""
+    """Toggle user active status (tenant-filtered) - Affects both sportsbook and casino"""
     operator = get_operator_from_session()
     if not operator:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -994,7 +1101,7 @@ def toggle_user_status(subdomain, user_id):
         
         return jsonify({
             'success': True,
-            'message': f"User {'enabled' if new_status else 'disabled'} successfully",
+            'message': f"User {'enabled' if new_status else 'disabled'} successfully (affects both sportsbook and casino)",
             'new_status': new_status
         })
         
@@ -1336,20 +1443,43 @@ def generate_custom_report(subdomain):
         
         # Generate report based on type
         if report_type == 'revenue':
+            # Combined sportsbook and casino revenue analysis
             query = f"""
-            SELECT 
-                b.created_at::date as bet_date,
-                b.sport_name,
-                COUNT(*) as total_bets,
-                SUM(b.stake) as total_stakes,
-                SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
-                SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
-            FROM bets b
-            JOIN users u ON b.user_id = u.id
-            WHERE {base_where}
-            GROUP BY b.created_at::date, b.sport_name
-            ORDER BY bet_date DESC, revenue DESC
+            WITH sportsbook_revenue AS (
+                SELECT 
+                    b.created_at::date as report_date,
+                    b.sport_name as category,
+                    'Sportsbook' as platform,
+                    COUNT(*) as total_bets,
+                    SUM(b.stake) as total_stakes,
+                    SUM(CASE WHEN b.status = 'lost' THEN b.stake ELSE 0 END) - 
+                    SUM(CASE WHEN b.status = 'won' THEN b.actual_return - b.stake ELSE 0 END) as revenue
+                FROM bets b
+                JOIN users u ON b.user_id = u.id
+                WHERE {base_where}
+                GROUP BY b.created_at::date, b.sport_name
+            ),
+            casino_revenue AS (
+                SELECT 
+                    gr.created_at::date as report_date,
+                    gr.game_key as category,
+                    'Casino' as platform,
+                    COUNT(*) as total_bets,
+                    SUM(gr.stake) as total_stakes,
+                    SUM(gr.stake) - SUM(gr.payout) as revenue
+                FROM game_round gr
+                JOIN users u ON gr.user_id = u.id::text
+                WHERE u.sportsbook_operator_id = ?
+                {f"AND gr.created_at::date >= '{date_from}'" if date_from else ""}
+                {f"AND gr.created_at::date <= '{date_to}'" if date_to else ""}
+                GROUP BY gr.created_at::date, gr.game_key
+            )
+            SELECT * FROM sportsbook_revenue
+            UNION ALL
+            SELECT * FROM casino_revenue
+            ORDER BY report_date DESC, revenue DESC
             """
+            params = [operator['id']]  # Reset params for combined query
             
         elif report_type == 'user-activity':
             query = f"""
@@ -1403,6 +1533,26 @@ def generate_custom_report(subdomain):
             GROUP BY b.sport_name
             ORDER BY sport_revenue DESC
             """
+            
+        elif report_type == 'casino-performance':
+            query = f"""
+            SELECT 
+                gr.game_key as game_name,
+                COUNT(*) as total_games,
+                SUM(gr.stake) as total_stakes,
+                COUNT(CASE WHEN gr.payout > gr.stake THEN 1 END) as won_games,
+                COUNT(CASE WHEN gr.payout <= gr.stake THEN 1 END) as lost_games,
+                SUM(gr.stake) - SUM(gr.payout) as casino_revenue,
+                (COUNT(CASE WHEN gr.payout > gr.stake THEN 1 END) * 100.0 / COUNT(*)) as win_rate
+            FROM game_round gr
+            JOIN users u ON gr.user_id = u.id::text
+            WHERE u.sportsbook_operator_id = ?
+            {f"AND gr.created_at::date >= '{date_from}'" if date_from else ""}
+            {f"AND gr.created_at::date <= '{date_to}'" if date_to else ""}
+            GROUP BY gr.game_key
+            ORDER BY casino_revenue DESC
+            """
+            params = [operator['id']]  # Reset params for casino query
         
         else:
             return jsonify({'error': 'Invalid report type'}), 400
@@ -1454,6 +1604,110 @@ def get_available_sports_for_reports(subdomain):
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@rich_admin_bp.route('/<subdomain>/admin/api/casino-setting')
+@require_admin_auth
+def get_casino_setting(subdomain):
+    """Get casino enabled setting for specific operator"""
+    try:
+        operator = get_operator_from_session()
+        if not operator:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        conn = get_db_connection()
+        
+        # Get casino setting for this operator
+        casino_setting = conn.execute("""
+            SELECT casino_enabled FROM sportsbook_operators 
+            WHERE id = ?
+        """, (operator['id'],)).fetchone()
+        
+        conn.close()
+        
+        if casino_setting:
+            return jsonify({
+                'success': True,
+                'casino_enabled': casino_setting['casino_enabled']
+            })
+        else:
+            return jsonify({'error': 'Operator not found'}), 404
+        
+    except Exception as e:
+        return jsonify({'error': 'Failed to get casino setting'}), 500
+
+@rich_admin_bp.route('/<subdomain>/admin/api/toggle-casino', methods=['POST'])
+@require_admin_auth
+def toggle_casino_setting(subdomain):
+    """Toggle casino enabled setting for specific operator"""
+    try:
+        operator = get_operator_from_session()
+        if not operator:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        data = request.get_json()
+        casino_enabled = data.get('casino_enabled', True)
+        
+        conn = get_db_connection()
+        
+        # Update casino setting for this operator
+        conn.execute("""
+            UPDATE sportsbook_operators 
+            SET casino_enabled = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (casino_enabled, operator['id']))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': f"Casino {'enabled' if casino_enabled else 'disabled'} successfully",
+            'casino_enabled': casino_enabled
+        })
+        
+    except Exception as e:
+        return jsonify({'error': 'Failed to toggle casino setting'}), 500
+
+@rich_admin_bp.route('/<subdomain>/admin/api/referral-code')
+@require_admin_auth
+def get_referral_code(subdomain):
+    """Get the referral code for the current operator"""
+    try:
+        operator = get_operator_from_session()
+        if not operator:
+            print(f"❌ DEBUG: No operator found in session for subdomain {subdomain}")
+            return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+        
+        print(f"🔍 DEBUG: Getting referral code for operator ID: {operator['id']}")
+        
+        # Get referral code from referral_table
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT referral_generated FROM referral_table 
+            WHERE operator_id = ?
+        """, (operator['id'],))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        print(f"🔍 DEBUG: Referral code query result: {result}")
+        
+        if result:
+            return jsonify({
+                'success': True,
+                'referral_code': result[0]
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Referral code not found'
+            })
+        
+    except Exception as e:
+        print(f"❌ DEBUG: Error getting referral code: {e}")
+        return jsonify({'success': False, 'error': 'Failed to get referral code'}), 500
 
 @rich_admin_bp.route('/<subdomain>/admin/api/change-password', methods=['POST'])
 @require_admin_auth
@@ -1889,11 +2143,58 @@ RICH_ADMIN_TEMPLATE = '''
             font-size: 1.5rem;
         }
         
-        .header         .admin-info {
+        .header .admin-info {
             display: flex;
             align-items: center;
             gap: 1rem;
             position: relative;
+        }
+        
+        .referral-code-section {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .referral-label {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .referral-code {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 0.9rem;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            user-select: all;
+            transition: background 0.2s ease;
+        }
+        
+        .referral-code:hover {
+            background: rgba(0, 0, 0, 0.3);
+        }
+        
+        .copy-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: #fff;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: background 0.2s ease;
+        }
+        
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
         }
         
         .settings-btn {
@@ -2119,6 +2420,103 @@ RICH_ADMIN_TEMPLATE = '''
         .summary-card .value {
             font-size: 1.8rem;
             font-weight: bold;
+        }
+        
+        /* Casino Control Styles */
+        .casino-control-section {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            border-left: 4px solid #667eea;
+        }
+        
+        .casino-control-section h3 {
+            margin-bottom: 1rem;
+            color: #333;
+            font-size: 1.2rem;
+        }
+        
+        .casino-control-row {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .casino-label {
+            font-weight: 600;
+            color: #555;
+        }
+        
+        .casino-toggle-container {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .casino-toggle-input {
+            display: none;
+        }
+        
+        .casino-slider {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 30px;
+            background: #dc3545; /* Red by default (disabled state) */
+            border-radius: 30px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .casino-slider:before {
+            content: '';
+            position: absolute;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: white;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .casino-toggle-input:checked + .casino-slider {
+            background: #28a745; /* Green when enabled */
+        }
+        
+        .casino-toggle-input:not(:checked) + .casino-slider {
+            background: #dc3545; /* Red when disabled */
+        }
+        
+        .casino-toggle-input:checked + .casino-slider:before {
+            transform: translateX(30px);
+        }
+        
+        .casino-slider-button {
+            display: none;
+        }
+        
+        .casino-status {
+            font-weight: 600;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+        
+        .casino-status.enabled {
+            color: #28a745;
+        }
+        
+        .casino-status.disabled {
+            color: #dc3545;
+        }
+        
+        .casino-description {
+            margin-top: 0.5rem;
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 0;
         }
         
         .controls {
@@ -2409,6 +2807,11 @@ RICH_ADMIN_TEMPLATE = '''
     <div class="header">
         <h1>🏆 {{ operator.sportsbook_name }} - Admin Dashboard</h1>
         <div class="admin-info">
+            <div class="referral-code-section">
+                <span class="referral-label">Referral Code:</span>
+                <span id="referralCodeDisplay" class="referral-code" onclick="copyReferralCode()" title="Click to copy">Loading...</span>
+                <button class="copy-btn" onclick="copyReferralCode()" title="Copy referral code">📋</button>
+            </div>
             <span>Welcome, {{ operator.login }}</span>
             <button class="settings-btn" onclick="toggleSettingsDropdown()" title="Settings">⚙️</button>
             <a href="/{{ operator.subdomain }}/admin/logout" class="logout-btn">Logout</a>
@@ -2471,6 +2874,24 @@ RICH_ADMIN_TEMPLATE = '''
                 </div>
             </div>
             
+            <!-- Casino Control Section -->
+            <div class="casino-control-section">
+                <h3>🎰 Casino Settings</h3>
+                <div class="casino-control-row">
+                    <label for="casinoToggle" class="casino-label">Enable Casino for Users:</label>
+                    <div class="casino-toggle-container">
+                        <input type="checkbox" id="casinoToggle" class="casino-toggle-input" onchange="toggleCasino()">
+                        <label for="casinoToggle" class="casino-slider">
+                            <span class="casino-slider-button"></span>
+                        </label>
+                    </div>
+                    <span id="casinoStatus" class="casino-status enabled">Enabled</span>
+                </div>
+                <p class="casino-description">
+                    When disabled, users under this operator will not see the casino button on the sports betting page.
+                </p>
+            </div>
+            
             <div class="controls">
                 <select id="sport-filter">
                     <option value="">All Sports</option>
@@ -2521,74 +2942,158 @@ RICH_ADMIN_TEMPLATE = '''
         <!-- User Management Section -->
         <div id="user-management" class="content-section">
             <h2>User Management</h2>
-            <p>Manage users across your sportsbook operations</p>
+            <p>Manage users across your sportsbook and casino operations</p>
             
-            <div class="controls">
-                <button onclick="loadUsers()">🔄 Refresh Users</button>
+            <!-- Sub-tabs for Sportsbook and Casino -->
+            <div class="sub-tabs" style="margin-bottom: 1.5rem; border-bottom: 2px solid #e2e8f0;">
+                <button class="sub-tab active" onclick="switchUserTab('sportsbook')" id="sportsbook-tab" style="padding: 0.75rem 1.5rem; background: transparent; border: none; border-bottom: 3px solid #4ade80; color: #1e293b; font-weight: 600; cursor: pointer; margin-right: 1rem;">
+                    ⚽ Sportsbook
+                </button>
+                <button class="sub-tab" onclick="switchUserTab('casino')" id="casino-tab" style="padding: 0.75rem 1.5rem; background: transparent; border: none; border-bottom: 3px solid transparent; color: #64748b; font-weight: 600; cursor: pointer;">
+                    🎰 Casino
+                </button>
             </div>
             
-            <!-- Pagination Controls -->
-            <div class="pagination-controls">
-                <label for="users-per-page">Users per page:</label>
-                <select id="users-per-page" onchange="changeUsersPerPage()">
-                    <option value="10">10</option>
-                    <option value="20" selected>20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                </select>
-                <span id="users-pagination-info" class="pagination-info">Loading...</span>
+            <!-- Sportsbook Users Table -->
+            <div id="sportsbook-users" class="user-tab-content">
+                <div class="controls">
+                    <button onclick="loadUsers()">🔄 Refresh Users</button>
+                </div>
+                
+                <!-- Pagination Controls -->
+                <div class="pagination-controls">
+                    <label for="users-per-page">Users per page:</label>
+                    <select id="users-per-page" onchange="changeUsersPerPage()">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <span id="users-pagination-info" class="pagination-info">Loading...</span>
+                </div>
+                
+                <div class="table-container">
+                    <table id="users-table">
+                        <thead>
+                            <tr>
+                                <th onclick="sortTable('users-table', 0)" style="cursor: pointer;">
+                                    ID <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 1)" style="cursor: pointer;">
+                                    Username <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 2)" style="cursor: pointer;">
+                                    Email <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 3)" style="cursor: pointer;">
+                                    Balance <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 4)" style="cursor: pointer;">
+                                    Bets <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 5)" style="cursor: pointer;">
+                                    Staked <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 6)" style="cursor: pointer;">
+                                    Payout <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 7)" style="cursor: pointer;">
+                                    Profit <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 8)" style="cursor: pointer;">
+                                    Joined <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('users-table', 9)" style="cursor: pointer;">
+                                    Status <span class="sort-icon">↕</span>
+                                </th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-tbody">
+                            <tr><td colspan="11" class="loading">Loading users...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination -->
+                <div id="users-pagination" class="pagination" style="display: none;">
+                    <button onclick="goToUsersPage(1)" id="users-first-page">« First</button>
+                    <button onclick="goToUsersPage(currentUsersPage - 1)" id="users-prev-page">‹ Previous</button>
+                    <div id="users-page-numbers"></div>
+                    <button onclick="goToUsersPage(currentUsersPage + 1)" id="users-next-page">Next ›</button>
+                    <button onclick="goToUsersPage(totalUsersPages)" id="users-last-page">Last »</button>
+                </div>
             </div>
             
-            <div class="table-container">
-                <table id="users-table">
-                    <thead>
-                        <tr>
-                            <th onclick="sortTable('users-table', 0)" style="cursor: pointer;">
-                                ID <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 1)" style="cursor: pointer;">
-                                Username <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 2)" style="cursor: pointer;">
-                                Email <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 3)" style="cursor: pointer;">
-                                Balance <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 4)" style="cursor: pointer;">
-                                Bets <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 5)" style="cursor: pointer;">
-                                Staked <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 6)" style="cursor: pointer;">
-                                Payout <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 7)" style="cursor: pointer;">
-                                Profit <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 8)" style="cursor: pointer;">
-                                Joined <span class="sort-icon">↕</span>
-                            </th>
-                            <th onclick="sortTable('users-table', 9)" style="cursor: pointer;">
-                                Status <span class="sort-icon">↕</span>
-                            </th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="users-tbody">
-                        <tr><td colspan="11" class="loading">Loading users...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-            
-            <!-- Pagination -->
-            <div id="users-pagination" class="pagination" style="display: none;">
-                <button onclick="goToUsersPage(1)" id="users-first-page">« First</button>
-                <button onclick="goToUsersPage(currentUsersPage - 1)" id="users-prev-page">‹ Previous</button>
-                <div id="users-page-numbers"></div>
-                <button onclick="goToUsersPage(currentUsersPage + 1)" id="users-next-page">Next ›</button>
-                <button onclick="goToUsersPage(totalUsersPages)" id="users-last-page">Last »</button>
+            <!-- Casino Users Table -->
+            <div id="casino-users" class="user-tab-content" style="display: none;">
+                <div class="controls">
+                    <button onclick="loadCasinoUsers()">🔄 Refresh Casino Users</button>
+                </div>
+                
+                <!-- Pagination Controls for Casino -->
+                <div class="pagination-controls">
+                    <label for="casino-users-per-page">Users per page:</label>
+                    <select id="casino-users-per-page" onchange="changeCasinoUsersPerPage()">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <span id="casino-users-pagination-info" class="pagination-info">Loading...</span>
+                </div>
+                
+                <div class="table-container">
+                    <table id="casino-users-table">
+                        <thead>
+                            <tr>
+                                <th onclick="sortTable('casino-users-table', 0)" style="cursor: pointer;">
+                                    ID <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 1)" style="cursor: pointer;">
+                                    Username <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 2)" style="cursor: pointer;">
+                                    Email <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 3)" style="cursor: pointer;">
+                                    Balance <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 4)" style="cursor: pointer;">
+                                    Games <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 5)" style="cursor: pointer;">
+                                    Staked <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 6)" style="cursor: pointer;">
+                                    Payout <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 7)" style="cursor: pointer;">
+                                    Profit <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 8)" style="cursor: pointer;">
+                                    Joined <span class="sort-icon">↕</span>
+                                </th>
+                                <th onclick="sortTable('casino-users-table', 9)" style="cursor: pointer;">
+                                    Status <span class="sort-icon">↕</span>
+                                </th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="casino-users-tbody">
+                            <tr><td colspan="11" class="loading">Loading casino users...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination for Casino -->
+                <div id="casino-users-pagination" class="pagination" style="display: none;">
+                    <button onclick="goToCasinoUsersPage(1)" id="casino-users-first-page">« First</button>
+                    <button onclick="goToCasinoUsersPage(currentCasinoUsersPage - 1)" id="casino-users-prev-page">‹ Previous</button>
+                    <div id="casino-users-page-numbers"></div>
+                    <button onclick="goToCasinoUsersPage(currentCasinoUsersPage + 1)" id="casino-users-next-page">Next ›</button>
+                    <button onclick="goToCasinoUsersPage(totalCasinoUsersPages)" id="casino-users-last-page">Last »</button>
+                </div>
             </div>
         </div>
         
@@ -2604,10 +3109,11 @@ RICH_ADMIN_TEMPLATE = '''
                     <div class="form-group">
                         <label>Report Type:</label>
                         <select id="report-type">
-                            <option value="revenue">Revenue Analysis</option>
+                            <option value="revenue">Revenue Analysis (Sportsbook + Casino)</option>
                             <option value="user-activity">User Activity</option>
                             <option value="trading-patterns">Trading Patterns</option>
                             <option value="sport-performance">Sport Performance</option>
+                            <option value="casino-performance">Casino Performance</option>
                         </select>
                         <div class="form-help-text">Choose the type of analysis you want to generate</div>
                     </div>
@@ -2625,13 +3131,6 @@ RICH_ADMIN_TEMPLATE = '''
                 </div>
                 
                 <div class="form-row">
-                    <div class="form-group">
-                        <label>Sport Filter:</label>
-                        <select id="sport-filter-report">
-                            <option value="">All Sports</option>
-                        </select>
-                        <div class="form-help-text">Filter results by specific sports (optional)</div>
-                    </div>
                     <div class="form-group">
                         <label>Date Range:</label>
                         <div class="date-inputs">
@@ -2755,10 +3254,136 @@ RICH_ADMIN_TEMPLATE = '''
             }
         }
         
+        // Casino toggle functionality
+        function toggleCasino() {
+            const checkbox = document.getElementById('casinoToggle');
+            const status = document.getElementById('casinoStatus');
+            const isEnabled = checkbox.checked;
+            
+            // Update status text and class
+            status.textContent = isEnabled ? 'Enabled' : 'Disabled';
+            status.className = `casino-status ${isEnabled ? 'enabled' : 'disabled'}`;
+            
+            // Send API request to update casino setting
+            fetch('/api/admin/' + SUBDOMAIN + '/toggle-casino', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ casino_enabled: isEnabled })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('Casino setting updated:', data.message);
+                    
+                    // Show or hide Casino tab based on new setting
+                    const casinoTab = document.getElementById('casino-tab');
+                    if (casinoTab) {
+                        if (isEnabled) {
+                            casinoTab.style.display = 'inline-block';
+                        } else {
+                            casinoTab.style.display = 'none';
+                            // If casino is disabled and we're on casino tab, switch to sportsbook
+                            if (casinoTab.classList.contains('active')) {
+                                switchUserTab('sportsbook');
+                            }
+                        }
+                    }
+                } else {
+                    console.error('Error updating casino setting:', data.error);
+                    // Revert the toggle if there was an error
+                    checkbox.checked = !isEnabled;
+                    status.textContent = !isEnabled ? 'Enabled' : 'Disabled';
+                    status.className = `casino-status ${!isEnabled ? 'enabled' : 'disabled'}`;
+                    alert('Error updating casino setting: ' + data.error);
+                }
+            })
+            .catch(err => {
+                console.error('Error updating casino setting:', err);
+                // Revert the toggle if there was an error
+                checkbox.checked = !isEnabled;
+                status.textContent = !isEnabled ? 'Enabled' : 'Disabled';
+                status.className = `casino-status ${!isEnabled ? 'enabled' : 'disabled'}`;
+                alert('Failed to update casino setting');
+            });
+        }
+        
+        // Load casino setting on page load
+        function loadCasinoSetting() {
+            fetch('/api/admin/' + SUBDOMAIN + '/casino-setting')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        const checkbox = document.getElementById('casinoToggle');
+                        const status = document.getElementById('casinoStatus');
+                        const casinoTab = document.getElementById('casino-tab');
+                        
+                        checkbox.checked = data.casino_enabled;
+                        status.textContent = data.casino_enabled ? 'Enabled' : 'Disabled';
+                        status.className = `casino-status ${data.casino_enabled ? 'enabled' : 'disabled'}`;
+                        
+                        // Show or hide Casino tab based on casino setting
+                        if (casinoTab) {
+                            if (data.casino_enabled) {
+                                casinoTab.style.display = 'inline-block';
+                            } else {
+                                casinoTab.style.display = 'none';
+                                // If casino is disabled and we're on casino tab, switch to sportsbook
+                                if (casinoTab.classList.contains('active')) {
+                                    switchUserTab('sportsbook');
+                                }
+                            }
+                        }
+                    }
+                })
+                .catch(err => console.error('Error loading casino setting:', err));
+        }
+        
+        // Load referral code on page load
+        function loadReferralCode() {
+            fetch('/' + SUBDOMAIN + '/admin/api/referral-code')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('referralCodeDisplay').textContent = data.referral_code;
+                    } else {
+                        document.getElementById('referralCodeDisplay').textContent = 'Not found';
+                    }
+                })
+                .catch(err => {
+                    console.error('Error loading referral code:', err);
+                    document.getElementById('referralCodeDisplay').textContent = 'Error';
+                });
+        }
+        
+        // Copy referral code to clipboard
+        function copyReferralCode() {
+            const referralCode = document.getElementById('referralCodeDisplay').textContent;
+            if (referralCode && referralCode !== 'Loading...' && referralCode !== 'Not found' && referralCode !== 'Error') {
+                navigator.clipboard.writeText(referralCode).then(() => {
+                    // Show temporary success message
+                    const originalText = document.getElementById('referralCodeDisplay').textContent;
+                    document.getElementById('referralCodeDisplay').textContent = 'Copied!';
+                    document.getElementById('referralCodeDisplay').style.background = 'rgba(0, 255, 0, 0.3)';
+                    
+                    setTimeout(() => {
+                        document.getElementById('referralCodeDisplay').textContent = originalText;
+                        document.getElementById('referralCodeDisplay').style.background = 'rgba(0, 0, 0, 0.2)';
+                    }, 1000);
+                }).catch(err => {
+                    console.error('Failed to copy: ', err);
+                    alert('Failed to copy referral code');
+                });
+            }
+        }
+        
         // Initialize page when DOM is loaded
         document.addEventListener('DOMContentLoaded', function() {
             // Load betting events on page load
             loadBettingEvents();
+            // Load casino setting on page load
+            loadCasinoSetting();
+            // Load referral code on page load
+            loadReferralCode();
             
             // Add event listeners for filters
             const sportFilter = document.getElementById('sport-filter');
@@ -2965,7 +3590,10 @@ RICH_ADMIN_TEMPLATE = '''
                 const data = await response.json();
                 
                 if (data.success) {
-                    loadUsers(); // Reload the users table
+                    // Reload both tables since disabling affects both sportsbook and casino
+                    loadUsers();
+                    loadCasinoUsers();
+                    alert(data.message || 'User status updated successfully');
                 } else {
                     alert('Error: ' + data.error);
                 }
@@ -2973,6 +3601,146 @@ RICH_ADMIN_TEMPLATE = '''
             } catch (error) {
                 alert('Error toggling user status: ' + error.message);
             }
+        }
+        
+        // Sub-tab switching function
+        function switchUserTab(tabName) {
+            // Hide all tab contents
+            document.getElementById('sportsbook-users').style.display = 'none';
+            document.getElementById('casino-users').style.display = 'none';
+            
+            // Remove active class from all tabs
+            document.getElementById('sportsbook-tab').classList.remove('active');
+            document.getElementById('casino-tab').classList.remove('active');
+            document.getElementById('sportsbook-tab').style.borderBottomColor = 'transparent';
+            document.getElementById('casino-tab').style.borderBottomColor = 'transparent';
+            document.getElementById('sportsbook-tab').style.color = '#64748b';
+            document.getElementById('casino-tab').style.color = '#64748b';
+            
+            // Show selected tab and update styles
+            if (tabName === 'sportsbook') {
+                document.getElementById('sportsbook-users').style.display = 'block';
+                document.getElementById('sportsbook-tab').classList.add('active');
+                document.getElementById('sportsbook-tab').style.borderBottomColor = '#4ade80';
+                document.getElementById('sportsbook-tab').style.color = '#1e293b';
+            } else if (tabName === 'casino') {
+                document.getElementById('casino-users').style.display = 'block';
+                document.getElementById('casino-tab').classList.add('active');
+                document.getElementById('casino-tab').style.borderBottomColor = '#4ade80';
+                document.getElementById('casino-tab').style.color = '#1e293b';
+                loadCasinoUsers(); // Load casino users when switching to casino tab
+            }
+        }
+        
+        // Casino Users Pagination Variables
+        let currentCasinoUsersPage = 1;
+        let totalCasinoUsersPages = 1;
+        let totalCasinoUsers = 0;
+        
+        // Load Casino Users Function
+        async function loadCasinoUsers(page = 1) {
+            try {
+                currentCasinoUsersPage = page;
+                const perPage = parseInt(document.getElementById('casino-users-per-page').value);
+                
+                const response = await fetch(`/${SUBDOMAIN}/admin/api/casino-users?page=${page}&per_page=${perPage}`);
+                const data = await response.json();
+                
+                if (data.error) {
+                    document.getElementById('casino-users-tbody').innerHTML = 
+                        `<tr><td colspan="11" class="error">Error: ${data.error}</td></tr>`;
+                    return;
+                }
+                
+                totalCasinoUsers = data.total;
+                totalCasinoUsersPages = Math.ceil(data.total / perPage);
+                
+                // Update pagination info
+                document.getElementById('casino-users-pagination-info').textContent = 
+                    `Showing ${((page - 1) * perPage) + 1}-${Math.min(page * perPage, data.total)} of ${data.total} users`;
+                
+                // Display casino users
+                const tbody = document.getElementById('casino-users-tbody');
+                if (data.users.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="11" class="loading">No casino users found</td></tr>';
+                    return;
+                }
+                
+                tbody.innerHTML = data.users.map(user => {
+                    const statusClass = user.is_active ? 'active' : 'inactive';
+                    const statusText = user.is_active ? 'Active' : 'Disabled';
+                    const profit = user.profit || 0;
+                    const profitClass = profit >= 0 ? 'positive' : 'negative';
+                    
+                    return `
+                        <tr>
+                            <td data-sort="${user.id}">${user.id}</td>
+                            <td data-sort="${user.username}">${user.username}</td>
+                            <td data-sort="${user.email}">${user.email}</td>
+                            <td data-sort="${user.balance}">$${user.balance.toFixed(2)}</td>
+                            <td data-sort="${user.total_games}">${user.total_games || 0}</td>
+                            <td data-sort="${user.total_staked}">$${(user.total_staked || 0).toFixed(2)}</td>
+                            <td data-sort="${user.total_payout}">$${(user.total_payout || 0).toFixed(2)}</td>
+                            <td data-sort="${profit}" class="${profitClass}">$${profit.toFixed(2)}</td>
+                            <td data-sort="${user.created_at}">${new Date(user.created_at).toLocaleDateString()}</td>
+                            <td data-sort="${user.is_active}"><span class="badge ${statusClass}">${statusText}</span></td>
+                            <td>
+                                <button class="btn-sm ${user.is_active ? 'btn-danger' : 'btn-success'}" 
+                                        onclick="toggleUserStatus(${user.id})">
+                                    ${user.is_active ? 'Disable' : 'Enable'}
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+                
+                // Update pagination controls
+                updateCasinoUsersPagination();
+                
+            } catch (error) {
+                document.getElementById('casino-users-tbody').innerHTML = 
+                    `<tr><td colspan="11" class="error">Error loading casino users: ${error.message}</td></tr>`;
+            }
+        }
+        
+        function updateCasinoUsersPagination() {
+            const pagination = document.getElementById('casino-users-pagination');
+            const pageNumbers = document.getElementById('casino-users-page-numbers');
+            
+            if (totalCasinoUsersPages <= 1) {
+                pagination.style.display = 'none';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            
+            // Update button states
+            document.getElementById('casino-users-first-page').disabled = currentCasinoUsersPage === 1;
+            document.getElementById('casino-users-prev-page').disabled = currentCasinoUsersPage === 1;
+            document.getElementById('casino-users-next-page').disabled = currentCasinoUsersPage === totalCasinoUsersPages;
+            document.getElementById('casino-users-last-page').disabled = currentCasinoUsersPage === totalCasinoUsersPages;
+            
+            // Generate page numbers
+            let pageNumbersHtml = '';
+            const startPage = Math.max(1, currentCasinoUsersPage - 2);
+            const endPage = Math.min(totalCasinoUsersPages, currentCasinoUsersPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageNumbersHtml += `<button onclick="goToCasinoUsersPage(${i})" class="${i === currentCasinoUsersPage ? 'active' : ''}">${i}</button>`;
+            }
+            
+            pageNumbers.innerHTML = pageNumbersHtml;
+        }
+        
+        function goToCasinoUsersPage(page) {
+            if (page >= 1 && page <= totalCasinoUsersPages) {
+                loadCasinoUsers(page);
+            }
+        }
+        
+        function changeCasinoUsersPerPage() {
+            currentCasinoUsersPage = 1;
+            loadCasinoUsers(1);
         }
         
         
@@ -3034,23 +3802,10 @@ RICH_ADMIN_TEMPLATE = '''
         
         async function loadReportBuilder() {
             try {
-                // Load available sports for report filtering
-                const response = await fetch(`/${SUBDOMAIN}/admin/api/reports/available-sports`);
-                const data = await response.json();
-                
-                const sportFilter = document.getElementById('sport-filter-report');
-                sportFilter.innerHTML = '<option value="">All Sports</option>';
-                
-                if (data.sports) {
-                    data.sports.forEach(sport => {
-                        const option = document.createElement('option');
-                        option.value = sport;
-                        option.textContent = sport;
-                        sportFilter.appendChild(option);
-                    });
-                }
+                // Report builder is now ready - no need to load sports filter
+                console.log('Report builder loaded successfully');
             } catch (error) {
-                console.error('Error loading sports for report builder:', error);
+                console.error('Error loading report builder:', error);
             }
         }
         
@@ -3059,7 +3814,6 @@ RICH_ADMIN_TEMPLATE = '''
                 const reportType = document.getElementById('report-type').value;
                 const startDate = document.getElementById('start-date').value;
                 const endDate = document.getElementById('end-date').value;
-                const sportFilter = document.getElementById('sport-filter-report').value;
                 const groupBy = document.getElementById('group-by').value;
                 
                 // Show loading state
@@ -3081,7 +3835,6 @@ RICH_ADMIN_TEMPLATE = '''
                         report_type: reportType,
                         date_from: startDate || null,
                         date_to: endDate || null,
-                        sport_filter: sportFilter || null,
                         group_by: groupBy
                     })
                 });
@@ -3117,10 +3870,11 @@ RICH_ADMIN_TEMPLATE = '''
         
         function getReportHeaders(reportType, groupBy) {
             const headerMap = {
-                'revenue': ['Date', 'Sport', 'Total Bets', 'Total Stakes', 'Revenue', 'Profit Margin'],
+                'revenue': ['Date', 'Category', 'Platform', 'Total Bets', 'Total Stakes', 'Revenue', 'Profit Margin'],
                 'user-activity': ['Username', 'Email', 'Total Bets', 'Total Staked', 'Payout', 'Profit', 'Join Date'],
                 'betting-patterns': ['Date', 'Sport', 'Bet Type', 'Count', 'Total Amount', 'Win Rate'],
-                'sport-performance': ['Sport', 'Total Bets', 'Total Stakes', 'Won Bets', 'Lost Bets', 'Revenue', 'Win Rate']
+                'sport-performance': ['Sport', 'Total Bets', 'Total Stakes', 'Won Bets', 'Lost Bets', 'Revenue', 'Win Rate'],
+                'casino-performance': ['Game', 'Total Games', 'Total Stakes', 'Won Games', 'Lost Games', 'Revenue', 'Win Rate']
             };
             
             return headerMap[reportType] || ['Data', 'Value'];
@@ -3131,7 +3885,8 @@ RICH_ADMIN_TEMPLATE = '''
                 case 'revenue':
                     return [
                         row.bet_date || row.report_date || 'N/A',
-                        row.sport_name || 'N/A',
+                        row.category || row.sport_name || 'N/A',
+                        row.platform || 'N/A',
                         row.total_bets || 0,
                         `$${(row.total_stakes || 0).toFixed(2)}`,
                         `$${(row.revenue || 0).toFixed(2)}`,
@@ -3166,6 +3921,16 @@ RICH_ADMIN_TEMPLATE = '''
                         `$${(row.sport_revenue || 0).toFixed(2)}`,
                         `${(row.win_rate || 0).toFixed(1)}%`
                     ];
+                case 'casino-performance':
+                    return [
+                        row.game_name || 'N/A',
+                        row.total_games || 0,
+                        `$${(row.total_stakes || 0).toFixed(2)}`,
+                        row.won_games || 0,
+                        row.lost_games || 0,
+                        `$${(row.casino_revenue || 0).toFixed(2)}`,
+                        `${(row.win_rate || 0).toFixed(1)}%`
+                    ];
                 default:
                     return Object.values(row);
             }
@@ -3176,7 +3941,8 @@ RICH_ADMIN_TEMPLATE = '''
                 case 'revenue':
                     return [
                         new Date(row.bet_date || row.report_date || Date.now()).getTime(),
-                        row.sport_name || '',
+                        row.category || row.sport_name || '',
+                        row.platform || '',
                         row.total_bets || 0,
                         row.total_stakes || 0,
                         row.revenue || 0,
@@ -3209,6 +3975,16 @@ RICH_ADMIN_TEMPLATE = '''
                         row.won_bets || 0,
                         row.lost_bets || 0,
                         row.sport_revenue || 0,
+                        row.win_rate || 0
+                    ];
+                case 'casino-performance':
+                    return [
+                        row.game_name || '',
+                        row.total_games || 0,
+                        row.total_stakes || 0,
+                        row.won_games || 0,
+                        row.lost_games || 0,
+                        row.casino_revenue || 0,
                         row.win_rate || 0
                     ];
                 default:

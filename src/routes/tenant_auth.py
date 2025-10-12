@@ -108,6 +108,23 @@ def tenant_register(subdomain):
             print(f"⚠️ Warning: Could not get default balance for operator {operator['id']}: {e}")
             default_balance = 1000.0  # Fall back to default
         
+        # Create Web3 wallet for the user via Crossmint
+        web3_wallet_address = None
+        web3_wallet_key = None
+        try:
+            from src.services.crossmint_aptos_service import get_crossmint_service
+            crossmint_service = get_crossmint_service()
+            web3_wallet_address, web3_wallet_key = crossmint_service.create_wallet(
+                user_id=0,  # Will be updated after user creation
+                email=email,
+                username=username,
+                operator_id=operator['id']
+            )
+            logger.info(f"✅ Created Web3 wallet for {username}: {web3_wallet_address}")
+        except Exception as wallet_error:
+            logger.warning(f"⚠️ Failed to create Web3 wallet for {username}: {wallet_error}")
+            # Continue registration even if Web3 wallet creation fails
+        
         new_user = User(
             username=username,
             email=email,
@@ -115,13 +132,28 @@ def tenant_register(subdomain):
             balance=default_balance,
             sportsbook_operator_id=operator['id'],
             is_active=True,
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
+            web3_wallet_address=web3_wallet_address,
+            web3_wallet_key=web3_wallet_key
         )
         
         current_app.db.session.add(new_user)
         current_app.db.session.commit()
         
         logger.info(f"New user registered for {operator['sportsbook_name']}: {username}")
+        
+        # Credit initial balance to Web3 wallet via custodial USDT contract
+        if web3_wallet_address and default_balance > 0:
+            try:
+                from src.services.crossmint_aptos_service import get_crossmint_service
+                crossmint_service = get_crossmint_service()
+                tx_hash = crossmint_service.deposit(web3_wallet_address, default_balance)
+                if tx_hash:
+                    logger.info(f"✅ Credited {default_balance} USDT to Web3 wallet - tx: {tx_hash}")
+                else:
+                    logger.warning(f"⚠️ Failed to credit initial balance to Web3 wallet - admin wallet may not be configured")
+            except Exception as deposit_error:
+                logger.warning(f"⚠️ Failed to deposit initial balance to Web3 wallet: {deposit_error}")
         
         return jsonify({
             'success': True,
@@ -380,11 +412,23 @@ def tenant_logout_redirect(subdomain):
         # Clear only tenant session data, leaving superadmin intact
         log_out_tenant(subdomain)
         
-        # Also clear main user session data
+        # CRITICAL: Also clear ALL user and operator session data
         session.pop('user_id', None)
         session.pop('username', None)
         session.pop('email', None)
         session.pop('balance', None)
+        session.pop('user_data', None)  # CRITICAL: This is what was missing!
+        session.pop('operator_id', None)
+        session.pop('operator_name', None)
+        session.pop('operator_subdomain', None)
+        session.pop('original_tenant', None)
+        session.pop('role', None)
+        session.pop('admin_id', None)
+        session.pop('admin_operator_id', None)
+        session.pop('admin_subdomain', None)
+        
+        # Mark session as modified to ensure changes are saved
+        session.modified = True
         
         logger.info(f"User logged out from subdomain '{subdomain}' and redirected to main page")
         
@@ -494,8 +538,11 @@ def get_current_user_profile():
         logger.info(f"🔍 Session data: {dict(session)}")
         
         # Check if user is authenticated (user_id only - operator is context, not identity)
-        if not session.get('user_id'):
+        # Check both possible session formats: user_id directly or user_data.id
+        user_id = session.get('user_id') or (session.get('user_data', {}).get('id') if session.get('user_data') else None)
+        if not user_id:
             logger.warning("❌ No user_id in session - user not authenticated")
+            logger.warning(f"❌ Available session keys: {list(session.keys())}")
             return jsonify({
                 'success': False,
                 'error': 'Authentication required'
@@ -509,15 +556,15 @@ def get_current_user_profile():
             pass  # Continue to database fetch for fresh balance
         
         # 2) Get user details from database using the SAME SQLAlchemy session
-        user_id = session['user_id']
+        # user_id already extracted above
         operator_id = session.get('operator_id')  # Optional - may be missing after OAuth
         
         logger.info(f"🔍 Looking up user_id: {user_id}, operator_id: {operator_id}")
         
         # ✅ Use db_compat for consistency with OAuth callback
         try:
-            from src.db_compat import connect
-            with connect() as conn:
+            from src.db_compat import connection_ctx
+            with connection_ctx() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT id, username, email, balance, is_active, created_at, last_login, sportsbook_operator_id FROM users WHERE id = %s", (user_id,))
                     user = cursor.fetchone()
@@ -537,8 +584,8 @@ def get_current_user_profile():
             }), 404
             
         # Only check operator_id if it exists in session
-        # Note: user is now a tuple from db_compat, not a SQLAlchemy object
-        if operator_id and user[7] != operator_id:
+        # Note: user is now a dict from db_compat with dict_row
+        if operator_id and user.get('sportsbook_operator_id') != operator_id:
             return jsonify({
                 'success': False,
                 'error': 'User not found for this operator'
@@ -547,14 +594,14 @@ def get_current_user_profile():
         # 3) Build user data from raw database result
         logger.info(f"✅ User found: {user}")
         user_data = {
-            'id': user[0],
-            'username': user[1], 
-            'email': user[2],
-            'balance': float(user[3]) if user[3] else 0.0,
-            'is_active': bool(user[4]) if user[4] is not None else True,
-            'created_at': user[5].isoformat() if user[5] else None,
-            'last_login': user[6].isoformat() if user[6] else None,
-            'sportsbook_operator_id': user[7] if user[7] else None
+            'id': user['id'],
+            'username': user['username'], 
+            'email': user['email'],
+            'balance': float(user['balance']) if user['balance'] else 0.0,
+            'is_active': bool(user['is_active']) if user['is_active'] is not None else True,
+            'created_at': user['created_at'].isoformat() if user['created_at'] else None,
+            'last_login': user['last_login'].isoformat() if user['last_login'] else None,
+            'sportsbook_operator_id': user['sportsbook_operator_id'] if user['sportsbook_operator_id'] else None
         }
         logger.info(f"✅ User data built: {user_data}")
         
@@ -573,8 +620,24 @@ def get_current_user_profile():
         
         # Return in the format expected by the frontend
         # Always return fresh user_data (never cached balance)
+        # Convert datetime objects to strings for JSON serialization
+        def safe_isoformat(dt):
+            if dt is None:
+                return None
+            try:
+                return dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
+            except Exception:
+                return str(dt)
+        
         response_data = {
-            **user_data,
+            'id': user_data.get('id'),
+            'username': user_data.get('username'),
+            'email': user_data.get('email'),
+            'balance': user_data.get('balance'),
+            'is_active': user_data.get('is_active'),
+            'created_at': safe_isoformat(user_data.get('created_at')),
+            'last_login': safe_isoformat(user_data.get('last_login')),
+            'sportsbook_operator_id': user_data.get('sportsbook_operator_id'),
             'operator_required': operator_id is None
         }
         response = jsonify(response_data)

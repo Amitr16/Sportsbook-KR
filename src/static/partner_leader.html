@@ -349,6 +349,10 @@
                 <div class="stat-label">Total Users</div>
             </div>
             <div class="stat-card">
+                <div class="stat-value" id="totalTrades">-</div>
+                <div class="stat-label">Total Trades</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-value" id="avgVolume">-</div>
                 <div class="stat-label">Avg Volume (Settled)</div>
             </div>
@@ -368,12 +372,13 @@
                             <th>Sportsbook</th>
                             <th style="text-align: center;">Users</th>
                             <th style="text-align: right;">Volume</th>
+                            <th style="text-align: center;">Trade Count</th>
                             <th style="text-align: center;">Status</th>
                         </tr>
                     </thead>
                     <tbody id="leaderboardBody">
                         <tr>
-                            <td colspan="5" class="loading">Loading leaderboard...</td>
+                            <td colspan="6" class="loading">Loading leaderboard...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -413,7 +418,7 @@
         // Load leaderboard data
         async function loadLeaderboard() {
             try {
-                document.getElementById('leaderboardBody').innerHTML = '<tr><td colspan="5" class="loading">Loading leaderboard...</td></tr>';
+                document.getElementById('leaderboardBody').innerHTML = '<tr><td colspan="6" class="loading">Loading leaderboard...</td></tr>';
                 
                 // Load all partners data first for totals calculation
                 await loadAllPartnersData();
@@ -440,7 +445,7 @@
             } catch (error) {
                 console.error('Error loading leaderboard:', error);
                 document.getElementById('leaderboardBody').innerHTML = 
-                    '<tr><td colspan="5" class="error">Failed to load leaderboard. Please try again.</td></tr>';
+                    '<tr><td colspan="6" class="error">Failed to load leaderboard. Please try again.</td></tr>';
             }
         }
 
@@ -478,13 +483,14 @@
             }
             
             if (partners.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="error">No partners found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="error">No partners found</td></tr>';
                 return;
             }
 
             tbody.innerHTML = partners.map((partner, index) => {
                 const rank = (currentPage - 1) * 20 + index + 1;
                 const volume = parseFloat(partner.total_volume || 0);
+                const tradeCount = parseInt(partner.trade_count || 0);
                 const userCount = parseInt(partner.user_count || 0);
                 const isActive = partner.is_active;
                 
@@ -495,16 +501,12 @@
                 
                 // Format delta values with + or - prefix
                 const formatDelta = (value) => {
-                    if (value > 0) return `+${value}`;
-                    if (value < 0) return `${value}`;
                     return value.toString();
                 };
                 
                 const formatDeltaCurrency = (value) => {
                     const numValue = parseFloat(value);
                     if (Math.abs(numValue) < 0.01) return `$${numValue.toFixed(2)}`;
-                    if (numValue > 0) return `+$${numValue.toFixed(2)}`;
-                    if (numValue < 0) return `-$${Math.abs(numValue).toFixed(2)}`;
                     return `$${numValue.toFixed(2)}`;
                 };
                 
@@ -522,6 +524,7 @@
                         </td>
                         <td class="user-count">${formatUserCount(userCount)}</td>
                         <td class="amount">${formatDeltaCurrency(volume)}</td>
+                        <td class="user-count">${formatDelta(tradeCount)}</td>
                         <td class="user-count">
                             <span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">
                                 ${isActive ? 'Active' : 'Inactive'}
@@ -539,31 +542,31 @@
             // Calculate totals from ALL partners data (stored in window.allPartnersData)
             let totalVolume = 0;
             let totalUsers = 0;
+            let totalTrades = 0;
             
             if (window.allPartnersData) {
                 window.allPartnersData.forEach(partner => {
                     totalVolume += parseFloat(partner.total_volume) || 0;
                     totalUsers += parseFloat(partner.user_count) || 0;
+                    totalTrades += parseInt(partner.trade_count) || 0;
                 });
             }
             
-            // Show delta values with + or - prefix
+            // Format values without + sign
             const formatDelta = (value) => {
                 const numValue = parseFloat(value);
                 if (Math.abs(numValue) < 0.01) return `$${numValue.toFixed(2)}`;
-                if (numValue > 0) return `+$${numValue.toFixed(2)}`;
-                if (numValue < 0) return `-$${Math.abs(numValue).toFixed(2)}`;
                 return `$${numValue.toFixed(2)}`;
             };
             
-            // Format volume values without + sign
+            // Format volume values
             const formatVolume = (value) => {
-                if (value < 0) return `-$${Math.abs(value).toFixed(2)}`;
                 return `$${value.toFixed(2)}`;
             };
             
             document.getElementById('totalUsers').textContent = totalUsers.toLocaleString();
             document.getElementById('totalVolume').textContent = formatVolume(totalVolume);
+            document.getElementById('totalTrades').textContent = totalTrades.toLocaleString();
             
             // Calculate average volume delta per partner
             const avgVolumeDelta = stats.total_partners > 0 ? totalVolume / stats.total_partners : 0;

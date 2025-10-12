@@ -14,11 +14,33 @@ primary_region = "iad"
   # ensure env.local never overrides prod values on Fly
   IGNORE_ENV_LOCAL = "1"
   
+  # Process type - will be overridden per process
+  PROCESS_TYPE = "web"
+  
   # Memory & cache management
   DISABLE_CACHE_WARMUP = "true"
   CACHE_TTL_SEC = "180"
   MAX_EVENTS_PER_SPORT = "2000"
   MEM_SOFT_LIMIT_MB = "1400"
+  
+  # Database pool settings - CONSERVATIVE per-process pools (scale horizontally)
+  # Separate pools per process type for isolation
+  
+  # Web process: conservative pool size (20 per instance, scale via replicas)
+  DB_WEB_POOL_MAX = "20"
+  DB_POOL_MIN = "2"
+  DB_CONN_TIMEOUT = "5"
+  
+  # Worker processes: small dedicated pools
+  DB_WORKER_POOL_MAX = "5"
+  
+  # Legacy settings (backward compatibility)
+  DB_MAX_CONN = "20"
+  DB_IDLE_TIMEOUT = "60"
+  DB_POOL_MAX = "20"
+  DB_POOL_TIMEOUT = "5"
+  DB_POOL_MAX_LIFETIME = "1800"
+  DB_POOL_MAX_IDLE = "60"
   
   # Gunicorn settings for memory optimization
   WEB_WORKERS = "1"
@@ -26,7 +48,16 @@ primary_region = "iad"
   GUNICORN_PRELOAD = "false"
 
 [processes]
-  app = "python run.py"
+  web = "python run.py"
+  worker_odds = "python -m src.prematch_odds_service"
+  worker_settlement = "python -m src.bet_settlement_service"
+
+# Process-specific environment variables
+[env.worker_odds]
+  PROCESS_TYPE = "worker_odds"
+
+[env.worker_settlement]
+  PROCESS_TYPE = "worker_settlement"
 
 [http_service]
   internal_port = 8080
@@ -34,7 +65,12 @@ primary_region = "iad"
   auto_start_machines = true
   auto_stop_machines = false
   min_machines_running = 1
-  processes = ["app"]
+  processes = ["web"]
+  
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 40
+    hard_limit = 60
 
 [[checks]]
   name = "http"
@@ -43,7 +79,7 @@ primary_region = "iad"
   timeout = "3s"
   grace_period = "20s"
   [checks.http]
-    path = "/health"
+    path = "/healthz"
 
 [[vm]]
   cpu_kind = "shared"

@@ -11,8 +11,12 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-# Socket.IO for WebSockets
+# Socket.IO for WebSockets (with eventlet for async support)
 python-socketio==5.10.0
+eventlet==0.35.2
+dnspython==2.6.1  # Required by eventlet
+pyopenssl==24.1.0  # Compatible with eventlet 0.35.2
+cryptography==42.0.5  # Compatible with pyopenssl
 
 # Database & ORM
 psycopg[binary,pool]==3.1.19

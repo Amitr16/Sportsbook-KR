@@ -54,51 +54,83 @@ def get_user_leaderboard():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get total count of profitable users only (profit > 0)
+        # Get total count of profitable users only (profit > 0) - includes casino data
         cursor.execute("""
             SELECT 
                 u.id
             FROM users u
-            LEFT JOIN bets b ON u.id = b.user_id
+            LEFT JOIN (
+                SELECT 
+                    user_id,
+                    SUM(CASE WHEN status IN ('won', 'lost') THEN stake ELSE 0 END) as staked,
+                    SUM(CASE WHEN status = 'won' THEN potential_return ELSE 0 END) as payout
+                FROM bets
+                GROUP BY user_id
+            ) sb ON u.id = sb.user_id
+            LEFT JOIN (
+                SELECT 
+                    user_id,
+                    SUM(stake) as staked,
+                    SUM(payout) as payout
+                FROM game_round
+                GROUP BY user_id
+            ) casino ON u.id::text = casino.user_id
             LEFT JOIN (
                 SELECT username, staked, payout, profit
                 FROM User_leader_backup 
                 WHERE backup_date = (SELECT MAX(backup_date) FROM User_leader_backup)
             ) ub ON u.username = ub.username
-            GROUP BY u.id, u.username, u.email, ub.staked, ub.payout, ub.profit
-            HAVING (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
-                   COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+            WHERE ((COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) - 
+                   (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0))) - 
                    COALESCE(ub.profit, 0) > 0
         """)
         profitable_users = cursor.fetchall()
         total_users = len(profitable_users)
         
-        # Get user leaderboard data with profit calculation (only settled bets)
+        # Get user leaderboard data with profit calculation (sportsbook + casino)
         # Show delta from backup table if available - ONLY PROFITABLE USERS (profit > 0)
+        # Using subqueries to avoid cartesian product from JOIN
         cursor.execute("""
             SELECT 
                 u.username,
                 u.email,
-                COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as current_staked,
-                COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) as current_payout,
-                COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
-                COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as current_profit,
+                -- Sportsbook staked + Casino staked
+                (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0)) as current_staked,
+                -- Sportsbook payout + Casino payout  
+                (COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) as current_payout,
+                -- Total profit: (Sportsbook payout + Casino payout) - (Sportsbook staked + Casino staked)
+                ((COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) - 
+                 (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0))) as current_profit,
                 COALESCE(ub.staked, 0) as backup_staked,
                 COALESCE(ub.payout, 0) as backup_payout,
                 COALESCE(ub.profit, 0) as backup_profit
             FROM users u
-            LEFT JOIN bets b ON u.id = b.user_id
+            LEFT JOIN (
+                SELECT 
+                    user_id,
+                    SUM(CASE WHEN status IN ('won', 'lost') THEN stake ELSE 0 END) as staked,
+                    SUM(CASE WHEN status = 'won' THEN potential_return ELSE 0 END) as payout
+                FROM bets
+                GROUP BY user_id
+            ) sb ON u.id = sb.user_id
+            LEFT JOIN (
+                SELECT 
+                    user_id,
+                    SUM(stake) as staked,
+                    SUM(payout) as payout
+                FROM game_round
+                GROUP BY user_id
+            ) casino ON u.id::text = casino.user_id
             LEFT JOIN (
                 SELECT username, staked, payout, profit
                 FROM User_leader_backup 
                 WHERE backup_date = (SELECT MAX(backup_date) FROM User_leader_backup)
             ) ub ON u.username = ub.username
-            GROUP BY u.id, u.username, u.email, ub.staked, ub.payout, ub.profit
-            HAVING (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
-                   COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+            WHERE ((COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) - 
+                   (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0))) - 
                    COALESCE(ub.profit, 0) > 0
-            ORDER BY (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
-                     COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+            ORDER BY ((COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) - 
+                     (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0))) - 
                      COALESCE(ub.profit, 0) DESC
             LIMIT ? OFFSET ?
         """, (per_page, offset))
@@ -129,7 +161,7 @@ def get_user_leaderboard():
                 'backup_profit': backup_profit
             })
         
-        # Get total statistics (only settled bets) - calculate deltas - ONLY PROFITABLE USERS
+        # Get total statistics (sportsbook + casino) - calculate deltas - ONLY PROFITABLE USERS
         cursor.execute("""
             SELECT 
                 COALESCE(SUM(profitable_users.current_staked), 0) as current_total_staked,
@@ -138,23 +170,36 @@ def get_user_leaderboard():
                 COALESCE(SUM(profitable_users.backup_payout), 0) as backup_total_payout
             FROM (
                 SELECT 
-                    COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as current_staked,
-                    COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) as current_payout,
+                    -- Sportsbook staked + Casino staked
+                    (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0)) as current_staked,
+                    -- Sportsbook payout + Casino payout
+                    (COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) as current_payout,
                     COALESCE(ub.staked, 0) as backup_staked,
-                    COALESCE(ub.payout, 0) as backup_payout,
-                    (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
-                     COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
-                     COALESCE(ub.profit, 0) as profit_delta
+                    COALESCE(ub.payout, 0) as backup_payout
                 FROM users u
-                LEFT JOIN bets b ON u.id = b.user_id
+                LEFT JOIN (
+                    SELECT 
+                        user_id,
+                        SUM(CASE WHEN status IN ('won', 'lost') THEN stake ELSE 0 END) as staked,
+                        SUM(CASE WHEN status = 'won' THEN potential_return ELSE 0 END) as payout
+                    FROM bets
+                    GROUP BY user_id
+                ) sb ON u.id = sb.user_id
+                LEFT JOIN (
+                    SELECT 
+                        user_id,
+                        SUM(stake) as staked,
+                        SUM(payout) as payout
+                    FROM game_round
+                    GROUP BY user_id
+                ) casino ON u.id::text = casino.user_id
                 LEFT JOIN (
                     SELECT username, staked, payout, profit
                     FROM User_leader_backup 
                     WHERE backup_date = (SELECT MAX(backup_date) FROM User_leader_backup)
                 ) ub ON u.username = ub.username
-                GROUP BY u.id, u.username, u.email, ub.staked, ub.payout, ub.profit
-                HAVING (COALESCE(SUM(CASE WHEN b.status = 'won' THEN b.potential_return ELSE 0 END), 0) - 
-                       COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0)) - 
+                WHERE ((COALESCE(sb.payout, 0) + COALESCE(casino.payout, 0)) - 
+                       (COALESCE(sb.staked, 0) + COALESCE(casino.staked, 0))) - 
                        COALESCE(ub.profit, 0) > 0
             ) profitable_users
         """)
@@ -230,7 +275,7 @@ def get_partner_leaderboard():
         cursor.execute("SELECT COUNT(*) FROM sportsbook_operators")
         total_partners = cursor.fetchone()[0]
         
-        # Get partner leaderboard data (only settled bets for volume)
+        # Get partner leaderboard data (sportsbook + casino volume)
         # Show delta from backup table if available
         cursor.execute("""
             SELECT 
@@ -238,19 +283,54 @@ def get_partner_leaderboard():
                 so.subdomain,
                 so.is_active,
                 COUNT(DISTINCT u.id) as current_user_count,
-                COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as current_volume,
+                -- Sportsbook volume + Casino volume
+                (COALESCE(sb_volume.volume, 0) + COALESCE(casino_volume.volume, 0)) as current_volume,
+                -- Sportsbook trade count + Casino trade count
+                (COALESCE(sb_trades.trade_count, 0) + COALESCE(casino_trades.trade_count, 0)) as current_trade_count,
                 COALESCE(pb.user_count, 0) as backup_user_count,
-                COALESCE(pb.total_volume, 0) as backup_volume
+                COALESCE(pb.total_volume, 0) as backup_volume,
+                COALESCE(pb.trade_count, 0) as backup_trade_count
             FROM sportsbook_operators so
             LEFT JOIN users u ON so.id = u.sportsbook_operator_id
-            LEFT JOIN bets b ON u.id = b.user_id
             LEFT JOIN (
-                SELECT sportsbook_name, user_count, total_volume
+                SELECT 
+                    u.sportsbook_operator_id,
+                    SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END) as volume
+                FROM users u
+                LEFT JOIN bets b ON u.id = b.user_id
+                GROUP BY u.sportsbook_operator_id
+            ) sb_volume ON so.id = sb_volume.sportsbook_operator_id
+            LEFT JOIN (
+                SELECT 
+                    u.sportsbook_operator_id,
+                    SUM(gr.stake) as volume
+                FROM users u
+                LEFT JOIN game_round gr ON u.id::text = gr.user_id
+                GROUP BY u.sportsbook_operator_id
+            ) casino_volume ON so.id = casino_volume.sportsbook_operator_id
+            LEFT JOIN (
+                SELECT 
+                    u.sportsbook_operator_id,
+                    SUM(CASE WHEN b.status IN ('won', 'lost') THEN 1 ELSE 0 END) as trade_count
+                FROM users u
+                LEFT JOIN bets b ON u.id = b.user_id
+                GROUP BY u.sportsbook_operator_id
+            ) sb_trades ON so.id = sb_trades.sportsbook_operator_id
+            LEFT JOIN (
+                SELECT 
+                    u.sportsbook_operator_id,
+                    COUNT(gr.id) as trade_count
+                FROM users u
+                LEFT JOIN game_round gr ON u.id::text = gr.user_id
+                GROUP BY u.sportsbook_operator_id
+            ) casino_trades ON so.id = casino_trades.sportsbook_operator_id
+            LEFT JOIN (
+                SELECT sportsbook_name, user_count, total_volume, trade_count
                 FROM Partner_leader_backup 
                 WHERE backup_date = (SELECT MAX(backup_date) FROM Partner_leader_backup)
             ) pb ON so.sportsbook_name = pb.sportsbook_name
-            GROUP BY so.id, so.sportsbook_name, so.subdomain, so.is_active, pb.user_count, pb.total_volume
-            ORDER BY current_volume DESC
+            GROUP BY so.id, so.sportsbook_name, so.subdomain, so.is_active, pb.user_count, pb.total_volume, pb.trade_count, sb_volume.volume, casino_volume.volume, sb_trades.trade_count, casino_trades.trade_count
+            ORDER BY (COALESCE(sb_volume.volume, 0) + COALESCE(casino_volume.volume, 0)) - COALESCE(pb.total_volume, 0) DESC
             LIMIT ? OFFSET ?
         """, (per_page, offset))
         
@@ -259,12 +339,15 @@ def get_partner_leaderboard():
             # Calculate deltas from backup
             current_user_count = int(row[3])
             current_volume = float(row[4])
-            backup_user_count = int(row[5])
-            backup_volume = float(row[6])
+            current_trade_count = int(row[5])
+            backup_user_count = int(row[6])
+            backup_volume = float(row[7])
+            backup_trade_count = int(row[8])
             
             # Calculate deltas (current - backup)
             user_count_delta = current_user_count - backup_user_count
             volume_delta = current_volume - backup_volume
+            trade_count_delta = current_trade_count - backup_trade_count
             
             partners.append({
                 'sportsbook_name': row[0],
@@ -272,38 +355,74 @@ def get_partner_leaderboard():
                 'is_active': bool(row[2]),
                 'user_count': current_user_count,  # Show absolute user count
                 'total_volume': volume_delta,      # Show delta for volume
+                'trade_count': trade_count_delta,  # Show delta for trade count
                 'backup_user_count': backup_user_count,
-                'backup_volume': backup_volume
+                'backup_volume': backup_volume,
+                'backup_trade_count': backup_trade_count
             })
         
-        # Get total statistics (only settled bets) - calculate deltas
+        # Get total statistics (sportsbook + casino volume and trade count) - calculate deltas
+        # First get sportsbook total volume and trade count
+        cursor.execute("""
+            SELECT 
+                COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as sb_total_volume,
+                COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN 1 ELSE 0 END), 0) as sb_total_trades
+            FROM users u
+            LEFT JOIN bets b ON u.id = b.user_id
+        """)
+        sb_result = cursor.fetchone()
+        sb_total_volume = float(sb_result[0])
+        sb_total_trades = int(sb_result[1])
+        
+        # Then get casino total volume and trade count
+        cursor.execute("""
+            SELECT 
+                COALESCE(SUM(gr.stake), 0) as casino_total_volume,
+                COALESCE(COUNT(gr.id), 0) as casino_total_trades
+            FROM users u
+            LEFT JOIN game_round gr ON u.id::text = gr.user_id
+        """)
+        casino_result = cursor.fetchone()
+        casino_total_volume = float(casino_result[0])
+        casino_total_trades = int(casino_result[1])
+        
+        # Finally get partner and user counts and backup data
         cursor.execute("""
             SELECT 
                 COUNT(DISTINCT so.id) as total_partners,
-                COALESCE(SUM(CASE WHEN b.status IN ('won', 'lost') THEN b.stake ELSE 0 END), 0) as current_total_volume,
                 COUNT(DISTINCT u.id) as total_users,
-                COALESCE(SUM(pb.total_volume), 0) as backup_total_volume
+                COALESCE(SUM(pb.total_volume), 0) as backup_total_volume,
+                COALESCE(SUM(pb.trade_count), 0) as backup_total_trades
             FROM sportsbook_operators so
             LEFT JOIN users u ON so.id = u.sportsbook_operator_id
-            LEFT JOIN bets b ON u.id = b.user_id
             LEFT JOIN (
-                SELECT sportsbook_name, total_volume
+                SELECT sportsbook_name, total_volume, trade_count
                 FROM Partner_leader_backup 
                 WHERE backup_date = (SELECT MAX(backup_date) FROM Partner_leader_backup)
             ) pb ON so.sportsbook_name = pb.sportsbook_name
         """)
         
         stats_row = cursor.fetchone()
-        current_total_volume = float(stats_row[1])
-        backup_total_volume = float(stats_row[3])
+        total_partners = int(stats_row[0])
+        total_users = int(stats_row[1])
+        backup_total_volume = float(stats_row[2])
+        backup_total_trades = int(stats_row[3])
         
-        # Calculate delta
+        # Calculate combined totals
+        current_total_volume = sb_total_volume + casino_total_volume
+        current_total_trades = sb_total_trades + casino_total_trades
+        
+        # Calculate deltas
         total_volume_delta = current_total_volume - backup_total_volume
+        total_trade_count_delta = current_total_trades - backup_total_trades
         
         stats = {
-            'total_partners': stats_row[0],
+            'total_partners': total_partners,
             'total_volume_delta': total_volume_delta,
-            'total_users': stats_row[2]
+            'total_trade_count_delta': total_trade_count_delta,
+            'total_users': total_users,
+            'avg_volume_delta': total_volume_delta / total_partners if total_partners > 0 else 0,
+            'avg_trade_count_delta': total_trade_count_delta / total_partners if total_partners > 0 else 0
         }
         
         # Get backup date for period display

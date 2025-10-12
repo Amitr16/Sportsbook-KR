@@ -465,6 +465,71 @@ def get_reports(subdomain):
         logger.error(f"Reports error for {subdomain}: {e}")
         return jsonify({'error': 'Failed to get reports'}), 500
 
+@comprehensive_admin_bp.route('/api/admin/<subdomain>/casino-setting')
+@admin_required
+def get_casino_setting(subdomain):
+    """Get casino enabled setting for specific operator"""
+    try:
+        operator = get_operator_by_subdomain(subdomain)
+        if not operator or session.get('admin_operator_id') != operator['id']:
+            return jsonify({'error': 'Unauthorized'}), 403
+        
+        conn = get_db_connection()
+        
+        # Get casino setting for this operator
+        casino_setting = conn.execute("""
+            SELECT casino_enabled FROM sportsbook_operators 
+            WHERE id = ?
+        """, (operator['id'],)).fetchone()
+        
+        conn.close()
+        
+        if casino_setting:
+            return jsonify({
+                'success': True,
+                'casino_enabled': casino_setting['casino_enabled']
+            })
+        else:
+            return jsonify({'error': 'Operator not found'}), 404
+        
+    except Exception as e:
+        logger.error(f"Casino setting error for {subdomain}: {e}")
+        return jsonify({'error': 'Failed to get casino setting'}), 500
+
+@comprehensive_admin_bp.route('/api/admin/<subdomain>/toggle-casino', methods=['POST'])
+@admin_required
+def toggle_casino_setting(subdomain):
+    """Toggle casino enabled setting for specific operator"""
+    try:
+        operator = get_operator_by_subdomain(subdomain)
+        if not operator or session.get('admin_operator_id') != operator['id']:
+            return jsonify({'error': 'Unauthorized'}), 403
+        
+        data = request.get_json()
+        casino_enabled = data.get('casino_enabled', True)
+        
+        conn = get_db_connection()
+        
+        # Update casino setting for this operator
+        conn.execute("""
+            UPDATE sportsbook_operators 
+            SET casino_enabled = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (casino_enabled, operator['id']))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': f"Casino {'enabled' if casino_enabled else 'disabled'} successfully",
+            'casino_enabled': casino_enabled
+        })
+        
+    except Exception as e:
+        logger.error(f"Toggle casino error for {subdomain}: {e}")
+        return jsonify({'error': 'Failed to toggle casino setting'}), 500
+
 def get_comprehensive_admin_template():
     """Get the comprehensive admin HTML template"""
     return """
@@ -533,13 +598,59 @@ def get_comprehensive_admin_template():
         .reports-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-top: 2rem; }
         .report-card { background: #f8f9fa; padding: 1.5rem; border-radius: 10px; border-left: 4px solid #667eea; }
         .report-title { font-weight: 600; margin-bottom: 1rem; color: #333; }
+        
+        /* Casino Slider Styles */
+        .casino-slider {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 30px;
+            background: #dc3545; /* Red by default (disabled state) */
+            border-radius: 30px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .casino-slider:before {
+            content: '';
+            position: absolute;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: white;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        #casinoToggle:checked + .casino-slider {
+            background: #28a745; /* Green when enabled */
+        }
+        
+        #casinoToggle:not(:checked) + .casino-slider {
+            background: #dc3545; /* Red when disabled */
+        }
+        
+        #casinoToggle:checked + .casino-slider:before {
+            transform: translateX(30px);
+        }
+        
+        .casino-slider-button {
+            display: none; /* This is just for semantic purposes */
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🏆 {{ operator.sportsbook_name }} - Admin Dashboard</h1>
-        <div>
-                            <span>Welcome, {{ operator.login }}</span>
+        <div class="admin-info">
+            <div class="referral-code-section">
+                <span class="referral-label">Referral Code:</span>
+                <span id="referralCodeDisplay" class="referral-code" onclick="copyReferralCode()" title="Click to copy">Loading...</span>
+                <button class="copy-btn" onclick="copyReferralCode()" title="Copy referral code">📋</button>
+            </div>
+            <span>Welcome, {{ operator.login }}</span>
             <button class="logout-btn" onclick="logout()">Logout</button>
         </div>
     </div>
@@ -572,6 +683,24 @@ def get_comprehensive_admin_template():
                     <div class="stat-number" id="total-revenue-events">$0.00</div>
                     <div class="stat-label">Total Revenue</div>
                 </div>
+            </div>
+            
+            <!-- Casino Control Section -->
+            <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 10px; margin-bottom: 2rem; border-left: 4px solid #667eea;">
+                <h3 style="margin-bottom: 1rem; color: #333;">🎰 Casino Settings</h3>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <label for="casinoToggle" style="font-weight: 600; color: #555;">Enable Casino for Users:</label>
+                    <div style="position: relative; display: inline-block;">
+                        <input type="checkbox" id="casinoToggle" style="display: none;" onchange="toggleCasino()">
+                        <label for="casinoToggle" class="casino-slider">
+                            <span class="casino-slider-button"></span>
+                        </label>
+                    </div>
+                    <span id="casinoStatus" style="font-weight: 600; color: #28a745;">Enabled</span>
+                </div>
+                <p style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
+                    When disabled, users under this operator will not see the casino button on the sports betting page.
+                </p>
             </div>
             
             <button class="btn btn-primary" onclick="refreshEvents()">🔄 Refresh Events</button>
@@ -934,8 +1063,64 @@ def get_comprehensive_admin_template():
             }
         }
         
+        // Casino toggle functionality
+        function toggleCasino() {
+            const checkbox = document.getElementById('casinoToggle');
+            const status = document.getElementById('casinoStatus');
+            const isEnabled = checkbox.checked;
+            
+            // Update status text
+            status.textContent = isEnabled ? 'Enabled' : 'Disabled';
+            status.style.color = isEnabled ? '#28a745' : '#dc3545';
+            
+            // Send API request to update casino setting
+            fetch('/api/admin/' + subdomain + '/toggle-casino', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ casino_enabled: isEnabled })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('Casino setting updated:', data.message);
+                } else {
+                    console.error('Error updating casino setting:', data.error);
+                    // Revert the toggle if there was an error
+                    checkbox.checked = !isEnabled;
+                    status.textContent = !isEnabled ? 'Enabled' : 'Disabled';
+                    status.style.color = !isEnabled ? '#28a745' : '#dc3545';
+                    alert('Error updating casino setting: ' + data.error);
+                }
+            })
+            .catch(err => {
+                console.error('Error updating casino setting:', err);
+                // Revert the toggle if there was an error
+                checkbox.checked = !isEnabled;
+                status.textContent = !isEnabled ? 'Enabled' : 'Disabled';
+                status.style.color = !isEnabled ? '#28a745' : '#dc3545';
+                alert('Failed to update casino setting');
+            });
+        }
+        
+        // Load casino setting on page load
+        function loadCasinoSetting() {
+            fetch('/api/admin/' + subdomain + '/casino-setting')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        const checkbox = document.getElementById('casinoToggle');
+                        const status = document.getElementById('casinoStatus');
+                        checkbox.checked = data.casino_enabled;
+                        status.textContent = data.casino_enabled ? 'Enabled' : 'Disabled';
+                        status.style.color = data.casino_enabled ? '#28a745' : '#dc3545';
+                    }
+                })
+                .catch(err => console.error('Error loading casino setting:', err));
+        }
+        
         // Load initial data
         loadBettingEvents();
+        loadCasinoSetting();
     </script>
 </body>
 </html>

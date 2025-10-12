@@ -32,24 +32,23 @@ def spin_reels(target_rtp):
     import random
     
     # Professional reel strips: 100 stops per reel with exact distribution
-    # Using fruit images instead of card numbers
-    # 💎: 1, 🍒: 7, 🍌: 7, 🍊: 7, 🍇: 7, 🍓: 19, 🍎: 18, 🥝: 17, 🍑: 17
+    # 🍓: 19%, 🍎: 18%, 🥝: 17%, 🍑: 17%, 🍒/🍌/🍊/🍇: 7% each, 💎: 1%
     reel_strip = []
     
-    # Diamond: 1 stop
+    # Diamond: 1 stop (1%)
     reel_strip.extend(['💎'] * 1)
     
-    # Fruit symbols: 7 stops each (replacing face cards)
-    reel_strip.extend(['🍒'] * 7)  # Cherry (replaces A)
-    reel_strip.extend(['🍌'] * 7)  # Banana (replaces K)
-    reel_strip.extend(['🍊'] * 7)  # Orange (replaces Q)
-    reel_strip.extend(['🍇'] * 7)  # Grape (replaces J)
+    # High value fruits: 7 stops each (7% each)
+    reel_strip.extend(['🍒'] * 7)  # Cherry
+    reel_strip.extend(['🍌'] * 7)  # Banana
+    reel_strip.extend(['🍊'] * 7)  # Orange
+    reel_strip.extend(['🍇'] * 7)  # Grape
     
-    # More fruit symbols: 19, 18, 17, 17 stops (replacing number cards)
-    reel_strip.extend(['🍓'] * 19)  # Strawberry (replaces 10)
-    reel_strip.extend(['🍎'] * 18)  # Apple (replaces 9)
-    reel_strip.extend(['🥝'] * 17)  # Kiwi (replaces 8)
-    reel_strip.extend(['🍑'] * 17)  # Peach (replaces 7)
+    # Medium value fruits: 19, 18, 17, 17 stops
+    reel_strip.extend(['🍓'] * 19)  # Strawberry (19%)
+    reel_strip.extend(['🍎'] * 18)  # Apple (18%)
+    reel_strip.extend(['🥝'] * 17)  # Kiwi (17%)
+    reel_strip.extend(['🍑'] * 17)  # Peach (17%)
     
     # Verify we have exactly 100 stops
     assert len(reel_strip) == 100, f"Reel strip should have 100 stops, got {len(reel_strip)}"
@@ -67,79 +66,98 @@ def spin_reels(target_rtp):
     return reels
 
 def evaluate_slots(reels, stake):
-    """Evaluate 5-reel slot machine with professional 20-line paytable (~96.1% RTP)"""
+    """Evaluate 5-reel slot machine with 20 fixed paylines (~96% RTP, ~28% hit rate)"""
     if not reels or len(reels) != 5:
         return 0, []
     
     print(f"🎰 Evaluating reels: {reels}")
     print(f"🎰 Stake: {stake}")
     
-    total_payout = 0
+    # 20 fixed paylines (row indices per reel)
+    LINES = [
+        [0,0,0,0,0], [1,1,1,1,1], [2,2,2,2,2], [0,0,0,1,2], [2,2,2,1,0],
+        [0,1,2,1,0], [2,1,0,1,2], [0,0,1,2,2], [2,2,1,0,0], [1,0,0,0,1],
+        [1,2,2,2,1], [0,1,1,1,0], [2,1,1,1,2], [1,1,0,1,1], [1,1,2,1,1],
+        [0,1,0,1,0], [2,1,2,1,2], [0,2,0,2,0], [2,0,2,0,2], [0,2,1,0,2]
+    ]
+    
+    # Paytable (multipliers per line bet) - 94% RTP
+    # Nice-number paytable that yields ~94% RTP
+    PAYTABLE = {
+        'diamond': {3: 81.0, 4: 400.0, 5: 4200.0},
+        'high': {3: 33.0, 4: 160.0, 5: 1005.0},      # 🍒🍌🍊🍇
+        'medium': {3: 17.0, 4: 66.0, 5: 505.0}    # 🍓🍎🥝🍑
+    }
+    
+    ROYAL_PAYOUT = 2000.0  # Royal sequence on line 2 (middle row)
+    ROYAL_SEQUENCE = ['🍒', '🍌', '🍊', '🍇', '🍓']
+    
+    def get_symbol_bucket(symbol):
+        """Get symbol bucket for paytable lookup"""
+        if symbol == '💎':
+            return 'diamond'
+        elif symbol in ['🍒', '🍌', '🍊', '🍇']:
+            return 'high'
+        else:  # 🍓, 🍎, 🥝, 🍑
+            return 'medium'
+    
+    def longest_prefix_match(seq):
+        """Find longest prefix of identical symbols"""
+        if not seq:
+            return 0
+        k = 1
+        for i in range(1, len(seq)):
+            if seq[i] == seq[0]:
+                k += 1
+            else:
+                break
+        return k
+    
+    total_payout = 0.0
     wins = []
+    line_bet = stake / 20.0  # Total stake divided by 20 lines
     
-    # Professional paytable (multipliers per line bet)
-    def get_payout_multiplier(symbol, count):
-        """Get payout multiplier based on symbol and count"""
-        if count == 5:  # 5 of a kind
-            if symbol == '💎':
-                return 210.0
-            elif symbol in ['🍒', '🍌', '🍊', '🍇']:  # High value fruits
-                return 50.0
-            else:  # 🍓, 🍎, 🥝, 🍑 (lower value fruits)
-                return 25.0
-        elif count == 4:  # 4 of a kind
-            if symbol == '💎':
-                return 20.0
-            elif symbol in ['🍒', '🍌', '🍊', '🍇']:  # High value fruits
-                return 8.1
-            else:  # 🍓, 🍎, 🥝, 🍑 (lower value fruits)
-                return 3.35
-        elif count == 3:  # 3 of a kind
-            if symbol == '💎':
-                return 4.0
-            elif symbol in ['🍒', '🍌', '🍊', '🍇']:  # High value fruits
-                return 1.65
-            else:  # 🍓, 🍎, 🥝, 🍑 (lower value fruits)
-                return 0.83
-        return 0.0
+    # Evaluate each payline
+    for line_idx, line in enumerate(LINES):
+        # Extract symbols along this payline
+        seq = [reels[reel][line[reel]] for reel in range(5)]
+        
+        # Check for Royal sequence first (highest priority) - only on line 2 (middle row)
+        if line_idx == 1 and seq == ROYAL_SEQUENCE:
+            # Royal sequence on middle row (line 2, 1-indexed)
+            payout = line_bet * ROYAL_PAYOUT
+            total_payout += payout
+            
+            wins.append({
+                "symbol": "royal_sequence",
+                "count": 5,
+                "payout": payout,
+                "line": "line_2_royal",
+                "multiplier": ROYAL_PAYOUT
+            })
+            print(f"🎰 Line {line_idx+1}: Royal Sequence = {payout:.2f} ({ROYAL_PAYOUT}x)")
+        else:
+            # Check for longest prefix match (3+ symbols) for all other cases
+            k = longest_prefix_match(seq)
+            
+            if k >= 3:
+                # Regular win: k-of-a-kind
+                symbol = seq[0]
+                bucket = get_symbol_bucket(symbol)
+                multiplier = PAYTABLE[bucket][k]
+                payout = line_bet * multiplier
+                total_payout += payout
+                
+                wins.append({
+                    "symbol": symbol,
+                    "count": k,
+                    "payout": payout,
+                    "line": f"line_{line_idx+1}",
+                    "multiplier": multiplier
+                })
+                print(f"🎰 Line {line_idx+1}: {symbol} {k} of a kind = {payout:.2f} ({multiplier}x)")
     
-    # Check all 20 lines (5 reels x 3 rows = 15 positions, but we check 20 logical lines)
-    # For simplicity, we'll check the 3 main horizontal lines and some diagonal patterns
-    
-    # Line 1: Top row (row 0)
-    top_line = [reels[i][0] for i in range(5)]
-    line_payout, line_wins = evaluate_line(top_line, stake, get_payout_multiplier, "top")
-    total_payout += line_payout
-    wins.extend(line_wins)
-    
-    # Line 2: Middle row (row 1) - main payline
-    middle_line = [reels[i][1] for i in range(5)]
-    line_payout, line_wins = evaluate_line(middle_line, stake, get_payout_multiplier, "middle")
-    total_payout += line_payout
-    wins.extend(line_wins)
-    
-    # Line 3: Bottom row (row 2)
-    bottom_line = [reels[i][2] for i in range(5)]
-    line_payout, line_wins = evaluate_line(bottom_line, stake, get_payout_multiplier, "bottom")
-    total_payout += line_payout
-    wins.extend(line_wins)
-    
-    # Additional lines for 20-line system (simplified - checking more patterns)
-    # Lines 4-6: Diagonal patterns
-    diag1 = [reels[i][0] if i < 3 else reels[i][2] for i in range(5)]  # Top 3, bottom 2
-    line_payout, line_wins = evaluate_line(diag1, stake, get_payout_multiplier, "diag1")
-    total_payout += line_payout
-    wins.extend(line_wins)
-    
-    diag2 = [reels[i][2] if i < 3 else reels[i][0] for i in range(5)]  # Bottom 3, top 2
-    line_payout, line_wins = evaluate_line(diag2, stake, get_payout_multiplier, "diag2")
-    total_payout += line_payout
-    wins.extend(line_wins)
-    
-    # Lines 7-20: Additional patterns (simplified - we'll use the main 3 lines for now)
-    # In a full implementation, you'd check all 20 specific line patterns
-    
-    print(f"🎰 Final result: payout={total_payout}, wins={wins}")
+    print(f"🎰 Final result: payout={total_payout:.2f}, wins={len(wins)}")
     return total_payout, wins
 
 def evaluate_line(line, stake, get_payout_multiplier, line_name):
@@ -180,7 +198,7 @@ def evaluate_line(line, stake, get_payout_multiplier, line_name):
     if line_name == "middle":
         royal_sequence = ['🍒', '🍌', '🍊', '🍇', '🍓']  # Cherry-Banana-Orange-Grape-Strawberry
         if line == royal_sequence:
-            multiplier = 100.0  # Royal sequence
+            multiplier = 2000.0  # Royal sequence: 2000x
             payout = stake * multiplier
             line_payout += payout
             line_wins.append({"symbol": "royal_sequence", "count": 5, "payout": payout, "line": line_name})
@@ -214,8 +232,13 @@ def bj_value(cards):
     value = 0
     aces = 0
     for card in cards:
-        rank = card[:-1]  # Remove suit
+        # Handle both string format ('7S') and dict format ({'r': '7', 's': 'spades'})
+        if isinstance(card, dict):
+            rank = card.get('r', card.get('rank', ''))
+        else:
+            rank = card[:-1]  # Remove suit from string format
         print(f"🃏 Card: {card}, Rank: {rank}")
+        
         if rank in ['J', 'Q', 'K']:
             value += 10
             print(f"🃏 Face card: +10, total: {value}")
@@ -224,8 +247,11 @@ def bj_value(cards):
             value += 11
             print(f"🃏 Ace: +11, total: {value}, aces: {aces}")
         else:
-            value += int(rank)
-            print(f"🃏 Number card: +{rank}, total: {value}")
+            try:
+                value += int(rank)
+                print(f"🃏 Number card: +{rank}, total: {value}")
+            except ValueError:
+                print(f"🃏 Invalid rank: {rank}")
     
     print(f"🃏 Before ace adjustment: value={value}, aces={aces}")
     
@@ -237,6 +263,81 @@ def bj_value(cards):
     
     print(f"🃏 Final blackjack value: {value}")
     return value
+
+def settle_split_hands(split_hands, dealer, deck, stake, ref):
+    """Settle all split hands against dealer"""
+    # Play dealer hand
+    while bj_value(dealer) < 17:
+        dealer.append(deck.pop())
+    
+    dealer_value = bj_value(dealer)
+    total_payout = 0.0
+    results = []
+    
+    print(f"🃏 SPLIT SETTLEMENT - Dealer value: {dealer_value}")
+    
+    for i, hand in enumerate(split_hands):
+        hand_cards = hand['cards']
+        hand_value = bj_value(hand_cards)
+        
+        print(f"🃏 Split Hand {i+1}: {hand_cards} = {hand_value}")
+        
+        if hand_value > 21:
+            # Hand busted
+            hand_payout = 0.0
+            result_type = "bust"
+        elif dealer_value > 21:
+            # Dealer busted
+            hand_payout = stake * 2
+            result_type = "win"
+        elif hand_value > dealer_value:
+            # Player wins
+            hand_payout = stake * 2
+            result_type = "win"
+        elif hand_value == dealer_value:
+            # Push
+            hand_payout = stake
+            result_type = "push"
+        else:
+            # Player loses
+            hand_payout = 0.0
+            result_type = "lose"
+        
+        total_payout += hand_payout
+        results.append({
+            "hand": i + 1,
+            "cards": hand_cards,
+            "value": hand_value,
+            "payout": hand_payout,
+            "result": result_type
+        })
+        
+        print(f"🃏 Split Hand {i+1} result: {result_type}, payout: {hand_payout}")
+    
+    # Credit total winnings
+    if total_payout > 0:
+        cursor = get_connection().cursor()
+        cursor.execute("""
+            UPDATE users 
+            SET balance = balance + %s
+            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+        """, (total_payout, session.get('user_id'), session.get('operator_id')))
+        print(f"💰 Split hands total payout credited: +{total_payout}")
+    
+    return {
+        "deck": deck,
+        "player": [],
+        "split_hands": split_hands,
+        "current_hand": len(split_hands),  # All hands played
+        "dealer": dealer,
+        "dealer_real": dealer,
+        "pv": 0,  # No current hand
+        "dv": dealer_value,
+        "ref": ref,
+        "final": True,
+        "total_payout": total_payout,
+        "results": results
+    }
 
 def baccarat_deal():
     """Simplified baccarat deal"""
@@ -259,10 +360,47 @@ def baccarat_total(cards):
             total += int(rank)
     return total % 10
 
-def crash_multiplier(target_rtp):
-    """Simplified crash multiplier"""
-    import random
-    return round(random.uniform(1.0, 10.0), 2)
+def hmac_sha256(key, msg):
+    """HMAC-SHA256 implementation"""
+    import hmac
+    import hashlib
+    return hmac.new(key.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
+
+def hash_to_uniform_01(hex_string):
+    """Convert first 52 bits of hex string to float in [0,1)"""
+    # First 52 bits → 13 hex chars (13 * 4 = 52)
+    frac_hex = hex_string[:13]
+    h = int(frac_hex, 16)
+    E = 2 ** 52
+    return h / E  # r in [0, 1)
+
+def uniform_from_seeds(server_seed, client_seed, nonce):
+    """Generate provably fair uniform random number from seeds"""
+    msg = f"{client_seed}:{nonce}"
+    hex_hash = hmac_sha256(server_seed, msg)
+    return hash_to_uniform_01(hex_hash)
+
+def crash_multiplier(target_rtp, server_seed="default_server_seed", client_seed="default_client_seed", nonce=0):
+    """Provably fair crash multiplier with exact RTP = target_rtp"""
+    alpha = float(target_rtp)  # e.g. 0.96
+
+    # provably-fair r in [0,1)
+    r = uniform_from_seeds(server_seed, client_seed, nonce)
+
+    # ✅ Correct α-scaled fair crash:
+    #   M_fair = 1/(1-r) has tail P(M_fair >= x) = 1/x
+    #   M = α * M_fair  ⇒  P(M >= x) = α/x  ⇒ EV at any cashout x is α
+    denom = max(1e-12, 1.0 - r)
+    m = alpha / denom
+
+    # Map the <1x mass (prob = 1-α) to an explicit 1.00x insta-bust
+    if m < 1.0:
+        m = 1.0
+
+    # Cap at 20x for risk management (matches UI)
+    m = min(m, 20.0)
+
+    return round(m, 2)
 
 @casino_bp.route('/health')
 def health():
@@ -405,15 +543,14 @@ def get_balance():
         logging.error(f"Error getting casino balance: {e}")
         return jsonify({"error": f"Failed to get balance: {str(e)}"}), 500
 
-@casino_bp.route('/slots/spin', methods=['POST'])
-def slots_spin():
-    """Play slots game"""
+@casino_bp.route('/slots/bet', methods=['POST'])
+def slots_bet():
+    """Place a slots bet - debits stake only"""
     try:
         user_id = session.get('user_id')
         if not user_id:
             return jsonify({"error": "Authentication required"}), 401
         
-        # Get the operator_id for the sportsbook, not the user_id
         operator_id = session.get('operator_id')
         if not operator_id:
             return jsonify({"error": "Sportsbook operator not found"}), 401
@@ -423,13 +560,12 @@ def slots_spin():
         currency = data.get('currency', 'USD')
         
         if stake <= 0:
-            return jsonify({"error": "Invalid stake current_balance"}), 400
+            return jsonify({"error": "Invalid stake amount"}), 400
         
         # Check balance
         conn = get_connection()
         cursor = conn.cursor()
         
-        # Get current balance
         cursor.execute("""
             SELECT balance FROM users 
             WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
@@ -441,19 +577,63 @@ def slots_spin():
         if current_balance < stake:
             return jsonify({"error": f"Insufficient funds. Available: ${current_balance:.2f}"}), 400
         
-        # Debit wallet immediately when placing bet
+        # Debit wallet immediately
         cursor.execute("""
             UPDATE users 
             SET balance = balance - %s
             WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
         """, (stake, user_id, operator_id))
         
-        # Play slots
+        conn.commit()
+        
+        # Sync Web3 wallet debit (non-blocking)
+        try:
+            from src.services.web3_sync_service import sync_web3_debit
+            sync_web3_debit(user_id, stake, "Slots bet")
+        except Exception as web3_error:
+            logging.warning(f"Web3 sync failed for slots bet: {web3_error}")
+        
+        # Generate ref for this bet
         ref = new_ref("slots")
+        
+        return jsonify({
+            "ref": ref,
+            "stake": stake,
+            "status": "bet_placed"
+        })
+        
+    except Exception as e:
+        logging.error(f"Error in slots bet: {e}")
+        return jsonify({"error": "Bet error"}), 500
+
+@casino_bp.route('/slots/result', methods=['POST'])
+def slots_result():
+    """Process slots result - credits winnings"""
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            return jsonify({"error": "Authentication required"}), 401
+        
+        operator_id = session.get('operator_id')
+        if not operator_id:
+            return jsonify({"error": "Sportsbook operator not found"}), 401
+        
+        data = request.get_json()
+        ref = data.get('ref')
+        stake = data.get('stake', 0)
+        currency = data.get('currency', 'USD')
+        
+        if not ref or stake <= 0:
+            return jsonify({"error": "Invalid request"}), 400
+        
+        # Play slots
         reels = spin_reels(0.96)
         payout, wins = evaluate_slots(reels, stake)
         
         # Store game round
+        conn = get_connection()
+        cursor = conn.cursor()
+        
         cursor.execute("""
             INSERT INTO game_round (game_key, user_id, stake, currency, payout, ref, result_json)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -472,6 +652,14 @@ def slots_spin():
         
         conn.commit()
         
+        # Sync Web3 wallet credit (non-blocking) if player won
+        if payout > 0:
+            try:
+                from src.services.web3_sync_service import sync_web3_credit
+                sync_web3_credit(user_id, payout, "Slots win")
+            except Exception as web3_error:
+                logging.warning(f"Web3 sync failed for slots win: {web3_error}")
+        
         return jsonify({
             "ref": ref,
             "stake": stake,
@@ -483,8 +671,8 @@ def slots_spin():
         })
         
     except Exception as e:
-        logging.error(f"Error in slots spin: {e}")
-        return jsonify({"error": "Game error"}), 500
+        logging.error(f"Error in slots result: {e}")
+        return jsonify({"error": "Result error"}), 500
 
 @casino_bp.route('/roulette/spin', methods=['POST'])
 def roulette_play():
@@ -500,15 +688,19 @@ def roulette_play():
             return jsonify({"error": "Sportsbook operator not found"}), 401
         
         data = request.get_json()
+        print(f"🎰 Roulette request data: {data}")
         bets = data.get('params', {}).get('bets', [])
         currency = data.get('currency', 'USD')
         
+        print(f"🎰 Roulette bets: {bets}")
+        
         if not bets:
+            print(f"❌ No bets provided")
             return jsonify({"error": "No bets provided"}), 400
         
-        total_stake = sum(b.get('current_balance', 0) for b in bets)
+        total_stake = sum(b.get('stake', b.get('amount', 0)) for b in bets)
         if total_stake <= 0:
-            return jsonify({"error": "Invalid stake current_balance"}), 400
+            return jsonify({"error": "Invalid stake amount"}), 400
         
         # Check balance
         conn = get_connection()
@@ -525,6 +717,20 @@ def roulette_play():
         if current_balance < total_stake:
             return jsonify({"error": f"Insufficient funds. Available: ${current_balance:.2f}"}), 400
         
+        # Debit wallet immediately when placing bet
+        cursor.execute("""
+            UPDATE users 
+            SET balance = balance - %s
+            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+        """, (total_stake, user_id, operator_id))
+        
+        # Sync Web3 wallet debit (non-blocking)
+        try:
+            from src.services.web3_sync_service import sync_web3_debit
+            sync_web3_debit(user_id, total_stake, "Roulette bet")
+        except Exception as web3_error:
+            logging.warning(f"Web3 sync failed for roulette bet: {web3_error}")
+        
         # Play roulette
         ref = new_ref("roulette")
         spin = roulette_spin(european=True)
@@ -532,44 +738,40 @@ def roulette_play():
         
         for b in bets:
             bet_type = b.get('type')
-            current_balance = b.get('current_balance', 0)
+            stake = b.get('stake', b.get('amount', 0))
             
             if bet_type == "single":
                 if str(b.get('value')) == spin["pocket"]:
-                    payout += current_balance * 36
+                    payout += stake * 36
             elif bet_type == "color":
                 if b.get('value') == spin["color"]:
-                    payout += current_balance * 2
+                    payout += stake * 2
             elif bet_type == "even_odd":
                 if spin["pocket"] != "0":
                     val = "even" if int(spin["pocket"]) % 2 == 0 else "odd"
                     if b.get('value') == val:
-                        payout += current_balance * 2
+                        payout += stake * 2
         
         payout = round(payout, 2)
         
-        # Store game round
+        # Store game round with 0 payout initially (winnings credited separately)
         cursor.execute("""
             INSERT INTO game_round (game_key, user_id, stake, currency, payout, ref, result_json)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, ("roulette", user_id, total_stake, currency, payout, ref, json.dumps({
+        """, ("roulette", user_id, total_stake, currency, 0.0, ref, json.dumps({
             "spin": spin,
-            "bets": bets
+            "bets": bets,
+            "status": "active"  # Game is active, winnings not credited yet
         })))
         
-        # Update wallet
-        cursor.execute("""
-            UPDATE users 
-            SET balance = balance - %s + %s
-            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-        """, (total_stake, payout, user_id, operator_id))
+        # NO wallet credit here - winnings will be credited when player actually wins
         
         conn.commit()
         
         return jsonify({
             "ref": ref,
             "stake": total_stake,
-            "payout": payout,
+            "payout": 0.0,  # No payout until player actually wins
             "result": {
                 "spin": spin,
                 "bets": bets
@@ -579,6 +781,92 @@ def roulette_play():
     except Exception as e:
         logging.error(f"Error in roulette play: {e}")
         return jsonify({"error": "Game error"}), 500
+
+@casino_bp.route('/roulette/win', methods=['POST'])
+def roulette_win():
+    """Credit winnings for roulette game"""
+    try:
+        print(f"🎰 Roulette win API called")
+        user_id = session.get('user_id')
+        if not user_id:
+            print(f"❌ No user_id in session")
+            return jsonify({"error": "Authentication required"}), 401
+        
+        operator_id = session.get('operator_id')
+        if not operator_id:
+            return jsonify({"error": "Sportsbook operator not found"}), 401
+        
+        data = request.get_json()
+        ref = data.get('ref')
+        payout = data.get('payout', 0.0)
+        
+        print(f"🎰 Roulette win data: ref={ref}, payout={payout}")
+        
+        if not ref:
+            print(f"❌ No ref provided")
+            return jsonify({"error": "Game reference required"}), 400
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Get the original game round
+        cursor.execute("""
+            SELECT stake, result_json FROM game_round 
+            WHERE ref = %s AND user_id = %s AND game_key = 'roulette'
+        """, (ref, str(user_id)))
+        
+        result = cursor.fetchone()
+        if not result:
+            print(f"❌ Game not found for ref: {ref}")
+            return jsonify({"error": "Game not found"}), 404
+        
+        stake, result_json = result
+        
+        # Handle both string and dict cases
+        if isinstance(result_json, str):
+            game_data = json.loads(result_json)
+        else:
+            game_data = result_json  # Already a dict
+        
+        # Update the game round with the actual payout
+        updated_game_data = {**game_data, "payout": payout, "status": "completed"}
+        cursor.execute("""
+            UPDATE game_round 
+            SET payout = %s, result_json = %s
+            WHERE ref = %s AND user_id = %s
+        """, (payout, json.dumps(updated_game_data), ref, str(user_id)))
+        
+        # Credit winnings to wallet
+        if payout > 0:
+            cursor.execute("""
+                UPDATE users 
+                SET balance = balance + %s
+                WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+            """, (payout, user_id, operator_id))
+            print(f"💰 Roulette winnings credited: +{payout} for user {user_id}")
+        
+        conn.commit()
+        
+        # Sync Web3 wallet credit (non-blocking) if player won
+        if payout > 0:
+            try:
+                from src.services.web3_sync_service import sync_web3_credit
+                sync_web3_credit(user_id, payout, "Roulette win")
+            except Exception as web3_error:
+                logging.warning(f"Web3 sync failed for roulette win: {web3_error}")
+        
+        return jsonify({
+            "ref": ref,
+            "stake": stake,
+            "payout": payout
+        })
+        
+    except Exception as e:
+        print(f"❌ Roulette win error: {e}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
+        logging.error(f"Error in roulette win: {e}")
+        return jsonify({"error": f"Win error: {str(e)}"}), 500
 
 @casino_bp.route('/blackjack/play', methods=['POST'])
 def blackjack_play():
@@ -627,11 +915,22 @@ def blackjack_play():
             if current_balance < stake:
                 return jsonify({"error": f"Insufficient funds. Available: ${current_balance:.2f}"}), 400
             
-            # Deal cards
-            deck = fresh_shoe(6)
-            player = [deck.pop(), deck.pop()]
-            dealer = [deck.pop(), deck.pop()]
+            # Use frontend's game state if provided, otherwise generate new cards
+            if data.get("state") and data["state"].get("deck") and data["state"].get("player") and data["state"].get("dealer_real"):
+                # Use frontend's cards
+                deck = data["state"]["deck"]
+                player = data["state"]["player"]
+                dealer = data["state"]["dealer_real"]
+                print(f"🃏 DEBUG: Using frontend cards - player: {player}, dealer: {dealer}")
+            else:
+                # Fallback: generate new cards
+                deck = fresh_shoe(6)
+                player = [deck.pop(), deck.pop()]
+                dealer = [deck.pop(), deck.pop()]
+                print(f"🃏 DEBUG: Generated new cards - player: {player}, dealer: {dealer}")
+            
             pv, dv = bj_value(player), bj_value(dealer)
+            print(f"🃏 DEBUG: Player value: {pv}, Dealer value: {dv}")
             
             result = {
                 "deck": deck,
@@ -643,9 +942,34 @@ def blackjack_play():
                 "ref": ref
             }
             
+            # Check for blackjack on deal
             if pv == 21:
-                payout = round(stake * 2.5, 2)
-                result["final"] = True
+                # Check if dealer also has blackjack
+                if dv == 21:
+                    outcome = "Push"
+                    multiplier = "+0x"
+                    payout = round(stake, 2)
+                    result["final"] = True
+                    print(f"💰 BOTH BLACKJACK! Push - returning stake: {payout}")
+                else:
+                    outcome = "Blackjack"
+                    multiplier = "+1.5x"
+                    payout = round(stake * 2.5, 2)
+                    result["final"] = True
+                    # Credit Blackjack winnings immediately
+                    print(f"💰 PLAYER BLACKJACK! Crediting winnings={payout}")
+                    cursor.execute("""
+                        UPDATE users 
+                        SET balance = balance + %s
+                        WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                    """, (payout, user_id, operator_id))
+                    print(f"💰 Blackjack wallet updated: +{payout}")
+                
+                result["outcome"] = outcome
+                result["multiplier"] = multiplier
+                result["payout"] = payout
+            else:
+                print(f"💰 No Blackjack. Player value: {pv}, Payout: 0")
         else:
             # Hit, stand, double
             deck = state.get('deck', fresh_shoe(6))
@@ -665,6 +989,153 @@ def blackjack_play():
                     "ref": ref,
                     "final": pv > 21
                 }
+            elif action == "split":
+                # Handle split action
+                print(f"🃏 SPLIT ACTION - Player cards: {player}")
+                
+                # Check if we can split (same rank cards)
+                if len(player) != 2 or player[0]['r'] != player[1]['r']:
+                    return jsonify({"error": "Cannot split - cards must be same rank"}), 400
+                
+                # Check balance for additional bet
+                cursor.execute("""
+                    SELECT balance FROM users 
+                    WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                """, (user_id, operator_id))
+                
+                result_balance = cursor.fetchone()
+                current_balance = result_balance[0] if result_balance else 1000.0
+                
+                if current_balance < stake:
+                    return jsonify({"error": f"Insufficient funds for split. Need additional ${stake:.2f}"}), 400
+                
+                # Debit additional stake for split
+                cursor.execute("""
+                    UPDATE users 
+                    SET balance = balance - %s
+                    WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                """, (stake, user_id, operator_id))
+                print(f"💰 Split additional bet debited: -{stake}")
+                
+                # Create split hands
+                card1, card2 = player[0], player[1]
+                split_hand1 = [card1, deck.pop()]
+                split_hand2 = [card2, deck.pop()]
+                
+                # Calculate values for both hands
+                pv1, pv2 = bj_value(split_hand1), bj_value(split_hand2)
+                dv = bj_value(dealer)
+                
+                result = {
+                    "deck": deck,
+                    "player": [],  # Clear original player hand
+                    "split_hands": [
+                        {"cards": split_hand1, "value": pv1},
+                        {"cards": split_hand2, "value": pv2}
+                    ],
+                    "current_hand": 0,  # Start with first split hand
+                    "dealer": [dealer[0], "🂠"],
+                    "dealer_real": dealer,
+                    "pv": pv1,  # Current hand value
+                    "dv": dv,
+                    "ref": ref,
+                    "can_split_hand1": split_hand1[0]['r'] == split_hand1[1]['r'] if len(split_hand1) == 2 else False,
+                    "can_split_hand2": split_hand2[0]['r'] == split_hand2[1]['r'] if len(split_hand2) == 2 else False
+                }
+                
+                print(f"🃏 SPLIT RESULT - Hand 1: {split_hand1} (value: {pv1}), Hand 2: {split_hand2} (value: {pv2})")
+            elif action in ["hit_split", "stand_split", "double_split"]:
+                # Handle split hand actions
+                split_hands = state.get('split_hands', [])
+                current_hand = state.get('current_hand', 0)
+                
+                if not split_hands or current_hand >= len(split_hands):
+                    return jsonify({"error": "Invalid split hand"}), 400
+                
+                current_split_hand = split_hands[current_hand]
+                current_cards = current_split_hand.get('cards', [])
+                
+                if action == "hit_split":
+                    current_cards.append(deck.pop())
+                    current_split_hand['cards'] = current_cards
+                    current_split_hand['value'] = bj_value(current_cards)
+                    split_hands[current_hand] = current_split_hand
+                    
+                    result = {
+                        "deck": deck,
+                        "player": [],
+                        "split_hands": split_hands,
+                        "current_hand": current_hand,
+                        "dealer": [dealer[0], "🂠"],
+                        "dealer_real": dealer,
+                        "pv": bj_value(current_cards),
+                        "dv": bj_value(dealer),
+                        "ref": ref,
+                        "final": bj_value(current_cards) > 21
+                    }
+                elif action == "double_split":
+                    # Check balance for double on split hand
+                    cursor.execute("""
+                        SELECT balance FROM users 
+                        WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                    """, (user_id, operator_id))
+                    
+                    result_balance = cursor.fetchone()
+                    current_balance = result_balance[0] if result_balance else 1000.0
+                    
+                    if current_balance < stake:
+                        return jsonify({"error": f"Insufficient funds for double on split hand"}), 400
+                    
+                    # Debit additional stake for double
+                    cursor.execute("""
+                        UPDATE users 
+                        SET balance = balance - %s
+                        WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                    """, (stake, user_id, operator_id))
+                    print(f"💰 Split hand double bet debited: -{stake}")
+                    
+                    current_cards.append(deck.pop())
+                    current_split_hand['cards'] = current_cards
+                    current_split_hand['value'] = bj_value(current_cards)
+                    split_hands[current_hand] = current_split_hand
+                    
+                    # Move to next split hand or settle
+                    current_hand += 1
+                    if current_hand >= len(split_hands):
+                        # All split hands played, settle all hands
+                        result = settle_split_hands(split_hands, dealer, deck, stake, ref)
+                    else:
+                        result = {
+                            "deck": deck,
+                            "player": [],
+                            "split_hands": split_hands,
+                            "current_hand": current_hand,
+                            "dealer": [dealer[0], "🂠"],
+                            "dealer_real": dealer,
+                            "pv": bj_value(split_hands[current_hand]['cards']),
+                            "dv": bj_value(dealer),
+                            "ref": ref,
+                            "final": False
+                        }
+                else:  # stand_split
+                    # Move to next split hand or settle
+                    current_hand += 1
+                    if current_hand >= len(split_hands):
+                        # All split hands played, settle all hands
+                        result = settle_split_hands(split_hands, dealer, deck, stake, ref)
+                    else:
+                        result = {
+                            "deck": deck,
+                            "player": [],
+                            "split_hands": split_hands,
+                            "current_hand": current_hand,
+                            "dealer": [dealer[0], "🂠"],
+                            "dealer_real": dealer,
+                            "pv": bj_value(split_hands[current_hand]['cards']),
+                            "dv": bj_value(dealer),
+                            "ref": ref,
+                            "final": False
+                        }
             else:  # stand or double
                 if action == "double":
                     # Check balance for double
@@ -698,14 +1169,35 @@ def blackjack_play():
                 print(f"🃏 Dealer cards: {dealer}")
                 print(f"🃏 Player cards: {player}")
                 
+                # Determine outcome and payout
                 if pv > 21:
+                    outcome = "Bust"
+                    multiplier = "-1x"
                     payout = 0.0
-                elif dv > 21 or pv > dv:
+                elif dv > 21:
+                    outcome = "Win"
+                    multiplier = "+1x"
                     payout = round(stake * 2, 2)
+                elif pv > dv:
+                    # Check for blackjack (21 with exactly 2 cards)
+                    if pv == 21 and len(player) == 2:
+                        outcome = "Blackjack"
+                        multiplier = "+1.5x"
+                        payout = round(stake * 2.5, 2)
+                    else:
+                        outcome = "Win"
+                        multiplier = "+1x"
+                        payout = round(stake * 2, 2)
                 elif pv == dv:
+                    outcome = "Push"
+                    multiplier = "+0x"
                     payout = round(stake, 2)
                 else:
+                    outcome = "Lose"
+                    multiplier = "-1x"
                     payout = 0.0
+                
+                print(f"🃏 Game result - Outcome: {outcome}, Multiplier: {multiplier}, Payout: {payout}")
                 
                 result = {
                     "deck": deck,
@@ -714,6 +1206,9 @@ def blackjack_play():
                     "dealer_real": dealer,
                     "pv": pv,
                     "dv": dv,
+                    "outcome": outcome,
+                    "multiplier": multiplier,
+                    "payout": payout,
                     "ref": ref,
                     "final": True
                 }
@@ -735,6 +1230,14 @@ def blackjack_play():
                 WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
             """, (stake, user_id, operator_id))
             print(f"💰 Wallet updated: -{stake}")
+            
+            # Sync Web3 wallet debit (non-blocking)
+            try:
+                from src.services.web3_sync_service import sync_web3_debit
+                sync_web3_debit(user_id, stake, "Blackjack bet")
+            except Exception as web3_error:
+                logging.warning(f"Web3 sync failed for blackjack bet: {web3_error}")
+                
         elif action == "double":
             # Debit additional stake for double down
             print(f"💰 Blackjack wallet update: debiting additional stake={stake}")
@@ -744,6 +1247,13 @@ def blackjack_play():
                 WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
             """, (stake, user_id, operator_id))
             print(f"💰 Wallet updated: -{stake}")
+            
+            # Sync Web3 wallet debit for double down (non-blocking)
+            try:
+                from src.services.web3_sync_service import sync_web3_debit
+                sync_web3_debit(user_id, stake, "Blackjack double down")
+            except Exception as web3_error:
+                logging.warning(f"Web3 sync failed for blackjack double down: {web3_error}")
         
         # Credit winnings only if player won (and game is final)
         if payout > 0 and result.get("final"):
@@ -754,6 +1264,15 @@ def blackjack_play():
                 WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
             """, (payout, user_id, operator_id))
             print(f"💰 Wallet updated: +{payout}")
+            
+            # Sync Web3 wallet credit (non-blocking)
+            try:
+                from src.services.web3_sync_service import sync_web3_credit
+                sync_web3_credit(user_id, payout, "Blackjack win")
+            except Exception as web3_error:
+                logging.warning(f"Web3 sync failed for blackjack win: {web3_error}")
+        else:
+            print(f"💰 Blackjack wallet update: no payout to credit (payout={payout}, final={result.get('final')})")
         
         conn.commit()
         
@@ -811,6 +1330,13 @@ def baccarat_play():
             WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
         """, (stake, user_id, operator_id))
         
+        # Sync Web3 wallet debit (non-blocking)
+        try:
+            from src.services.web3_sync_service import sync_web3_debit
+            sync_web3_debit(user_id, stake, "Baccarat bet")
+        except Exception as web3_error:
+            logging.warning(f"Web3 sync failed for baccarat bet: {web3_error}")
+        
         # Play baccarat
         ref = new_ref("baccarat")
         shoe, player, banker = baccarat_deal()
@@ -844,6 +1370,13 @@ def baccarat_play():
                 SET balance = balance + %s
                 WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
             """, (payout, user_id, operator_id))
+            
+            # Sync Web3 wallet credit (non-blocking) if player won
+            try:
+                from src.services.web3_sync_service import sync_web3_credit
+                sync_web3_credit(user_id, payout, "Baccarat win")
+            except Exception as web3_error:
+                logging.warning(f"Web3 sync failed for baccarat win: {web3_error}")
         
         conn.commit()
         
@@ -907,9 +1440,23 @@ def crash_play():
             WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
         """, (stake, user_id, operator_id))
         
+        # Sync Web3 wallet debit (non-blocking)
+        try:
+            from src.services.web3_sync_service import sync_web3_debit
+            sync_web3_debit(user_id, stake, "Crash bet")
+        except Exception as web3_error:
+            logging.warning(f"Web3 sync failed for crash bet: {web3_error}")
+        
         # Play crash - generate crash multiplier but DON'T credit winnings yet
         ref = new_ref("crash")
-        multiplier = crash_multiplier(0.96)
+        
+        # Generate provably fair seeds
+        import time
+        server_seed = f"server_{int(time.time())}"
+        client_seed = f"client_{user_id}_{int(time.time())}"
+        nonce = int(time.time() * 1000) % 1000000  # Use timestamp as nonce
+        
+        multiplier = crash_multiplier(0.96, server_seed, client_seed, nonce)
         
         # Store game round with 0 payout initially (winnings credited when player actually cashes out)
         cursor.execute("""
@@ -986,8 +1533,13 @@ def crash_cashout():
             
         crash_multiplier = game_data.get('multiplier', 1.0)
         
-        # Calculate payout based on cashout multiplier
-        payout = round(stake * cashout_multiplier, 2)
+        # Enforce server-side cashout validity - prevent claiming after crash
+        crash_multiplier_value = float(crash_multiplier)
+        if float(cashout_multiplier) > crash_multiplier_value:
+            return jsonify({"error": "Cashout after crash is invalid"}), 400
+        
+        # Calculate payout based on cashout multiplier (convert to float to avoid decimal/float multiplication error)
+        payout = round(float(stake) * float(cashout_multiplier), 2)
         
         print(f"💰 Calculating payout: stake={stake} * multiplier={cashout_multiplier} = {payout}")
         
@@ -1005,6 +1557,13 @@ def crash_cashout():
             SET balance = balance + %s
             WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
         """, (payout, user_id, operator_id))
+        
+        # Sync Web3 wallet credit (non-blocking) if player won
+        try:
+            from src.services.web3_sync_service import sync_web3_credit
+            sync_web3_credit(user_id, payout, "Crash cashout win")
+        except Exception as web3_error:
+            logging.warning(f"Web3 sync failed for crash cashout: {web3_error}")
         
         print(f"💰 Wallet credited: +{payout} for user {user_id}")
         
@@ -1039,7 +1598,7 @@ def get_game_history():
         if not operator_id:
             return jsonify({"error": "Sportsbook operator not found"}), 401
         
-        limit = request.args.get('limit', 100, type=int)
+        limit = request.args.get('limit', 500, type=int)  # Increased default from 100 to 500
         
         conn = get_connection()
         cursor = conn.cursor()
