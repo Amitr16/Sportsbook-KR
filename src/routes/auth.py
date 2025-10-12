@@ -13,6 +13,7 @@ import os
 import urllib.parse
 
 import requests
+from requests.exceptions import Timeout, ConnectionError
 
 # Make sure .env / env.local are loaded on import (no circulars here; env_loader has no app deps)
 import src.config.env_loader  # noqa: F401
@@ -92,7 +93,7 @@ def _google_oauth_cfg():
     return {
         "client_id": os.getenv("GOOGLE_CLIENT_ID"),
         "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-        "redirect_uri": os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:5000/auth/google/callback"),
+        "redirect_uri": os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:5000/api/auth/google/callback"),
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
         "token_uri": "https://oauth2.googleapis.com/token",
         "userinfo_uri": "https://openidconnect.googleapis.com/v1/userinfo",
@@ -155,7 +156,10 @@ def google_login():
     if tenant:
         try:
             from src.db_compat import connection_ctx
-            with connection_ctx() as conn:
+            with connection_ctx(timeout=3) as conn:
+                # Set very short statement timeout for this endpoint
+                with conn.cursor() as c:
+                    c.execute("SET LOCAL statement_timeout = '1500ms'")
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT id FROM sportsbook_operators WHERE subdomain = %s", (tenant,))
                     if cursor.fetchone():
@@ -167,8 +171,10 @@ def google_login():
                         logger.error(f"Google OAuth login - Unknown tenant '{tenant}', cannot proceed")
                         return jsonify({'success': False, 'error': f'Unknown tenant: {tenant}'}), 400
         except Exception as e:
-            logger.error(f"Google OAuth login - Error validating tenant: {e}")
-            return jsonify({'success': False, 'error': f'Tenant validation failed: {str(e)}'}), 400
+            current_app.logger.error(f"Auth DB acquire failed fast: {e}")
+            resp = make_response(jsonify({"error": "temporarily overloaded"}), 429)
+            resp.headers["Retry-After"] = "2"
+            return resp
     else:
         logger.error("Google OAuth login - No tenant found in referrer URL or redirect_uri")
         return jsonify({'success': False, 'error': 'No tenant found in URL'}), 400
@@ -200,31 +206,47 @@ def google_callback():
     logger.info(f"Request args: {dict(request.args)}")
 
     try:
+        logger.info("🔧 Loading Google OAuth config...")
         cfg = _google_oauth_cfg()
+        logger.info(f"✅ OAuth config loaded: client_id exists={bool(cfg.get('client_id'))}, token_uri={cfg.get('token_uri')}")
 
         # 1) Validate code
         code = request.args.get('code')
         if not code:
+            logger.error("❌ Missing authorization code")
             return jsonify({'success': False, 'error': 'Missing authorization code'}), 400
 
         # Must exactly match what we used at /google/login
+        logger.info("🔧 Getting callback URL...")
         redirect_uri = _google_callback_url()
+        logger.info(f"✅ Callback URL: {redirect_uri}")
+        
         if not cfg["client_id"] or not cfg["client_secret"]:
-            current_app.logger.error("Google OAuth env missing on callback")
+            logger.error("❌ Google OAuth env missing on callback")
             return jsonify({'success': False, 'error': 'Google OAuth not configured'}), 500
 
         # 2) Exchange code → tokens
-        token_resp = requests.post(
-            cfg["token_uri"],
-            data={
-                'code': code,
-                'client_id': cfg["client_id"],
-                'client_secret': cfg["client_secret"],
-                'redirect_uri': redirect_uri,
-                'grant_type': 'authorization_code'
-            },
-            timeout=10
-        )
+        logger.info("🔄 Exchanging code for tokens...")
+        logger.info(f"🔄 Making POST to: {cfg['token_uri']}")
+        try:
+            token_resp = requests.post(
+                cfg["token_uri"],
+                data={
+                    'code': code,
+                    'client_id': cfg["client_id"],
+                    'client_secret': cfg["client_secret"],
+                    'redirect_uri': redirect_uri,
+                    'grant_type': 'authorization_code'
+                },
+                timeout=5  # Reduced timeout to fail faster
+            )
+            logger.info(f"✅ Token exchange response: {token_resp.status_code}")
+        except requests.exceptions.Timeout:
+            logger.error("❌ Token exchange timed out after 5 seconds")
+            return jsonify({'success': False, 'error': 'Token exchange timed out'}), 408
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Token exchange failed with error: {e}")
+            return jsonify({'success': False, 'error': f'Token exchange failed: {e}'}), 500
         if not token_resp.ok:
             logger.error("Token exchange failed: %s", token_resp.text[:500])
             return jsonify({'success': False, 'error': 'Token exchange failed'}), 400
@@ -234,16 +256,22 @@ def google_callback():
         if not access_token:
             return jsonify({'success': False, 'error': 'Missing access token'}), 400
 
-        # 3) Get Google user info
-        userinfo_resp = requests.get(
-            cfg["userinfo_uri"],
-            headers={'Authorization': f'Bearer {access_token}'},
-            timeout=10
-        )
-        if not userinfo_resp.ok:
-            logger.error("Userinfo fetch failed: %s", userinfo_resp.text[:500])
-            return jsonify({'success': False, 'error': 'Failed to fetch user info'}), 400
+        # 3) Get Google user info (add timeouts + one retry)
+        logger.info("🔄 Getting Google user info...")
+        def _userinfo():
+            return requests.get(
+                cfg["userinfo_uri"],
+                headers={'Authorization': f'Bearer {access_token}'},
+                timeout=(3, 6),  # 3s connect, 6s read
+            )
+        try:
+            userinfo_resp = _userinfo()
+        except (Timeout, ConnectionError):
+            logger.warning("⚠️ Userinfo request timed out, retrying once...")
+            userinfo_resp = _userinfo()
 
+        userinfo_resp.raise_for_status()
+        logger.info(f"✅ Userinfo response: {userinfo_resp.status_code}")
         userinfo = userinfo_resp.json()
         email = userinfo.get('email')
         name = userinfo.get('name') or (userinfo.get('given_name') or 'user')
@@ -263,7 +291,10 @@ def google_callback():
         operator_id = None
         if tenant:
             from src.db_compat import connection_ctx
-            with connection_ctx() as conn:
+            with connection_ctx(timeout=3) as conn:
+                # Set very short statement timeout for this endpoint
+                with conn.cursor() as c:
+                    c.execute("SET LOCAL statement_timeout = '1500ms'")
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT id FROM sportsbook_operators WHERE subdomain = %s", (tenant,))
                     operator_result = cursor.fetchone()
@@ -275,82 +306,94 @@ def google_callback():
         
         # 5) Find or create user; update last_login
         from src.db_compat import connection_ctx
-        # LEGACY - use connection_ctx() context manager instead
-        conn = connection_ctx().__enter__()
         try:
-            logger.info(f"🔍 Looking for existing user with email: {email} and operator_id: {operator_id}")
-            user = conn.execute(
-                "SELECT id, username, email, balance, sportsbook_operator_id FROM users WHERE email = %s AND sportsbook_operator_id = %s",
-                (email, operator_id)
-            ).fetchone()
+            with connection_ctx(timeout=3) as conn:
+                # Set very short statement timeout for this endpoint
+                with conn.cursor() as c:
+                    c.execute("SET LOCAL statement_timeout = '1500ms'")
+                logger.info(f"🔍 Looking for existing user with email: {email} and operator_id: {operator_id}")
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT id, username, email, balance, sportsbook_operator_id FROM users WHERE email = %s AND sportsbook_operator_id = %s",
+                        (email, operator_id)
+                    )
+                    user = cursor.fetchone()
+        except Exception as e:
+            current_app.logger.error(f"Auth DB acquire failed fast: {e}")
+            resp = make_response(jsonify({"error": "temporarily overloaded"}), 429)
+            resp.headers["Retry-After"] = "2"
+            return resp
+        
+        # Check if user exists for this specific operator
+        if user and user.get('sportsbook_operator_id') != operator_id:
+            logger.info(f"🔍 User {email} exists for operator {user.get('sportsbook_operator_id')} but logging into operator {operator_id}")
+            logger.info(f"🔍 Creating separate account for this tenant...")
+            # Don't update existing user, we'll create a new one below
+            user = None
+        
+        if not user:
+            logger.info(f"🔍 No existing user found, creating new user for email: {email}")
             
-            # Check if user exists for this specific operator
-            if user and user.get('sportsbook_operator_id') != operator_id:
-                logger.info(f"🔍 User {email} exists for operator {user.get('sportsbook_operator_id')} but logging into operator {operator_id}")
-                logger.info(f"🔍 Creating separate account for this tenant...")
-                # Don't update existing user, we'll create a new one below
-                user = None
+            # Generate cool random username (same as frontend)
+            import random
             
-            if not user:
-                logger.info(f"🔍 No existing user found, creating new user for email: {email}")
-                
-                # Generate cool random username (same as frontend)
-                import random
-                
-                # List of cool username prefixes
-                prefixes = [
-                    'Thunder', 'Lightning', 'Storm', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
-                    'Quantum', 'Nebula', 'Stellar', 'Solar', 'Lunar', 'Galactic', 'Atomic', 'Neon',
-                    'Cyber', 'Digital', 'Virtual', 'Matrix', 'Code', 'Pixel', 'Byte', 'Data',
-                    'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Nova', 'Super', 'Ultra',
-                    'Mega', 'Giga', 'Tera', 'Peta', 'Exa', 'Zetta', 'Yotta', 'Infinity'
-                ]
-                
-                # List of cool suffixes
-                suffixes = [
-                    'Master', 'Lord', 'King', 'Queen', 'Prince', 'Princess', 'Duke', 'Duchess',
-                    'Warrior', 'Knight', 'Mage', 'Wizard', 'Sorcerer', 'Warlock', 'Priest', 'Monk',
-                    'Hunter', 'Ranger', 'Rogue', 'Assassin', 'Ninja', 'Samurai', 'Viking', 'Berserker',
-                    'Phoenix', 'Dragon', 'Tiger', 'Lion', 'Eagle', 'Falcon', 'Wolf', 'Bear',
-                    'Storm', 'Thunder', 'Lightning', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
-                    'Pro', 'Elite', 'Legend', 'Myth', 'Epic', 'Hero', 'Champion', 'Winner'
-                ]
-                
-                # Generate random username (no numbers)
-                prefix = random.choice(prefixes)
-                suffix = random.choice(suffixes)
-                username = f"{prefix}{suffix}"
-                
-                # Check if username is available, try with different suffix if taken
-                attempts = 0
-                while conn.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone() and attempts < 10:
+            # List of cool username prefixes
+            prefixes = [
+                'Thunder', 'Lightning', 'Storm', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+                'Quantum', 'Nebula', 'Stellar', 'Solar', 'Lunar', 'Galactic', 'Atomic', 'Neon',
+                'Cyber', 'Digital', 'Virtual', 'Matrix', 'Code', 'Pixel', 'Byte', 'Data',
+                'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Nova', 'Super', 'Ultra',
+                'Mega', 'Giga', 'Tera', 'Peta', 'Exa', 'Zetta', 'Yotta', 'Infinity'
+            ]
+            
+            # List of cool suffixes
+            suffixes = [
+                'Master', 'Lord', 'King', 'Queen', 'Prince', 'Princess', 'Duke', 'Duchess',
+                'Warrior', 'Knight', 'Mage', 'Wizard', 'Sorcerer', 'Warlock', 'Priest', 'Monk',
+                'Hunter', 'Ranger', 'Rogue', 'Assassin', 'Ninja', 'Samurai', 'Viking', 'Berserker',
+                'Phoenix', 'Dragon', 'Tiger', 'Lion', 'Eagle', 'Falcon', 'Wolf', 'Bear',
+                'Storm', 'Thunder', 'Lightning', 'Fire', 'Ice', 'Shadow', 'Mystic', 'Cosmic',
+                'Pro', 'Elite', 'Legend', 'Myth', 'Epic', 'Hero', 'Champion', 'Winner'
+            ]
+            
+            # Generate random username (no numbers)
+            prefix = random.choice(prefixes)
+            suffix = random.choice(suffixes)
+            username = f"{prefix}{suffix}"
+            
+            # Check if username is available, try with different suffix if taken
+            attempts = 0
+            with conn.cursor() as cursor:
+                while cursor.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone() and attempts < 10:
                     suffix = random.choice(suffixes)
                     username = f"{prefix}{suffix}"
                     attempts += 1
+            
+            # If still not available after 10 attempts, fall back to simple approach
+            if attempts >= 10:
+                logger.warning(f"⚠️ Could not generate unique cool username, falling back to simple approach")
+                base = (name or email.split("@")[0]).replace(" ", "").lower()[:15]
+                username, n = base, 1
                 
-                # If still not available after 10 attempts, fall back to simple approach
-                if attempts >= 10:
-                    logger.warning(f"⚠️ Could not generate unique cool username, falling back to simple approach")
-                    base = (name or email.split("@")[0]).replace(" ", "").lower()[:15]
-                    username, n = base, 1
-                    
-                    # Check for username conflicts within this operator
-                    while conn.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone():
+                # Check for username conflicts within this operator
+                with conn.cursor() as cursor:
+                    while cursor.execute("SELECT 1 FROM users WHERE username = %s AND sportsbook_operator_id = %s", (username, operator_id)).fetchone():
                         n += 1
                         username = f"{base}{n}"
-                
-                logger.info(f"🔍 Generated cool username: {username} for email: {email}")
-                
+            
+            logger.info(f"🔍 Generated cool username: {username} for email: {email}")
+            
+            try:
+                # Get default balance for this operator
                 try:
-                    # Get default balance for this operator
-                    try:
-                        from src.routes.rich_admin_interface import get_default_user_balance
-                        default_balance = get_default_user_balance(operator_id)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Could not get default balance for operator {operator_id}: {e}")
-                        default_balance = 1000.0  # Fall back to default
+                    from src.routes.rich_admin_interface import get_default_user_balance
+                    default_balance = get_default_user_balance(operator_id)
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not get default balance for operator {operator_id}: {e}")
+                    default_balance = 1000.0  # Fall back to default
                     
-                    conn.execute(
+                with conn.cursor() as cursor:
+                    cursor.execute(
                         """
                         INSERT INTO users (username, email, password_hash, balance, is_active, created_at, last_login, sportsbook_operator_id)
                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
@@ -362,31 +405,28 @@ def google_callback():
                     logger.info(f"✅ Successfully created new user with operator_id: {operator_id}")
                     
                     # Verify user was created and fetch the complete user data
-                    user = conn.execute(
+                    cursor.execute(
                         "SELECT id, username, email, balance, sportsbook_operator_id FROM users WHERE email = %s AND sportsbook_operator_id = %s", 
                         (email, operator_id)
-                    ).fetchone()
-                    if user:
-                        logger.info(f"✅ Verified user creation: {user}")
-                    else:
-                        logger.error(f"❌ User creation failed - user not found after insert")
-                        return jsonify({'success': False, 'error': 'User creation failed'}), 500
-                        
-                except Exception as insert_error:
-                    logger.error(f"❌ User creation failed: {insert_error}")
-                    conn.rollback()
-                    return jsonify({'success': False, 'error': f'User creation failed: {str(insert_error)}'}), 500
-            else:
-                logger.info(f"✅ Found existing user: {user}")
-                conn.execute("UPDATE users SET last_login = %s WHERE id = %s",
+                    )
+                    user = cursor.fetchone()
+                if user:
+                    logger.info(f"✅ Verified user creation: {user}")
+                else:
+                    logger.error(f"❌ User creation failed - user not found after insert")
+                    return jsonify({'success': False, 'error': 'User creation failed'}), 500
+                    
+            except Exception as insert_error:
+                logger.error(f"❌ User creation failed: {insert_error}")
+                conn.rollback()
+                return jsonify({'success': False, 'error': f'User creation failed: {str(insert_error)}'}), 500
+        else:
+            logger.info(f"✅ Found existing user: {user}")
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE users SET last_login = %s WHERE id = %s",
                              (datetime.datetime.utcnow(), user["id"]))
                 conn.commit()
                 logger.info(f"✅ Updated existing user last_login")
-        except Exception as e:
-            logger.error(f"❌ Database error in user lookup/creation: {e}")
-            return jsonify({'success': False, 'error': f'Database error: {str(e)}'}), 500
-        finally:
-            conn.close()
 
         # 6) Set session
         logger.info("=" * 50)
@@ -464,7 +504,10 @@ def get_user_profile():
             return jsonify({'error': 'Not authenticated'}), 401
         
         logger.info(f"🔍 Querying database for user_id: {user_id}")
-        with connection_ctx() as conn:
+        with connection_ctx(timeout=5) as conn:
+            # Set very short statement timeout for this endpoint
+            with conn.cursor() as c:
+                c.execute("SET LOCAL statement_timeout = '2000ms'")
             logger.info(f"🔍 Database connection established")
             with conn.cursor() as cursor:
                 logger.info(f"🔍 Database cursor created")

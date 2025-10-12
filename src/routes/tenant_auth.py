@@ -575,7 +575,10 @@ def get_current_user_profile():
         # ✅ Use db_compat for consistency with OAuth callback
         try:
             from src.db_compat import connection_ctx
-            with connection_ctx() as conn:
+            with connection_ctx(timeout=5) as conn:
+                # Set very short statement timeout for this endpoint
+                with conn.cursor() as c:
+                    c.execute("SET LOCAL statement_timeout = '2000ms'")
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT id, username, email, balance, is_active, created_at, last_login, sportsbook_operator_id FROM users WHERE id = %s", (user_id,))
                     user = cursor.fetchone()

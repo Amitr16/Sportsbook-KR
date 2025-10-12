@@ -66,21 +66,33 @@ def _load_operator_branding_from_db(subdomain):
     """Load operator branding from database (not cached)"""
     from src.db_compat import connection_ctx
     
-    with connection_ctx() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT 
-                    id, sportsbook_name, subdomain, email, is_active,
-                    settings, created_at
-                FROM sportsbook_operators 
-                WHERE subdomain = %s AND is_active = TRUE
-            """, (subdomain,))
-            operator = cur.fetchone()
-    
-    if not operator:
+    try:
+        with connection_ctx() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT 
+                            id, sportsbook_name, subdomain, email, is_active,
+                            settings, created_at
+                        FROM sportsbook_operators 
+                        WHERE subdomain = %s AND is_active = TRUE
+                    """, (subdomain,))
+                    operator = cur.fetchone()
+            except Exception as query_error:
+                # Ensure rollback happens before re-raising
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise query_error
+        
+        if not operator:
+            return None
+        
+        return operator
+    except Exception as e:
+        logging.error(f"❌ Database error loading operator branding for {subdomain}: {e}")
         return None
-    
-    return operator
 
 def get_operator_branding_cached_only(subdomain):
     """
@@ -130,7 +142,7 @@ def get_operator_branding(subdomain):
         return None
     
     # Parse settings or use defaults
-    settings = json.loads(operator['settings']) if operator['settings'] else {}
+    settings = json.loads(operator.get('settings', '{}')) if operator.get('settings') else {}
     
     # Default branding settings
     default_branding = {
@@ -148,9 +160,9 @@ def get_operator_branding(subdomain):
         'branding': {
             'logo_url': '',
             'favicon_url': '',
-            'welcome_message': f'Welcome to {operator["sportsbook_name"]}',
-            'footer_text': f'© 2025 {operator["sportsbook_name"]}. All rights reserved.',
-            'contact_email': operator['email'] or 'support@sportsbook.com',
+            'welcome_message': f'Welcome to {operator.get("sportsbook_name", "Sports King")}',
+            'footer_text': f'© 2025 {operator.get("sportsbook_name", "Sports King")}. All rights reserved.',
+            'contact_email': operator.get('email', 'support@sportsbook.com'),
             'support_phone': '',
             'social_links': {
                 'facebook': '',
@@ -191,12 +203,20 @@ def get_operator_branding(subdomain):
         branding.update(settings['branding'])
     
     # Add operator info
+    created_at = operator.get('created_at')
+    # Handle both datetime objects and strings
+    if created_at:
+        if hasattr(created_at, 'isoformat'):
+            created_at = created_at.isoformat()
+        else:
+            created_at = str(created_at)
+    
     branding['operator'] = {
-        'id': operator['id'],
-        'name': operator['sportsbook_name'],
-        'subdomain': operator['subdomain'],
-        'email': operator['email'],
-        'created_at': operator['created_at'].isoformat() if operator['created_at'] else None
+        'id': operator.get('id', 0),
+        'name': operator.get('sportsbook_name', 'Sports King'),
+        'subdomain': operator.get('subdomain', subdomain),
+        'email': operator.get('email', 'support@sportsbook.com'),
+        'created_at': created_at
     }
     
     return branding
@@ -462,9 +482,18 @@ def update_branding(subdomain):
                         'error': 'Operator not found'
                     }), 404
                 
-                # Update settings
-                current_settings = json.loads(operator['settings']) if operator['settings'] else {}
-                current_settings.update(data)
+                # Update settings (KeyError-safe + deep-merge)
+                op_settings_raw = operator.get('settings')
+                current_settings = json.loads(op_settings_raw) if op_settings_raw else {}
+                
+                def _deep_merge(dst, src):
+                    for k, v in (src or {}).items():
+                        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                            _deep_merge(dst[k], v)
+                        else:
+                            dst[k] = v
+                    return dst
+                _deep_merge(current_settings, data)
                 
                 cur.execute("""
                     UPDATE sportsbook_operators 

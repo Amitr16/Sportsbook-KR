@@ -1,0 +1,41 @@
+---
+globs: src/routes/auth.py,src/routes/tenant_auth.py
+---
+
+# Authentication Flow - Google OAuth & Multi-tenant
+
+## Google OAuth Flow
+Located in [src/routes/auth.py](mdc:src/routes/auth.py):
+
+### Key Routes:
+- `/api/auth/google/login` - Initiates OAuth flow
+- `/api/auth/google/callback` - Handles OAuth callback
+
+### Recent Fixes:
+- **Timeout & Retry**: Google userinfo fetch has `timeout=(3, 6)` with retry logic
+- **Redirect URI**: Fixed to use `/api/auth/google/callback` consistently
+- **Circuit Breaker**: Returns 429 with `Retry-After: 2` on DB connection failures
+
+### OAuth Configuration:
+```python
+"redirect_uri": "http://localhost:5000/api/auth/google/callback"  # Local
+# Production: Set GOOGLE_REDIRECT_URI in Fly.io secrets
+```
+
+## Multi-tenant Authentication
+Located in [src/routes/tenant_auth.py](mdc:src/routes/tenant_auth.py):
+
+### Key Routes:
+- `/api/auth/<subdomain>/login` - Tenant-specific login
+- `/api/auth/<subdomain>/register` - Tenant-specific registration
+- `/api/auth/me` - Get current user profile
+
+### Database Optimizations:
+- Uses `connection_ctx(timeout=5)` with `SET LOCAL statement_timeout = '2000ms'`
+- Fast-fail on DB connection issues
+- Proper session management with tenant isolation
+
+## Session Management:
+- **Tenant isolation**: Each subdomain has separate user sessions
+- **Superadmin preservation**: Logout doesn't affect superadmin sessions
+- **Session persistence**: Uses Redis for distributed sessions in production

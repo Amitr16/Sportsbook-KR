@@ -17,7 +17,7 @@ def add_trade_count_column():
     """Add trade_count column to Partner_leader_backup table if it doesn't exist"""
     conn = None
     try:
-        print("🔧 Adding trade_count column to Partner_leader_backup table...")
+        print("Adding trade_count column to Partner_leader_backup table...")
         conn = get_connection()
         cursor = conn.cursor()
         
@@ -29,20 +29,20 @@ def add_trade_count_column():
         """)
         
         if cursor.fetchone():
-            print("✅ trade_count column already exists in Partner_leader_backup")
+            print("trade_count column already exists in Partner_leader_backup")
         else:
             # Add the column
             cursor.execute("""
                 ALTER TABLE Partner_leader_backup 
                 ADD COLUMN trade_count INTEGER DEFAULT 0
             """)
-            print("✅ Added trade_count column to Partner_leader_backup")
+            print("Added trade_count column to Partner_leader_backup")
         
         conn.commit()
-        print("🎉 Database migration completed successfully!")
+        print("Database migration completed successfully!")
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         if conn:
             conn.rollback()
         import traceback

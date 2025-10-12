@@ -168,6 +168,9 @@ class BetSettlementService:
         self.failed_settlements = 0
         self.last_error = None
         self.start_time = None
+        # cooperative stop signal
+        import threading
+        self._stop_event = threading.Event()
         
     def start(self):
         """Start the automatic bet settlement service"""
@@ -175,7 +178,12 @@ class BetSettlementService:
             try:
                 self.running = True
                 self.start_time = datetime.utcnow()
-                self.settlement_thread = threading.Thread(target=self._settlement_loop, daemon=True)
+                # Daemon thread so process can exit without a blocking join at shutdown
+                self.settlement_thread = threading.Thread(
+                    target=self._settlement_loop,
+                    name="bet-settlement",
+                    daemon=True
+                )
                 self.settlement_thread.start()
                 logger.info("✅ Automatic bet settlement service started successfully")
                 return True
@@ -187,17 +195,32 @@ class BetSettlementService:
         return True
     
     def stop(self):
-        """Stop the automatic bet settlement service"""
+        """Cooperative, non-blocking stop (Eventlet-safe)."""
         self.running = False
-        if self.settlement_thread:
-            self.settlement_thread.join()
+        try:
+            self._stop_event.set()
+        except Exception:
+            pass
+        # Do NOT hard-join inside atexit; yield cooperatively instead.
+        try:
+            import eventlet
+            # give the worker loop some chances to exit
+            for _ in range(10):
+                if not (self.settlement_thread and self.settlement_thread.is_alive()):
+                    break
+                eventlet.sleep(0.05)
+        except Exception:
+            # If eventlet not available here, just skip waiting
+            pass
+        self.settlement_thread = None
         logger.info("Automatic bet settlement service stopped")
     
     def _settlement_loop(self):
         """Main settlement loop that automatically settles bets when matches end"""
+        import eventlet
         logger.info("🔄 Settlement service loop started")
         
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 self.last_check_time = datetime.utcnow()
                 self.total_checks += 1
@@ -209,10 +232,12 @@ class BetSettlementService:
                 try:
                     if self.app:
                         with self.app.app_context():
-                            # Use connection_ctx() to avoid holding connections during sleep
+                            # Use connection_ctx() with explicit transaction (no autocommit needed)
                             from src.db_compat import connection_ctx
-                            with connection_ctx() as conn:
-                                conn.autocommit = True
+                            with connection_ctx(timeout=5) as conn:
+                                with conn.cursor() as c:
+                                    c.execute("SET LOCAL statement_timeout = '2000ms'")
+                                # Simple read query (no transaction needed for SELECT)
                                 with conn.cursor() as cur:
                                     cur.execute("SELECT COUNT(*) FROM bets WHERE status = %s", ('pending',))
                                     pending_count = cur.fetchone()['count']
@@ -241,7 +266,9 @@ class BetSettlementService:
                 logger.info("🔄 Continuing settlement service despite error...")
             
             logger.info(f"⏰ Sleeping for {self.check_interval} seconds ({self.check_interval//60} minutes)...")
-            time.sleep(self.check_interval)
+            # ALWAYS yield via eventlet to avoid hub conflicts
+            import eventlet
+            eventlet.sleep(self.check_interval)
         
         logger.info("🛑 Settlement service loop stopped")
     
@@ -1762,8 +1789,9 @@ if __name__ == "__main__":
         
         # Wait for keyboard interrupt to stop
         try:
+            import eventlet
             while service.running:
-                time.sleep(1)
+                eventlet.sleep(1)
         except KeyboardInterrupt:
             logger.info("🛑 Received shutdown signal...")
             service.stop()

@@ -1,0 +1,30 @@
+---
+description: Background worker and odds fetching issues
+---
+
+# Odds Worker Issues - Common Problems
+
+## Invalid Timestamp Issues
+The error `⚠️ Soft-skip: boxing has invalid timestamp=0` indicates the GoalServe API is returning data with invalid timestamps.
+
+### Common Causes:
+1. **GoalServe API returning stale/cached data** with timestamp=0
+2. **Network issues** causing incomplete responses
+3. **API rate limiting** returning placeholder responses
+4. **Data source issues** on GoalServe's side
+
+### Solutions in [src/prematch_odds_service.py](mdc:src/prematch_odds_service.py):
+1. **Soft-skip instead of hard block** - Returns `"soft_skip"` status for timestamp=0
+2. **Shorter retry intervals** - 10 seconds instead of 60 seconds for data quality issues
+3. **Less aggressive logging** - Changed from "IMMEDIATE BLOCK" to "Soft-skip"
+4. **Continue processing** - Doesn't poison the entire fetch cycle
+
+### Worker Configuration:
+- **Rate limiting**: 48.8 seconds between sports (GoalServe global limit)
+- **Retry attempts**: 3 attempts per sport
+- **Process type**: `worker_odds` in [fly.toml](mdc:fly.toml)
+
+### Monitoring:
+- Watch for patterns in timestamp=0 errors
+- Check GoalServe API status during issues
+- Consider implementing circuit breaker for consistently failing sports

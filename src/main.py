@@ -63,14 +63,16 @@ except Exception as e:
     logger.warning(f"⚠️ Failed to initialize structured logging: {e}")
 
 # Initialize Redis session storage (optional - falls back to default if it fails)
+# Redis sessions DISABLED - has issues with Flask SessionInterface
+# TODO: Fix RedisSessionInterface to properly inherit from SessionInterface
 try:
-    redis_url = os.getenv('REDIS_URL')
-    if redis_url:
-        from src.utils.redis_session import init_redis_sessions
-        init_redis_sessions(app, redis_url)
-        logger.info("✅ Redis session storage initialized")
-    else:
-        logger.info("ℹ️ Redis URL not configured - using default Flask sessions")
+    # redis_url = os.getenv('REDIS_URL')
+    # if redis_url:
+    #     from src.utils.redis_session import init_redis_sessions
+    #     init_redis_sessions(app, redis_url)
+    #     logger.info("✅ Redis session storage initialized")
+    # else:
+    logger.info("ℹ️ Using default Flask sessions (Redis sessions disabled)")
 except Exception as e:
     logger.warning(f"⚠️ Failed to initialize Redis sessions, using default Flask sessions: {e}")
 
@@ -679,7 +681,7 @@ def periodic_health_check():
             # Check settlement service
             ensure_settlement_service_running()
             
-                        # Check pre-match odds service
+            # Check pre-match odds service
             ensure_prematch_odds_service_running()
             
             # Check live odds cache service
@@ -700,9 +702,22 @@ def cleanup_services():
     """Cleanup services on shutdown"""
     logging.info("🛑 Shutting down services...")
     try:
-        bet_settlement_service.stop()
-        live_odds_service.stop()
-        prematch_odds_service.stop()
+        # Stop services with individual error handling to prevent one failure from blocking others
+        try:
+            bet_settlement_service.stop()
+        except Exception as e:
+            logging.warning(f"⚠️ Error stopping bet settlement service: {e}")
+        
+        try:
+            live_odds_service.stop()
+        except Exception as e:
+            logging.warning(f"⚠️ Error stopping live odds service: {e}")
+        
+        try:
+            prematch_odds_service.stop()
+        except Exception as e:
+            logging.warning(f"⚠️ Error stopping pre-match odds service: {e}")
+        
         # Don't close the pool immediately - let it be cleaned up by the process
         logging.info("✅ Services stopped gracefully")
     except Exception as e:
@@ -713,8 +728,18 @@ atexit.register(cleanup_services)
 # Handle graceful shutdown
 def signal_handler(signum, frame):
     logging.info(f"🛑 Received signal {signum}, shutting down gracefully...")
-    cleanup_services()
-    exit(0)
+    try:
+        cleanup_services()
+    except Exception as e:
+        logging.error(f"❌ Error during signal cleanup: {e}")
+    finally:
+        # Let normal teardown + atexit run; Eventlet hub hates abrupt sys.exit here.
+        # If you must hard-exit after a grace period, do it from a greenlet:
+        try:
+            import eventlet, os
+            eventlet.spawn_after(1.0, os._exit, 0)
+        except Exception:
+            pass
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)

@@ -101,12 +101,28 @@ class CompatCursor:
         adapted_sql = adapt_sql(sql)
         adapted_params = adapt_params(params) if params else None
         
-        # Execute the query - try with prepare=False for PgBouncer compatibility
         try:
-            self._cursor.execute(adapted_sql, adapted_params, prepare=False)
-        except TypeError:
-            # Fallback if prepare parameter is not supported
-            self._cursor.execute(adapted_sql, adapted_params)
+            # Execute the query - try with prepare=False for PgBouncer compatibility
+            try:
+                self._cursor.execute(adapted_sql, adapted_params, prepare=False)
+            except TypeError:
+                # Fallback if prepare parameter is not supported
+                self._cursor.execute(adapted_sql, adapted_params)
+        except Exception as e:
+            # If query fails and leaves transaction in INERROR, rollback immediately
+            # so the caller's next statement doesn't see "current transaction is aborted..."
+            try:
+                from psycopg import pq
+                ts = getattr(self._cursor.connection.info, "transaction_status", None)
+                if ts == pq.TransactionStatus.INERROR:
+                    try:
+                        self._cursor.connection.rollback()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            finally:
+                raise
         
         # Check if this is an INSERT with RETURNING
         if adapted_sql.strip().upper().startswith('INSERT') and 'RETURNING' in adapted_sql.upper():
@@ -321,14 +337,30 @@ def pool() -> ConnectionPool:
                     conn_timeout = float(os.getenv("DB_CONN_TIMEOUT", "5"))
                     print(f"Initializing WEB pool")
                 
+                stmt_timeout    = os.getenv("DB_STATEMENT_TIMEOUT", "3000")   # "3000" or "3s"
+                idle_tx_timeout = os.getenv("DB_IDLE_IN_TRANSACTION_TIMEOUT", "5000")
+                connect_timeout = int(os.getenv("DB_CONNECT_TIMEOUT", "4"))    # seconds
+                prepare_thresh  = os.getenv("DB_PREPARE_THRESHOLD", "0")
+
+                conn_kwargs = {
+                    "row_factory": dict_row,
+                    "connect_timeout": connect_timeout,
+                    # TCP keepalives (critical on Fly to avoid idle disconnects)
+                    "keepalives": 1,
+                    "keepalives_idle": int(os.getenv("DB_KEEPALIVES_IDLE", "30")),
+                    "keepalives_interval": int(os.getenv("DB_KEEPALIVES_INTERVAL", "10")),
+                    "keepalives_count": int(os.getenv("DB_KEEPALIVES_COUNT", "3")),
+                    # No `options` here — PgBouncer may reject startup options
+                }
+
                 _POOL = ConnectionPool(
                     _dsn(),
                     min_size=min_conn,
                     max_size=max_conn,
-                    timeout=conn_timeout,
+                    timeout=conn_timeout,  # wait-for-connection timeout
                     max_lifetime=int(os.getenv("DB_POOL_MAX_LIFETIME", "900")),
                     max_idle=int(os.getenv("DB_POOL_MAX_IDLE", "300")),
-                    kwargs={"row_factory": dict_row},
+                    kwargs=conn_kwargs,
                 )
                 print(f"Created {process_type} pool: min={min_conn}, max={max_conn}, timeout={conn_timeout}s")
     return _POOL
@@ -344,8 +376,73 @@ def connection_ctx(timeout=10):
     start_time = time.time()
     raw = p.getconn(timeout=timeout)
     
+    # CRITICAL: Clean aborted transactions BEFORE opening cursor
     try:
-        yield raw
+        from psycopg import pq
+        ts = getattr(raw.info, "transaction_status", None)
+        if ts in (pq.TransactionStatus.INERROR, pq.TransactionStatus.INTRANS):
+            raw.rollback()  # Use connection method, not cursor execute
+    except Exception:
+        # Blind rollback attempt if inspection fails
+        try:
+            raw.rollback()
+        except Exception:
+            pass
+    
+    # Fast-fail liveness check + apply timeouts
+    try:
+        with raw.cursor() as _c:
+            _c.execute("SELECT 1")
+            # Apply timeouts *after* connect (safe with PgBouncer)
+            # Accept both ms ("3000") and duration ("3s")
+            st  = os.getenv("DB_STATEMENT_TIMEOUT", "3000")
+            itx = os.getenv("DB_IDLE_IN_TRANSACTION_TIMEOUT", "5000")
+            try:
+                _c.execute(f"SET statement_timeout = {st}")
+            except Exception as e:
+                # If SET fails, rollback and continue (some pool modes don't allow it)
+                try:
+                    raw.rollback()
+                except Exception:
+                    pass
+            try:
+                _c.execute(f"SET idle_in_transaction_session_timeout = {itx}")
+            except Exception as e:
+                # If SET fails, rollback and continue
+                try:
+                    raw.rollback()
+                except Exception:
+                    pass
+            # Prepare threshold (psycopg3 honors server GUC; safe to ignore if blocked)
+            pt = os.getenv("DB_PREPARE_THRESHOLD", "0")
+            try:
+                _c.execute(f"SET prepare_threshold = {pt}")
+            except Exception as e:
+                # If SET fails, rollback and continue
+                try:
+                    raw.rollback()
+                except Exception:
+                    pass
+    except Exception:
+        # Replace bad connection transparently
+        try:
+            p.putconn(raw, close=True)
+        except Exception:
+            pass
+        raw = p.getconn(timeout=timeout)
+        # Retry the setup on the fresh connection
+        try:
+            with raw.cursor() as _c:
+                _c.execute("SELECT 1")
+        except Exception:
+            pass
+    
+    # Wrap raw connection in CompatConnection for auto-rollback on errors
+    compat_conn = CompatConnection(raw)
+    compat_conn._pool = p
+    
+    try:
+        yield compat_conn
     finally:
         # Calculate how long connection was held
         hold_time_ms = (time.time() - start_time) * 1000
@@ -525,6 +622,18 @@ def connect(dsn: Optional[str] = None, *, autocommit: bool = False, use_pool: bo
         conn = CompatConnection(raw)
         conn._pool = pool()
         if autocommit:
+            # Ensure no aborted transaction before toggling autocommit
+            try:
+                from psycopg import pq
+                ts = getattr(raw.info, "transaction_status", None)
+                if ts in (pq.TransactionStatus.INERROR, pq.TransactionStatus.INTRANS):
+                    raw.rollback()
+            except Exception:
+                # blind rollback if inspection not available
+                try:
+                    raw.rollback()
+                except Exception:
+                    pass
             raw.autocommit = True
         return conn
     else:

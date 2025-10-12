@@ -22,6 +22,9 @@ class PrematchOddsService:
         self.base_folder = Path(base_folder)
         self.running = False
         self.fetch_thread = None
+        # cooperative stop signal
+        import threading
+        self._stop_event = threading.Event()
         
         # Callback system for immediate cache and UI updates
         self.on_odds_updated_callbacks: List[Callable] = []
@@ -238,7 +241,9 @@ class PrematchOddsService:
                 if attempt > 0:
                     delay = base_delay * (2 ** (attempt - 1))  # Exponential backoff: 10s, 20s, 40s
                     logger.info(f"🔄 Retry attempt {attempt + 1}/{max_retries} for {sport_name} after {delay}s delay")
-                    time.sleep(delay)
+                    # ALWAYS yield via eventlet to avoid hub conflicts
+                    import eventlet
+                    eventlet.sleep(delay)
                 else:
                     logger.info(f"🔄 Fetching {sport_name} odds (attempt {attempt + 1}/{max_retries})")
                 
@@ -340,9 +345,9 @@ class PrematchOddsService:
                         ts_value = scores_data['ts']
                         # Check for both string "0" and integer 0, and also handle None/empty cases
                         if (ts_value == "0" or ts_value == 0 or ts_value == "" or ts_value is None):
-                            logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid timestamp detected: {ts_value}")
-                            logger.info(f"📊 Blocked response: {sport_name} has invalid timestamp")
-                            return False
+                            logger.warning(f"⚠️ Soft-skip: {sport_name} has invalid timestamp={ts_value}; will retry sooner")
+                            logger.info(f"📊 Skipped response: {sport_name} has invalid timestamp (data quality issue)")
+                            return "soft_skip"
                     
                     # Check for empty categories array
                     if ('categories' in scores_data and 
@@ -380,9 +385,9 @@ class PrematchOddsService:
                         ts_value = scores_data['ts']
                         # Check for both string "0" and integer 0, and also handle None/empty cases
                         if (ts_value == "0" or ts_value == 0 or ts_value == "" or ts_value is None):
-                            logger.warning(f"🚫 IMMEDIATE BLOCK for {sport_name} - Invalid timestamp detected: {ts_value}")
-                            logger.info(f"📊 Blocked response: {sport_name} has invalid timestamp")
-                            return False
+                            logger.warning(f"⚠️ Soft-skip: {sport_name} has invalid timestamp={ts_value}; will retry sooner")
+                            logger.info(f"📊 Skipped response: {sport_name} has invalid timestamp (data quality issue)")
+                            return "soft_skip"
                     
                     # Check for empty categories array
                     if ('categories' in scores_data and 
@@ -573,9 +578,20 @@ class PrematchOddsService:
         
         for sport_name in self.sports_config.keys():
             try:
-                success = self._fetch_single_sport_odds(sport_name)
-                if success:
+                result = self._fetch_single_sport_odds(sport_name)
+                if result is True:
                     successful_sports.append(sport_name)
+                elif result == "soft_skip":
+                    # Soft-skip: shorter retry interval for data quality issues
+                    import random
+                    base_delay = 10  # 10 seconds instead of 60 for soft-skips
+                    jitter = random.uniform(0.8, 1.2)  # Less jitter for soft-skips
+                    actual_delay = base_delay * jitter
+                    logger.info(f"⏳ Short retry: waiting {actual_delay:.1f} seconds for {sport_name} (soft-skip)")
+                    # ALWAYS yield via eventlet to avoid hub conflicts
+                    import eventlet
+                    eventlet.sleep(actual_delay if actual_delay > 0 else 0)
+                    continue  # Skip the normal delay
                 else:
                     failed_sports.append(sport_name)
                     
@@ -587,7 +603,9 @@ class PrematchOddsService:
                 jitter = random.uniform(0.5, 1.5)  # 50-150% of base delay
                 actual_delay = base_delay * jitter
                 logger.info(f"⏳ Waiting {actual_delay:.1f} seconds before next sport (GoalServe global rate limit + jitter)")
-                time.sleep(actual_delay)
+                # ALWAYS yield via eventlet to avoid hub conflicts
+                import eventlet
+                eventlet.sleep(actual_delay if actual_delay > 0 else 0)
                 
             except Exception as e:
                 logger.error(f"❌ Error processing {sport_name}: {e}")
@@ -610,16 +628,19 @@ class PrematchOddsService:
     
     def _fetch_loop(self):
         """Main fetch loop that runs every 30 seconds"""
+        import eventlet
         logger.info("🔄 Starting pre-match odds fetch loop")
         
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 self._fetch_all_sports_odds()
                 
                 # Wait 5 minutes before next fetch cycle
                 # Each cycle takes ~18 minutes (18 sports × 60 seconds), so 5 min is reasonable
                 logger.info("⏳ Waiting 5 minutes before next fetch cycle...")
-                time.sleep(300)
+                # ALWAYS yield via eventlet to avoid hub conflicts
+                import eventlet
+                eventlet.sleep(300)
                 
             except Exception as e:
                 logger.error(f"❌ Error in fetch loop: {e}")
@@ -627,14 +648,21 @@ class PrematchOddsService:
                 
                 # Wait 30 seconds before retry
                 logger.info("⏳ Waiting 30 seconds before retry...")
-                time.sleep(30)
+                # ALWAYS yield via eventlet to avoid hub conflicts
+                import eventlet
+                eventlet.sleep(30)
     
     def start(self):
         """Start the pre-match odds service"""
         if not self.running:
             try:
                 self.running = True
-                self.fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
+                # Daemon thread so process can exit without a blocking join at shutdown
+                self.fetch_thread = threading.Thread(
+                    target=self._fetch_loop,
+                    name="prematch-odds",
+                    daemon=True
+                )
                 self.fetch_thread.start()
                 logger.info("✅ Pre-match odds service started successfully")
                 return True
@@ -645,10 +673,24 @@ class PrematchOddsService:
         return True
     
     def stop(self):
-        """Stop the pre-match odds service"""
+        """Cooperative, non-blocking stop (Eventlet-safe)."""
         self.running = False
-        if self.fetch_thread:
-            self.fetch_thread.join()
+        try:
+            self._stop_event.set()
+        except Exception:
+            pass
+        # Do NOT hard-join inside atexit; yield cooperatively instead.
+        try:
+            import eventlet
+            # give the worker loop some chances to exit
+            for _ in range(10):
+                if not (self.fetch_thread and self.fetch_thread.is_alive()):
+                    break
+                eventlet.sleep(0.05)
+        except Exception:
+            # If eventlet not available here, just skip waiting
+            pass
+        self.fetch_thread = None
         logger.info("🛑 Pre-match odds service stopped")
     
     def get_stats(self) -> Dict:
@@ -725,8 +767,9 @@ if __name__ == "__main__":
         
         # Wait for keyboard interrupt to stop
         try:
+            import eventlet
             while service.running:
-                time.sleep(1)
+                eventlet.sleep(1)
         except KeyboardInterrupt:
             logger.info("🛑 Received shutdown signal...")
             service.stop()

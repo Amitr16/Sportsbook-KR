@@ -1,0 +1,32 @@
+---
+description: Database connection and PostgreSQL parameter issues
+---
+
+# Database Connection Issues - Common Fixes
+
+## PostgreSQL Parameter Issues
+The error `unsupported startup parameter in options: statement_timeout` indicates PgBouncer is rejecting startup options.
+
+### Fix for statement_timeout parameter:
+**Problem**: PgBouncer (especially in transaction pooling mode) rejects startup `options` like `-c statement_timeout=...`
+
+**Solution**: In [src/db_compat.py](mdc:src/db_compat.py):
+1. **Remove `options` from connection kwargs** - No startup parameters
+2. **Apply timeouts after connection** - Use `SET` statements in `connection_ctx()`
+3. **Keep per-route `SET LOCAL`** - These remain the strictest guards
+
+```python
+# In connection_ctx() - after acquiring connection:
+_c.execute(f"SET statement_timeout = {stmt_timeout}")
+_c.execute(f"SET idle_in_transaction_session_timeout = {idle_tx_timeout}")
+```
+
+### Connection Pool Issues
+- Pool exhaustion shows as `PoolTimeout` errors
+- Use `connection_ctx(timeout=5)` with shorter timeouts for non-critical routes
+- Set `SET LOCAL statement_timeout = '2000ms'` per-request for faster failures
+
+### Fly.io Specific
+- Ensure `IS_PRODUCTION=true` in [fly.toml](mdc:fly.toml)
+- Check that `DB_PREPARE_THRESHOLD=0` is compatible with your PostgreSQL version
+- Use keepalives: `DB_KEEPALIVES_IDLE=30`, `DB_KEEPALIVES_INTERVAL=10`

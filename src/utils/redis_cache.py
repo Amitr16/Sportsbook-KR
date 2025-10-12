@@ -5,6 +5,7 @@ Shared across all web instances for consistent caching
 
 import os
 import json
+import datetime, decimal, uuid
 import redis
 import logging
 from typing import Optional, Any
@@ -64,6 +65,19 @@ def redis_cache_get(key: str) -> Optional[Any]:
         logger.warning(f"Redis GET error for key {key}: {e}")
         return None
 
+def _safe_json_default(o):
+    if isinstance(o, (datetime.datetime, datetime.date)):
+        # Always ISO 8601 in UTC if tz-aware
+        if isinstance(o, datetime.datetime) and o.tzinfo:
+            return o.astimezone(datetime.timezone.utc).isoformat()
+        return o.isoformat()
+    if isinstance(o, decimal.Decimal):
+        return float(o)
+    if isinstance(o, uuid.UUID):
+        return str(o)
+    # Fallback: string repr to avoid hard failures
+    return str(o)
+
 def redis_cache_set(key: str, value: Any, ttl: int = 3600):
     """
     Set value in Redis cache with TTL
@@ -78,8 +92,8 @@ def redis_cache_set(key: str, value: Any, ttl: int = 3600):
         if not client:
             return False
         
-        # Serialize to JSON
-        serialized = json.dumps(value)
+        # Serialize to JSON (tolerant of datetime/Decimal/UUID)
+        serialized = json.dumps(value, default=_safe_json_default, ensure_ascii=False)
         client.setex(key, ttl, serialized)
         return True
         

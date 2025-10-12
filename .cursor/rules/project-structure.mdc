@@ -1,0 +1,33 @@
+---
+alwaysApply: true
+---
+
+# Goalserve Sportsbook Backend - Project Structure Guide
+
+## Core Architecture
+- **Main entry point**: [run.py](mdc:run.py) - Application startup with eventlet monkey patching
+- **Flask app**: [src/main.py](mdc:src/main.py) - Main Flask application and blueprint registration
+- **Database**: [src/db_compat.py](mdc:src/db_compat.py) - Connection pooling and compatibility layer
+- **Configuration**: [src/config/env_loader.py](mdc:src/config/env_loader.py) - Environment variable management
+
+## Key Routes & Services
+- **Authentication**: [src/routes/auth.py](mdc:src/routes/auth.py) - Google OAuth and general auth
+- **Tenant Auth**: [src/routes/tenant_auth.py](mdc:src/routes/tenant_auth.py) - Multi-tenant user authentication
+- **Sports Data**: [src/routes/json_sports.py](mdc:src/routes/json_sports.py) - Sports events and odds
+- **Multi-tenant**: [src/routes/clean_multitenant_routing.py](mdc:src/routes/clean_multitenant_routing.py) - Tenant routing
+- **Background Workers**: [src/prematch_odds_service.py](mdc:src/prematch_odds_service.py) - Odds fetching worker
+
+## Deployment
+- **Fly.io Config**: [fly.toml](mdc:fly.toml) - Deployment configuration with process types
+- **Docker**: [Dockerfile](mdc:Dockerfile) - Container configuration
+
+## Database & Performance
+- Uses PostgreSQL with connection pooling via psycopg
+- Redis caching for distributed performance
+- Connection timeouts and keepalives configured for Fly.io
+- Circuit breakers for high-load scenarios
+
+## Environment
+- Local: Uses `env.local` for development overrides
+- Production: Environment variables set via Fly.io secrets
+- Process types: `web`, `worker_odds`, `worker_settlement`

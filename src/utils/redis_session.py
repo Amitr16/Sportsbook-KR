@@ -61,24 +61,27 @@ class RedisSessionInterface(SessionInterface):
         cookie_name = app.config.get('SESSION_COOKIE_NAME', 'session')
         sid = request.cookies.get(cookie_name)
         
+        # Default permanent to True for persistent sessions
+        permanent = app.config.get('SESSION_PERMANENT', True)
+        
         if not sid:
             sid = self.generate_sid()
-            return RedisSession(sid=sid, permanent=self.permanent)
+            return RedisSession(sid=sid, permanent=permanent)
         
         if self.use_signer:
             signer = self.get_signing_serializer(app)
             if signer is None:
                 sid = self.generate_sid()
-                return RedisSession(sid=sid, permanent=self.permanent)
+                return RedisSession(sid=sid, permanent=permanent)
             try:
                 sid_as_bytes = sid.encode('utf-8') if isinstance(sid, str) else sid
                 sid = signer.loads(sid_as_bytes)
             except Exception:
                 sid = self.generate_sid()
-                return RedisSession(sid=sid, permanent=self.permanent)
+                return RedisSession(sid=sid, permanent=permanent)
         
         if not self.redis_client:
-            return RedisSession(sid=sid, permanent=self.permanent)
+            return RedisSession(sid=sid, permanent=permanent)
         
         try:
             # Get session data from Redis
@@ -88,14 +91,14 @@ class RedisSessionInterface(SessionInterface):
             if data:
                 # Deserialize session data
                 session_data = pickle.loads(data)
-                return RedisSession(session_data, sid=sid, permanent=self.permanent)
+                return RedisSession(session_data, sid=sid, permanent=permanent)
             else:
                 # Session expired or doesn't exist
-                return RedisSession(sid=sid, permanent=self.permanent)
+                return RedisSession(sid=sid, permanent=permanent)
                 
         except Exception as e:
             logger.error(f"Error loading session {sid}: {e}")
-            return RedisSession(sid=sid, permanent=self.permanent)
+            return RedisSession(sid=sid, permanent=permanent)
     
     def save_session(self, app, session, response):
         """Save session to Redis"""
@@ -121,7 +124,7 @@ class RedisSessionInterface(SessionInterface):
             return
         
         # Set cookie expiry
-        if self.permanent:
+        if session.permanent:
             expires = self.get_expiration_time(app, session)
         else:
             expires = None

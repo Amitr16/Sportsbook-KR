@@ -167,26 +167,30 @@ def get_db_connection():
 def filter_disabled_events(events, sport_name):
     """Filter out disabled events from the events list"""
     try:
-        conn = get_db_connection()
-        
-        # Get all disabled event keys from the event_key column
-        # Handle both boolean and integer types for is_disabled
-        try:
-            disabled_events = conn.execute(
-                'SELECT event_key FROM disabled_events WHERE is_disabled = true'
-            ).fetchall()
-        except Exception as bool_error:
+        # Don't let this endpoint starve auth/tenant: 2s max
+        from src.db_compat import connection_ctx
+        with connection_ctx(timeout=2) as conn:
+            # Set very short statement timeout for this endpoint
+            with conn.cursor() as c:
+                c.execute("SET LOCAL statement_timeout = '1500ms'")
+            
+            # Get all disabled event keys from the event_key column
+            # Handle both boolean and integer types for is_disabled
             try:
-                # Fallback to integer comparison
-                disabled_events = conn.execute(
-                    'SELECT event_key FROM disabled_events WHERE is_disabled = 1'
-                ).fetchall()
-            except Exception as int_error:
-                print(f"🔍 Warning: Could not query disabled_events table: {bool_error}, {int_error}")
-                disabled_events = []
-        
-        disabled_keys = set(row['event_key'] for row in disabled_events)
-        conn.close()
+                with conn.cursor() as cursor:
+                    cursor.execute('SELECT event_key FROM disabled_events WHERE is_disabled = true')
+                    disabled_events = cursor.fetchall()
+            except Exception as bool_error:
+                try:
+                    # Fallback to integer comparison
+                    with conn.cursor() as cursor:
+                        cursor.execute('SELECT event_key FROM disabled_events WHERE is_disabled = 1')
+                        disabled_events = cursor.fetchall()
+                except Exception as int_error:
+                    print(f"🔍 Warning: Could not query disabled_events table: {bool_error}, {int_error}")
+                    disabled_events = []
+            
+            disabled_keys = set(row['event_key'] for row in disabled_events)
         
         print(f"🔍 Filtering {len(events)} events for sport: {sport_name}")
         print(f"🔍 Disabled keys: {disabled_keys}")
