@@ -686,13 +686,24 @@ def get_operator_wallets():
             ow_earnings.web3_wallet_address as earnings_web3_address
         FROM sportsbook_operators so
         LEFT JOIN operator_wallets ow_capital ON so.id = ow_capital.operator_id AND ow_capital.wallet_type = 'bookmaker_capital'
-        LEFT JOIN operator_wallets ow_liquidity ON so.id = ow_liquidity.operator_id AND ow_liquidity.wallet_type = 'bookmaker_liquidity'
-        LEFT JOIN operator_wallets ow_revenue ON so.id = ow_revenue.operator_id AND ow_revenue.wallet_type = 'revenue_pool'
-        LEFT JOIN operator_wallets ow_earnings ON so.id = ow_earnings.operator_id AND ow_earnings.wallet_type = 'earnings_pool'
+        LEFT JOIN operator_wallets ow_liquidity ON so.id = ow_liquidity.operator_id AND ow_liquidity.wallet_type = 'liquidity_pool'
+        LEFT JOIN operator_wallets ow_revenue ON so.id = ow_revenue.operator_id AND ow_revenue.wallet_type = 'revenue'
+        LEFT JOIN operator_wallets ow_earnings ON so.id = ow_earnings.operator_id AND ow_earnings.wallet_type = 'bookmaker_earnings'
         ORDER BY so.sportsbook_name
         """
         
+        # Get Kryzel wallet balance separately
+        kryzel_wallet_query = """
+        SELECT current_balance FROM operator_wallets 
+        WHERE operator_id = 0 AND wallet_type = 'kryzel_platform_fee'
+        """
+        
         operators = conn.execute(operators_query).fetchall()
+        
+        # Get Kryzel wallet balance
+        kryzel_wallet = conn.execute(kryzel_wallet_query).fetchone()
+        kryzel_balance = round(float(kryzel_wallet['current_balance'] or 0), 2) if kryzel_wallet else 0.0
+        
         conn.close()
         
         # Process operators and get Web3 balances
@@ -745,7 +756,8 @@ def get_operator_wallets():
         
         return jsonify({
             'operators': processed_operators,
-            'total': len(processed_operators)
+            'total': len(processed_operators),
+            'kryzel_wallet_balance': kryzel_balance
         })
         
     except Exception as e:
@@ -802,9 +814,9 @@ def get_operators_web3_balances():
             ow_earnings.web3_wallet_address as earnings_web3_address
         FROM sportsbook_operators so
         LEFT JOIN operator_wallets ow_capital ON so.id = ow_capital.operator_id AND ow_capital.wallet_type = 'bookmaker_capital'
-        LEFT JOIN operator_wallets ow_liquidity ON so.id = ow_liquidity.operator_id AND ow_liquidity.wallet_type = 'bookmaker_liquidity'
-        LEFT JOIN operator_wallets ow_revenue ON so.id = ow_revenue.operator_id AND ow_revenue.wallet_type = 'revenue_pool'
-        LEFT JOIN operator_wallets ow_earnings ON so.id = ow_earnings.operator_id AND ow_earnings.wallet_type = 'earnings_pool'
+        LEFT JOIN operator_wallets ow_liquidity ON so.id = ow_liquidity.operator_id AND ow_liquidity.wallet_type = 'liquidity_pool'
+        LEFT JOIN operator_wallets ow_revenue ON so.id = ow_revenue.operator_id AND ow_revenue.wallet_type = 'revenue'
+        LEFT JOIN operator_wallets ow_earnings ON so.id = ow_earnings.operator_id AND ow_earnings.wallet_type = 'bookmaker_earnings'
         WHERE so.id IN ({placeholders})
         """
         

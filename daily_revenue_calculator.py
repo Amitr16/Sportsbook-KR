@@ -12,6 +12,9 @@ from decimal import Decimal, ROUND_HALF_UP
 # Add the src directory to the path so we can import our modules
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
+# Load environment variables (same as main app)
+from src.config.env_loader import *  # noqa: F401 - just to execute the loader
+
 from src import sqlite3_shim as sqlite3
 
 def get_db_connection():
@@ -100,9 +103,9 @@ def calculate_total_combined_revenue(operator_id, conn):
         
         total_revenue = sportsbook_revenue + casino_revenue
         
-        print(f"   📊 Sportsbook revenue: ${sportsbook_revenue:.2f}")
-        print(f"   🎰 Casino revenue: ${casino_revenue:.2f}")
-        print(f"   💰 Total combined revenue: ${total_revenue:.2f}")
+        print(f"    Sportsbook revenue: ${sportsbook_revenue:.2f}")
+        print(f"    Casino revenue: ${casino_revenue:.2f}")
+        print(f"    Total combined revenue: ${total_revenue:.2f}")
         
         return total_revenue
         
@@ -166,7 +169,7 @@ def get_previous_total_revenue(operator_id, conn):
 def update_daily_revenue_calculations():
     """Main function to update revenue_calculations table for all operators"""
     
-    print(f"🔄 Starting daily revenue calculations for {date.today()}")
+    print(f" Starting daily revenue calculations for {date.today()}")
     
     conn = get_db_connection()
     
@@ -181,16 +184,16 @@ def update_daily_revenue_calculations():
         operators = conn.execute(operators_query).fetchall()
         
         if not operators:
-            print("❌ No active operators found")
+            print(" No active operators found")
             return
         
-        print(f"📊 Found {len(operators)} active operators")
+        print(f" Found {len(operators)} active operators")
         
         for operator in operators:
             operator_id = operator['id']
             operator_name = operator['sportsbook_name']
             
-            print(f"\n🏢 Processing operator: {operator_name} (ID: {operator_id})")
+            print(f"\n Processing operator: {operator_name} (ID: {operator_id})")
             
             # Calculate current total revenue from both sportsbook and casino
             current_total_revenue = calculate_total_combined_revenue(operator_id, conn)
@@ -209,20 +212,20 @@ def update_daily_revenue_calculations():
             # Calculate today's profit
             todays_profit = current_total_revenue - previous_total_revenue
             
-            print(f"   💰 Current total_revenue: ${current_total_revenue:.2f}")
-            print(f"   📈 Previous total_revenue: ${previous_total_revenue:.2f}")
-            print(f"   📊 Today's profit: ${todays_profit:.2f}")
+            print(f"    Current total_revenue: ${current_total_revenue:.2f}")
+            print(f"    Previous total_revenue: ${previous_total_revenue:.2f}")
+            print(f"    Today's profit: ${todays_profit:.2f}")
             
             # Get wallet balances
             bookmaker_capital, liquidity_pool = get_operator_wallet_balances(operator_id, conn)
             
-            print(f"   🏦 Bookmaker capital: ${bookmaker_capital:.2f}")
-            print(f"   💧 Liquidity pool: ${liquidity_pool:.2f}")
+            print(f"    Bookmaker capital: ${bookmaker_capital:.2f}")
+            print(f"    Liquidity pool: ${liquidity_pool:.2f}")
             
             # Calculate revenue distribution
             distribution = calculate_revenue_distribution(todays_profit, bookmaker_capital, liquidity_pool)
             
-            print(f"   📋 Distribution:")
+            print(f"    Distribution:")
             print(f"      - Bookmaker own share: ${distribution['bookmaker_own_share']:.2f}")
             print(f"      - Kryzel fee: ${distribution['kryzel_fee_from_own']:.2f}")
             print(f"      - Community share (30%): ${distribution['community_share_30']:.2f}")
@@ -251,14 +254,14 @@ def update_daily_revenue_calculations():
                 datetime.now()
             ))
             
-            print(f"   ✅ Revenue calculation record created")
+            print(f"    Revenue calculation record created")
         
         # Commit all changes
         conn.commit()
-        print(f"\n🎉 Daily revenue calculations completed successfully!")
+        print(f"\n Daily revenue calculations completed successfully!")
         
     except Exception as e:
-        print(f"❌ Error during revenue calculations: {e}")
+        print(f" Error during revenue calculations: {e}")
         import traceback
         traceback.print_exc()
         conn.rollback()
@@ -271,7 +274,7 @@ def main():
     try:
         update_daily_revenue_calculations()
     except Exception as e:
-        print(f"💥 Fatal error: {e}")
+        print(f" Fatal error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
