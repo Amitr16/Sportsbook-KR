@@ -172,6 +172,15 @@
         let themeLoaded = false;
         let authLoaded = false;
         
+        // MASTER FAILSAFE: Force hide loading screen after 15 seconds no matter what
+        setTimeout(() => {
+            if (!loadingComplete) {
+                console.warn('⚠️ FAILSAFE: Loading took too long, forcing completion');
+                loadingComplete = true;
+                hideLoadingScreen();
+            }
+        }, 15000);
+        
         function checkLoadingComplete() {
             if (themeLoaded && authLoaded && !loadingComplete) {
                 loadingComplete = true;
@@ -183,7 +192,15 @@
             const loadingScreen = document.getElementById('loadingScreen');
             const mainContent = document.getElementById('mainApp');
             
+            // Prevent multiple calls from causing flicker
+            if (loadingComplete && loadingScreen && loadingScreen.style.opacity === '0') {
+                console.log('⏭️ Loading screen already hidden, skipping');
+                return;
+            }
+            
             if (loadingScreen && mainContent) {
+                console.log('🎬 Hiding loading screen and showing main content');
+                
                 // Fade out loading screen
                 loadingScreen.style.opacity = '0';
                 loadingScreen.style.transition = 'opacity 0.3s ease-in-out';
@@ -191,10 +208,23 @@
                 // Show main content
                 mainContent.classList.add('loaded');
                 
-                // Remove loading screen after fade
+                // Remove loading screen after fade (only once)
                 setTimeout(() => {
-                    loadingScreen.remove();
+                    if (loadingScreen && loadingScreen.parentNode) {
+                        loadingScreen.remove();
+                    }
                 }, 300);
+                
+                // Trigger initial display of events/markets ONCE after loading completes
+                setTimeout(() => {
+                    console.log('🎯 Triggering initial display after loading complete');
+                    if (typeof displayEvents === 'function') {
+                        displayEvents();
+                    }
+                    if (typeof updateBettingMarkets === 'function') {
+                        updateBettingMarkets();
+                    }
+                }, 600); // Wait for fade + small buffer
             }
         }
         
@@ -211,7 +241,7 @@
             console.log('✅ Page initialization complete');
         }
         
-        // Modified theme loading function
+        // Modified theme loading function with timeout protection
         async function loadThemeCSSAndData() {
             const path = window.location.pathname;
             const subdomain = path.split('/')[1];
@@ -222,17 +252,32 @@
                 
                 console.log('[THEME] Loading CSS and data in parallel...');
                 
-                // Load both CSS and data in parallel
+                // Helper function to add timeout to fetch
+                const fetchWithTimeout = (url, timeout = 5000) => {
+                    return Promise.race([
+                        fetch(url),
+                        new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Timeout')), timeout)
+                        )
+                    ]);
+                };
+                
+                // Load both CSS and data in parallel with 5s timeout
                 const [cssResponse, dataResponse] = await Promise.allSettled([
-                    fetch(themeUrl),
-                    fetch(themeDataUrl)
+                    fetchWithTimeout(themeUrl, 5000),
+                    fetchWithTimeout(themeDataUrl, 5000)
                 ]);
                 
-                // Apply CSS immediately
+                // Apply CSS immediately (even if failed, fallback to default)
                 const themeCssLink = document.getElementById('theme-css');
                 const themeCssPreload = document.getElementById('theme-css-preload');
-                if (themeCssPreload) themeCssPreload.href = themeUrl;
-                if (themeCssLink) themeCssLink.href = themeUrl;
+                
+                if (cssResponse.status === 'fulfilled') {
+                    if (themeCssPreload) themeCssPreload.href = themeUrl;
+                    if (themeCssLink) themeCssLink.href = themeUrl;
+                } else {
+                    console.warn('[THEME] CSS load failed, using defaults:', cssResponse.reason);
+                }
                 
                 // Apply theme data if available
                 if (dataResponse.status === 'fulfilled' && dataResponse.value.ok) {
@@ -240,11 +285,13 @@
                         const themeData = await dataResponse.value.json();
                         applyThemeToPage(themeData);
                     } catch (e) {
-                        console.log('Theme data parsing failed, using CSS only');
+                        console.log('[THEME] Theme data parsing failed, using CSS only');
                     }
+                } else {
+                    console.warn('[THEME] Theme data load failed:', dataResponse.reason);
                 }
                 
-                console.log('[THEME] Theme loading complete');
+                console.log('[THEME] Theme loading complete (with fallbacks if needed)');
             }
             
             themeLoaded = true;
@@ -1644,12 +1691,19 @@
         const meUrl = '/api/auth/me'; // session cookie based
 
         try {
-          const me = await fetch(meUrl, {
+          // Add timeout protection for auth check (10s timeout)
+          const authFetch = fetch(meUrl, {
             method: 'GET',
             credentials: 'include',
             cache: 'no-store',
             headers: { 'Accept': 'application/json' }
           });
+          
+          const timeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Auth check timeout')), 10000)
+          );
+          
+          const me = await Promise.race([authFetch, timeout]);
 
           // Check content-type before trusting a 200 response
           const ctype = (me.headers.get('content-type') || '').toLowerCase();
@@ -3111,11 +3165,28 @@
         }
 
         let updateBettingMarketsInProgress = false;
+        let isFirstMarketUpdate = true;
         
         function updateBettingMarkets() {
+            // CRITICAL: Skip during initial load to prevent flickering
+            if (!loadingComplete) {
+                console.log('⏭️ Skipping betting markets update - initial load in progress');
+                return;
+            }
+            
             // Prevent multiple simultaneous updates to avoid flickering
             if (updateBettingMarketsInProgress) {
                 console.log('🚫 Update betting markets already in progress, skipping...');
+                return;
+            }
+            
+            // Debounce first update to prevent flicker
+            if (isFirstMarketUpdate) {
+                isFirstMarketUpdate = false;
+                console.log('🎯 First betting markets update - debouncing 500ms');
+                setTimeout(() => {
+                    updateBettingMarkets();
+                }, 500);
                 return;
             }
             
@@ -4107,6 +4178,12 @@
         let displayEventsInProgress = false;
         
         function displayEvents() {
+            // CRITICAL: Skip during initial load to prevent flickering
+            if (!loadingComplete) {
+                console.log('⏭️ Skipping display events - initial load in progress');
+                return;
+            }
+            
             // Prevent multiple simultaneous updates to avoid flickering
             if (displayEventsInProgress) {
                 console.log('🚫 Display events already in progress, skipping...');

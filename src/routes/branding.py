@@ -326,6 +326,226 @@ def generate_custom_css(branding):
     .social-links a:hover {{
         color: var(--accent-color);
     }}
+    
+    /* ================================================
+       MOBILE-RESPONSIVE STYLES
+       ================================================ */
+    
+    /* Touch-friendly buttons - larger tap targets on mobile */
+    @media (max-width: 768px) {{
+        .btn, button, .odds-button {{
+            min-height: 44px !important;
+            padding: 12px 16px !important;
+            font-size: 16px !important;
+        }}
+        
+        /* Larger tap targets for links */
+        a {{
+            padding: 4px 0 !important;
+        }}
+        
+        /* Mobile-friendly forms */
+        input, select, textarea {{
+            font-size: 16px !important;
+            min-height: 44px !important;
+            padding: 12px !important;
+        }}
+    }}
+    
+    /* Responsive layout adjustments */
+    @media (max-width: 768px) {{
+        /* Hide or adjust navbar for mobile */
+        .navbar {{
+            padding: 0.5rem 1rem !important;
+        }}
+        
+        .navbar-brand {{
+            font-size: 1.2rem !important;
+        }}
+        
+        .navbar-nav {{
+            margin-top: 0.5rem;
+        }}
+        
+        .navbar-nav .nav-link {{
+            padding: 0.75rem 1rem !important;
+        }}
+        
+        /* Stack containers vertically */
+        .container, .container-fluid {{
+            padding-left: 15px !important;
+            padding-right: 15px !important;
+        }}
+        
+        /* Full width cards on mobile */
+        .card {{
+            margin-bottom: 1rem !important;
+        }}
+        
+        /* Responsive grid - stack columns */
+        .row > [class*='col-'] {{
+            margin-bottom: 1rem;
+        }}
+        
+        /* Responsive tables - horizontal scroll */
+        .table-responsive {{
+            display: block;
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }}
+        
+        table {{
+            min-width: 600px;
+        }}
+        
+        /* Smaller font sizes on mobile */
+        h1 {{
+            font-size: 1.75rem !important;
+        }}
+        
+        h2 {{
+            font-size: 1.5rem !important;
+        }}
+        
+        h3 {{
+            font-size: 1.25rem !important;
+        }}
+        
+        h4, h5, h6 {{
+            font-size: 1.1rem !important;
+        }}
+        
+        /* Adjust padding/margins */
+        .welcome-banner {{
+            padding: 15px !important;
+            font-size: 0.95rem !important;
+        }}
+        
+        .footer-custom {{
+            padding: 15px 0 !important;
+            font-size: 0.9rem !important;
+        }}
+        
+        /* Responsive modal */
+        .modal-dialog {{
+            margin: 0.5rem !important;
+        }}
+        
+        .modal-content {{
+            border-radius: 0.5rem !important;
+        }}
+        
+        /* Bet slip adjustments */
+        .bet-slip {{
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            max-height: 50vh;
+            overflow-y: auto;
+            z-index: 1040;
+        }}
+        
+        /* Sports list - better spacing */
+        .sport-card, .match-card, .event-card {{
+            padding: 12px !important;
+            margin-bottom: 10px !important;
+        }}
+        
+        /* Odds buttons - grid layout */
+        .odds-container {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+            gap: 8px;
+        }}
+        
+        .odds-button {{
+            width: 100%;
+            text-align: center;
+        }}
+    }}
+    
+    /* Tablet optimizations (768px - 1024px) */
+    @media (min-width: 769px) and (max-width: 1024px) {{
+        .container {{
+            max-width: 100% !important;
+            padding-left: 20px !important;
+            padding-right: 20px !important;
+        }}
+        
+        .btn, button {{
+            min-height: 40px !important;
+            padding: 10px 14px !important;
+        }}
+    }}
+    
+    /* Mobile landscape */
+    @media (max-width: 768px) and (orientation: landscape) {{
+        .navbar {{
+            padding: 0.25rem 1rem !important;
+        }}
+        
+        .modal-dialog {{
+            max-width: 90vw !important;
+        }}
+    }}
+    
+    /* Extra small screens */
+    @media (max-width: 480px) {{
+        body {{
+            font-size: 14px !important;
+        }}
+        
+        .btn, button {{
+            font-size: 14px !important;
+            padding: 10px 12px !important;
+        }}
+        
+        .navbar-brand {{
+            font-size: 1rem !important;
+        }}
+        
+        h1 {{
+            font-size: 1.5rem !important;
+        }}
+        
+        h2 {{
+            font-size: 1.3rem !important;
+        }}
+        
+        /* Stack odds buttons vertically on very small screens */
+        .odds-container {{
+            grid-template-columns: 1fr 1fr;
+        }}
+    }}
+    
+    /* Prevent horizontal scroll */
+    html, body {{
+        overflow-x: hidden !important;
+        max-width: 100vw !important;
+    }}
+    
+    /* Responsive images */
+    img {{
+        max-width: 100% !important;
+        height: auto !important;
+    }}
+    
+    /* Better mobile menu */
+    .navbar-toggler {{
+        border: none !important;
+        padding: 0.5rem !important;
+    }}
+    
+    @media (max-width: 768px) {{
+        .navbar-collapse {{
+            background-color: var(--secondary-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-top: 0.5rem;
+        }}
+    }}
     </style>
     """
     
