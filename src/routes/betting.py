@@ -611,7 +611,7 @@ def get_user_bets():
         
         with get_raw_database_connection() as conn:
             cursor = conn.cursor()
-        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
             
             # Build base query
             base_query = "FROM bets WHERE user_id = %s"
@@ -700,7 +700,7 @@ def test_betting_connection():
         from src.database_config import get_raw_database_connection
         with get_raw_database_connection() as conn:
             cursor = conn.cursor()
-        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
             cursor.execute("SELECT COUNT(*) as count FROM bets WHERE user_id = %s", (user_id,))
             result = cursor.fetchone()
             bet_count = result['count'] if result else 0
