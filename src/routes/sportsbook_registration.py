@@ -19,9 +19,9 @@ sportsbook_bp = Blueprint('sportsbook', __name__)
 DATABASE_PATH = 'src/database/app.db'
 
 def get_db_connection():
-    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
-    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
-    return conn
+    """Get database connection from pool - caller MUST call conn.close()"""
+    from src.db_compat import connect
+    return connect(use_pool=True)
 
 def generate_subdomain(sportsbook_name, login):
     """Generate a unique subdomain from sportsbook name only"""

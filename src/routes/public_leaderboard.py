@@ -11,15 +11,17 @@ logger = logging.getLogger(__name__)
 public_leaderboard_bp = Blueprint('public_leaderboard', __name__)
 
 def get_db_connection():
-    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
-    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
-    return conn
+    """Get database connection from pool - caller MUST call conn.close()"""
+    from src.db_compat import connect
+    return connect(use_pool=True)
 
 def get_latest_contest_end_date():
     """Get the latest contest end date from contest_dates table"""
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         cursor.execute("""
             SELECT contest_end_date 
@@ -30,7 +32,6 @@ def get_latest_contest_end_date():
         """)
         
         result = cursor.fetchone()
-        conn.close()
         
         if result:
             # Return the datetime as ISO format with Z suffix to indicate UTC
@@ -40,10 +41,14 @@ def get_latest_contest_end_date():
     except Exception as e:
         logger.error(f"Error fetching contest end date: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
 
 @public_leaderboard_bp.route('/api/public/user-leaderboard')
 def get_user_leaderboard():
     """Get user leaderboard ranked by profit - PUBLIC ACCESS"""
+    conn = None
     try:
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 20, type=int)
@@ -53,6 +58,7 @@ def get_user_leaderboard():
         
         conn = get_db_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '2000ms'")
         
         # Get total count of profitable users only (profit > 0) - includes casino data
         cursor.execute("""
@@ -257,6 +263,9 @@ def get_user_leaderboard():
     except Exception as e:
         logger.error(f"Error getting user leaderboard: {e}")
         return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @public_leaderboard_bp.route('/api/public/partner-leaderboard')
 def get_partner_leaderboard():

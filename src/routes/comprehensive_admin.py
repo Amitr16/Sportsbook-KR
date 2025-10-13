@@ -283,6 +283,12 @@ def get_betting_events(subdomain):
         logger.error(f"Betting events error for {subdomain}: {e}")
         return jsonify({'error': 'Failed to get events'}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @comprehensive_admin_bp.route('/api/admin/<subdomain>/users')
 @admin_required
 def get_users(subdomain):
@@ -340,6 +346,12 @@ def get_users(subdomain):
         logger.error(f"Users error for {subdomain}: {e}")
         return jsonify({'error': 'Failed to get users'}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @comprehensive_admin_bp.route('/api/admin/<subdomain>/toggle-user', methods=['POST'])
 @admin_required
 def toggle_user_status(subdomain):
@@ -381,6 +393,12 @@ def toggle_user_status(subdomain):
     except Exception as e:
         logger.error(f"Toggle user error for {subdomain}: {e}")
         return jsonify({'error': 'Failed to toggle user status'}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @comprehensive_admin_bp.route('/api/admin/<subdomain>/reports')
 @admin_required
@@ -465,6 +483,12 @@ def get_reports(subdomain):
         logger.error(f"Reports error for {subdomain}: {e}")
         return jsonify({'error': 'Failed to get reports'}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @comprehensive_admin_bp.route('/api/admin/<subdomain>/casino-setting')
 @admin_required
 def get_casino_setting(subdomain):
@@ -495,6 +519,12 @@ def get_casino_setting(subdomain):
     except Exception as e:
         logger.error(f"Casino setting error for {subdomain}: {e}")
         return jsonify({'error': 'Failed to get casino setting'}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @comprehensive_admin_bp.route('/api/admin/<subdomain>/toggle-casino', methods=['POST'])
 @admin_required
@@ -529,6 +559,12 @@ def toggle_casino_setting(subdomain):
     except Exception as e:
         logger.error(f"Toggle casino error for {subdomain}: {e}")
         return jsonify({'error': 'Failed to toggle casino setting'}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 def get_comprehensive_admin_template():
     """Get the comprehensive admin HTML template"""

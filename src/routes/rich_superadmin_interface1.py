@@ -281,6 +281,12 @@ def test_toggle_status():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 def calculate_global_event_financials(event_id, market_id, sport_name, conn):
     """Calculate max liability and max possible gain for a specific event+market combination across all operators"""
     try:
@@ -504,6 +510,12 @@ def get_global_betting_events():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/global-betting-events/toggle-status', methods=['POST'])
 @check_superadmin_auth
 def toggle_global_event_status():
@@ -553,6 +565,12 @@ def toggle_global_event_status():
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/global-users')
 @check_superadmin_auth
@@ -625,6 +643,12 @@ def get_global_users():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/global-casino-users')
 @check_superadmin_auth
 def get_global_casino_users():
@@ -678,6 +702,12 @@ def get_global_casino_users():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/operator-wallets')
 @check_superadmin_auth
@@ -782,6 +812,12 @@ def get_operator_wallets():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/web3-balances/users', methods=['POST'])
 @check_superadmin_auth
 def get_users_web3_balances():
@@ -875,6 +911,12 @@ def get_operators_web3_balances():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/global-users/reset', methods=['POST'])
 @check_superadmin_auth
@@ -1010,6 +1052,12 @@ def reset_all_global_users():
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/run-daily-revenue-calculator', methods=['POST'])
 @check_superadmin_auth
@@ -1252,6 +1300,12 @@ def get_revenue_script_status():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/global-overview')
 @check_superadmin_auth
 def get_global_overview():
@@ -1314,6 +1368,12 @@ def get_global_overview():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/operators')
 @check_superadmin_auth
 def get_operators():
@@ -1352,6 +1412,12 @@ def get_operators():
 
 
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/user/<int:user_id>/toggle', methods=['POST'])
 @check_superadmin_auth
 def toggle_global_user_status(user_id):
@@ -1381,6 +1447,12 @@ def toggle_global_user_status(user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/operator/<int:operator_id>/toggle', methods=['POST'])
 @check_superadmin_auth
 def toggle_operator_status(operator_id):
@@ -1405,6 +1477,12 @@ def toggle_operator_status(operator_id):
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/global-stats')
 @check_superadmin_auth
@@ -1569,6 +1647,12 @@ def get_global_reports_overview():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/global-reports/generate', methods=['POST'])
 @check_superadmin_auth
@@ -1742,6 +1826,12 @@ def generate_global_custom_report():
         print(f"Error generating global custom report: {e}")
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/global-reports/available-sports')
 @check_superadmin_auth
 def get_global_available_sports_for_reports():
@@ -1769,6 +1859,12 @@ def get_global_available_sports_for_reports():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/global-reports/export', methods=['POST'])
 @check_superadmin_auth
@@ -1883,6 +1979,12 @@ def export_global_custom_report():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_superadmin_bp.route('/superadmin/api/manual-settlement')
 @check_superadmin_auth
 def get_global_manual_settlement_data():
@@ -1959,6 +2061,12 @@ def get_global_manual_settlement_data():
             'success': False,
             'error': 'Failed to get settlement data'
         }), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/superadmin/api/manual-settle', methods=['POST'])
 @check_superadmin_auth
@@ -2116,6 +2224,12 @@ def global_manual_settle_bets():
             'success': False,
             'error': 'Failed to settle bets'
         }), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_superadmin_bp.route('/api/superadmin/export-pending-bets')
 @check_superadmin_auth

@@ -11,11 +11,9 @@ from datetime import datetime
 theme_bp = Blueprint('theme', __name__)
 
 def get_db_connection():
-    """Get database connection"""
-    db_path = os.path.join(os.path.dirname(__file__), '..', 'database', 'app.db')
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Get database connection from pool - caller MUST call conn.close()"""
+    from src.db_compat import connect
+    return connect(use_pool=True)
 
 @theme_bp.route('/api/theme-templates', methods=['GET'])
 def get_theme_templates():

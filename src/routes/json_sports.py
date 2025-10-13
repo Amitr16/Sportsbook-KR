@@ -160,9 +160,9 @@ def load_sport_json(sport_name):
         return None
 
 def get_db_connection():
-    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
-    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
-    return conn
+    """Get database connection from pool - caller MUST call conn.close()"""
+    from src.db_compat import connect
+    return connect(use_pool=True)
 
 def filter_disabled_events(events, sport_name):
     """Filter out disabled events from the events list"""

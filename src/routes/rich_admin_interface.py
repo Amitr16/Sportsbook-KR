@@ -455,6 +455,12 @@ def get_tenant_betting_events(subdomain):
         return jsonify({'error': str(e)}), 500
 
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/stats')
 def get_tenant_stats(subdomain):
     """Get statistics for the tenant admin dashboard"""
@@ -912,6 +918,12 @@ def get_tenant_stats(subdomain):
         print(f"Error in get_tenant_betting_events: {e}")
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/admin-check')
 def admin_check(subdomain):
     """Check if admin is logged in and return operator info"""
@@ -1004,6 +1016,12 @@ def get_tenant_users(subdomain):
         print(f"❌ DEBUG: Error in get_tenant_users: {e}")
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/casino-users')
 def get_casino_users(subdomain):
     """Get casino users filtered by tenant"""
@@ -1071,6 +1089,12 @@ def get_casino_users(subdomain):
         print(f"❌ DEBUG: Error in get_casino_users: {e}")
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/user/<int:user_id>/toggle', methods=['POST'])
 def toggle_user_status(subdomain, user_id):
     """Toggle user active status (tenant-filtered) - Affects both sportsbook and casino"""
@@ -1107,6 +1131,12 @@ def toggle_user_status(subdomain, user_id):
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_admin_bp.route('/<subdomain>/admin/api/users/reset', methods=['POST'])
 def reset_all_users(subdomain):
@@ -1226,6 +1256,12 @@ def reset_all_users(subdomain):
         print(f"❌ Error resetting users: {e}")
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/betting-events/<event_key>/toggle', methods=['POST'])
 def toggle_event_status(subdomain, event_key):
     """Toggle event active status (tenant-filtered) - using bets.is_active approach"""
@@ -1320,6 +1356,12 @@ def toggle_event_status(subdomain, event_key):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/overview')
 @require_admin_auth
 def get_reports_overview(subdomain):
@@ -1407,6 +1449,12 @@ def get_reports_overview(subdomain):
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/generate', methods=['POST'])
 @require_admin_auth
@@ -1575,6 +1623,12 @@ def generate_custom_report(subdomain):
         print(f"Error generating custom report: {e}")
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/available-sports')
 @require_admin_auth
 def get_available_sports_for_reports(subdomain):
@@ -1605,6 +1659,12 @@ def get_available_sports_for_reports(subdomain):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/casino-setting')
 @require_admin_auth
 def get_casino_setting(subdomain):
@@ -1634,6 +1694,12 @@ def get_casino_setting(subdomain):
         
     except Exception as e:
         return jsonify({'error': 'Failed to get casino setting'}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_admin_bp.route('/<subdomain>/admin/api/toggle-casino', methods=['POST'])
 @require_admin_auth
@@ -1667,6 +1733,12 @@ def toggle_casino_setting(subdomain):
         
     except Exception as e:
         return jsonify({'error': 'Failed to toggle casino setting'}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_admin_bp.route('/<subdomain>/admin/api/referral-code')
 @require_admin_auth
@@ -1708,6 +1780,12 @@ def get_referral_code(subdomain):
     except Exception as e:
         print(f"❌ DEBUG: Error getting referral code: {e}")
         return jsonify({'success': False, 'error': 'Failed to get referral code'}), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_admin_bp.route('/<subdomain>/admin/api/change-password', methods=['POST'])
 @require_admin_auth
@@ -1779,6 +1857,12 @@ def change_admin_password(subdomain):
             'success': False,
             'error': str(e)
         }), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_admin_bp.route('/<subdomain>/admin/api/reports/export', methods=['POST'])
 @require_admin_auth
@@ -1896,6 +1980,12 @@ def export_custom_report(subdomain):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+    finally:
+
+        if conn:
+
+            conn.close()
+
 @rich_admin_bp.route('/<subdomain>/admin/api/session-test')
 def session_test(subdomain):
     """Test endpoint to debug session issues"""
@@ -1991,6 +2081,12 @@ def get_manual_settlement_data(subdomain):
             'success': False,
             'error': 'Failed to get settlement data'
         }), 500
+
+    finally:
+
+        if conn:
+
+            conn.close()
 
 @rich_admin_bp.route('/<subdomain>/admin/api/manual-settle', methods=['POST'])
 def manual_settle_bets(subdomain):
@@ -2110,6 +2206,12 @@ def manual_settle_bets(subdomain):
         }), 500
 
 # Rich Admin Template (extracted from original admin_app.py)
+    finally:
+
+        if conn:
+
+            conn.close()
+
 RICH_ADMIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">

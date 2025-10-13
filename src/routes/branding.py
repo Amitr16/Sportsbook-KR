@@ -55,41 +55,44 @@ def _get_cached(key, loader):
 
 def get_db_connection():
     """
-    LEGACY FUNCTION - AVOID using this.
-    Use connection_ctx() context manager instead.
+    LEGACY FUNCTION - Returns pooled connection that MUST be closed by caller.
+    Prefer using connection_ctx() context manager in new code.
     """
-    from src.db_compat import connection_ctx
-    # LEGACY - use connection_ctx() context manager instead
-    return connection_ctx().__enter__()
+    from src.db_compat import connect
+    # Use connect() which returns a connection with _pool attached
+    # Caller must call conn.close() to return to pool
+    return connect(use_pool=True)
 
 def _load_operator_branding_from_db(subdomain):
-    """Load operator branding from database (not cached)"""
+    """Load operator branding from database (not cached) — one fast query, then release the connection."""
     from src.db_compat import connection_ctx
-    
     try:
-        with connection_ctx() as conn:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT 
-                            id, sportsbook_name, subdomain, email, is_active,
-                            settings, created_at
-                        FROM sportsbook_operators 
-                        WHERE subdomain = %s AND is_active = TRUE
-                    """, (subdomain,))
-                    operator = cur.fetchone()
-            except Exception as query_error:
-                # Ensure rollback happens before re-raising
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise query_error
-        
-        if not operator:
+        with connection_ctx(timeout=5) as conn:
+            # keep this request short; avoid holding the slot
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '1500ms'")
+                cur.execute(
+                    """
+                    SELECT id, sportsbook_name, subdomain, email, is_active,
+                           settings, created_at
+                    FROM sportsbook_operators
+                    WHERE subdomain = %s AND is_active = TRUE
+                    """,
+                    (subdomain,),
+                )
+                row = cur.fetchone()
+        if not row:
             return None
-        
-        return operator
+        # Return a plain, JSON-safe dict so caching & downstream never hold DB objects
+        return {
+            "id": row.get("id"),
+            "sportsbook_name": row.get("sportsbook_name"),
+            "subdomain": row.get("subdomain"),
+            "email": row.get("email"),
+            "is_active": row.get("is_active"),
+            "settings": row.get("settings"),
+            "created_at": row.get("created_at"),
+        }
     except Exception as e:
         logging.error(f"❌ Database error loading operator branding for {subdomain}: {e}")
         return None
@@ -142,7 +145,7 @@ def get_operator_branding(subdomain):
         return None
     
     # Parse settings or use defaults
-    settings = json.loads(operator.get('settings', '{}')) if operator.get('settings') else {}
+    settings = json.loads(operator.get('settings') or "{}")
     
     # Default branding settings
     default_branding = {
@@ -203,12 +206,19 @@ def get_operator_branding(subdomain):
         branding.update(settings['branding'])
     
     # Add operator info
-    created_at = operator.get('created_at')
-    # Handle both datetime objects and strings
-    if created_at:
-        if hasattr(created_at, 'isoformat'):
-            created_at = created_at.isoformat()
-        else:
+    # Normalize created_at to ISO, whether datetime or string
+    created_at = operator.get("created_at")
+    if created_at is not None:
+        try:
+            from datetime import datetime, date
+            if isinstance(created_at, (datetime, date)):
+                created_at = created_at.isoformat()
+            else:
+                s = str(created_at)
+                if s.endswith("Z"):
+                    s = s.replace("Z", "+00:00")
+                created_at = datetime.fromisoformat(s).isoformat()
+        except Exception:
             created_at = str(created_at)
     
     branding['operator'] = {
@@ -467,41 +477,34 @@ def update_branding(subdomain):
         
         from src.db_compat import connection_ctx
         
-        with connection_ctx() as conn:
+        with connection_ctx(timeout=5) as conn:
+            # keep the slot short & safe
             with conn.cursor() as cur:
-                # Get current settings
-                cur.execute("""
-                    SELECT id, settings FROM sportsbook_operators 
-                    WHERE subdomain = %s
-                """, (subdomain,))
-                operator = cur.fetchone()
-                
-                if not operator:
-                    return jsonify({
-                        'success': False,
-                        'error': 'Operator not found'
-                    }), 404
-                
-                # Update settings (KeyError-safe + deep-merge)
-                op_settings_raw = operator.get('settings')
-                current_settings = json.loads(op_settings_raw) if op_settings_raw else {}
-                
-                def _deep_merge(dst, src):
-                    for k, v in (src or {}).items():
-                        if isinstance(v, dict) and isinstance(dst.get(k), dict):
-                            _deep_merge(dst[k], v)
-                        else:
-                            dst[k] = v
-                    return dst
-                _deep_merge(current_settings, data)
-                
-                cur.execute("""
-                    UPDATE sportsbook_operators 
-                    SET settings = %s, updated_at = %s
-                    WHERE subdomain = %s
-                """, (json.dumps(current_settings), datetime.now(), subdomain))
-                
-                conn.commit()
+                cur.execute("SET LOCAL statement_timeout = '2000ms'")
+            # transaction ensures we never leave INTRANS on exceptions
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, settings FROM sportsbook_operators WHERE subdomain = %s",
+                        (subdomain,),
+                    )
+                    operator = cur.fetchone()
+                    if not operator:
+                        return jsonify({'success': False, 'error': 'Operator not found'}), 404
+                    op_settings_raw = operator.get('settings')
+                    current_settings = json.loads(op_settings_raw) if op_settings_raw else {}
+                    def _deep_merge(dst, src):
+                        for k, v in (src or {}).items():
+                            if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                                _deep_merge(dst[k], v)
+                            else:
+                                dst[k] = v
+                        return dst
+                    _deep_merge(current_settings, data)
+                    cur.execute(
+                        "UPDATE sportsbook_operators SET settings=%s, updated_at=%s WHERE subdomain=%s",
+                        (json.dumps(current_settings), datetime.now(), subdomain),
+                    )
         
         # Invalidate cache after update (both Redis and in-process)
         from src.utils.redis_cache import invalidate_tenant_cache
@@ -537,8 +540,9 @@ def warm_branding_cache(subdomains=None):
     try:
         if subdomains is None:
             # Fetch all active operators from database
-            with connection_ctx() as conn:
+            with connection_ctx(timeout=5) as conn:
                 with conn.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '2000ms'")
                     cur.execute("SELECT subdomain FROM sportsbook_operators WHERE is_active = TRUE")
                     rows = cur.fetchall()
                     subdomains = [row['subdomain'] for row in rows]

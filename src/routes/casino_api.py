@@ -409,6 +409,7 @@ def health():
 @casino_bp.route('/user/info')
 def get_user_info():
     """Get current user information from session"""
+    conn = None
     try:
         # Enhanced debugging
         print(f"🔍 Casino user/info - Full session: {dict(session)}")
@@ -476,10 +477,14 @@ def get_user_info():
     except Exception as e:
         print(f"❌ Error getting user info: {e}")
         return jsonify({"error": f"Failed to get user info: {str(e)}"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/wallet/balance')
 def get_balance():
     """Get user's wallet balance from shared sportsbook wallet"""
+    conn = None
     try:
         # Debug logging
         print(f"🔍 Casino balance request - Session: {dict(session)}")
@@ -542,10 +547,14 @@ def get_balance():
         print(f"❌ Traceback: {traceback.format_exc()}")
         logging.error(f"Error getting casino balance: {e}")
         return jsonify({"error": f"Failed to get balance: {str(e)}"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/slots/bet', methods=['POST'])
 def slots_bet():
     """Place a slots bet - debits stake only"""
+    conn = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -605,10 +614,14 @@ def slots_bet():
     except Exception as e:
         logging.error(f"Error in slots bet: {e}")
         return jsonify({"error": "Bet error"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/slots/result', methods=['POST'])
 def slots_result():
     """Process slots result - credits winnings"""
+    conn = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -673,10 +686,14 @@ def slots_result():
     except Exception as e:
         logging.error(f"Error in slots result: {e}")
         return jsonify({"error": "Result error"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/roulette/spin', methods=['POST'])
 def roulette_play():
     """Play roulette game"""
+    conn = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -781,10 +798,14 @@ def roulette_play():
     except Exception as e:
         logging.error(f"Error in roulette play: {e}")
         return jsonify({"error": "Game error"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/roulette/win', methods=['POST'])
 def roulette_win():
     """Credit winnings for roulette game"""
+    conn = None
     try:
         print(f"🎰 Roulette win API called")
         user_id = session.get('user_id')
@@ -867,10 +888,14 @@ def roulette_win():
         print(f"❌ Traceback: {traceback.format_exc()}")
         logging.error(f"Error in roulette win: {e}")
         return jsonify({"error": f"Win error: {str(e)}"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/blackjack/play', methods=['POST'])
 def blackjack_play():
     """Play blackjack game"""
+    conn = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -1286,10 +1311,14 @@ def blackjack_play():
     except Exception as e:
         logging.error(f"Error in blackjack play: {e}")
         return jsonify({"error": "Game error"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/baccarat/play', methods=['POST'])
 def baccarat_play():
     """Play baccarat game"""
+    conn = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -1396,10 +1425,14 @@ def baccarat_play():
     except Exception as e:
         logging.error(f"Error in baccarat play: {e}")
         return jsonify({"error": "Game error"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/crash/play', methods=['POST'])
 def crash_play():
     """Play crash game"""
+    conn = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -1485,10 +1518,14 @@ def crash_play():
     except Exception as e:
         logging.error(f"Error in crash play: {e}")
         return jsonify({"error": "Game error"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/crash/cashout', methods=['POST'])
 def crash_cashout():
     """Cash out from crash game"""
+    conn = None
     try:
         print(f"🚀 Crash cashout API called")
         user_id = session.get('user_id')
@@ -1584,10 +1621,14 @@ def crash_cashout():
         logging.error(f"Error in crash cashout: {e}")
         logging.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({"error": f"Cashout error: {str(e)}"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @casino_bp.route('/history')
 def get_game_history():
     """Get user's game history"""
+    conn = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -1638,3 +1679,6 @@ def get_game_history():
     except Exception as e:
         logging.error(f"Error getting game history: {e}")
         return jsonify({"error": "Failed to get history"}), 500
+    finally:
+        if conn:
+            conn.close()
