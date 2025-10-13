@@ -4632,11 +4632,14 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     return;
                 }
                 
+                // Store operators data for sorting
+                allOperators = data.operators || [];
+                
                 const tbody = document.getElementById('operators-tbody');
-                if (data.operators.length === 0) {
+                if (allOperators.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="12" class="loading">No operators found</td></tr>';
                 } else {
-                    tbody.innerHTML = data.operators.map(op => `
+                    tbody.innerHTML = allOperators.map(op => `
                         <tr>
                             <td>${op.id}</td>
                             <td><span class="operator-name">${op.sportsbook_name}</span></td>
@@ -4931,6 +4934,8 @@ RICH_SUPERADMIN_TEMPLATE = '''
         
         // Global Betting Events Management Functions
         let allGlobalEvents = []; // Store all events for client-side pagination
+        let allOperators = []; // Store all operators for sorting
+        let allGlobalUsers = []; // Store all users for sorting
         let currentPage = 1;
         let currentPerPage = 20;
         
@@ -5109,19 +5114,35 @@ RICH_SUPERADMIN_TEMPLATE = '''
             displayPaginatedGlobalEvents();
         }
 
-        // Table sorting function
+        // Generic table sorting function that works with all tables
         function sortTable(tableId, columnIndex) {
             const table = document.getElementById(tableId);
-            
-            // Safety check: if no events loaded, reload data first
-            if (!allGlobalEvents || allGlobalEvents.length === 0) {
-                console.log('No events loaded, reloading data...');
-                loadGlobalBettingEventsWithFilters();
+            if (!table) {
+                console.error('Table not found:', tableId);
                 return;
             }
             
-            // Get current sort direction
+            const tbody = table.querySelector('tbody');
+            if (!tbody) {
+                console.error('Table body not found for:', tableId);
+                return;
+            }
+            
+            // Get all rows (convert to array)
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            if (rows.length === 0) {
+                console.log('No rows to sort in table:', tableId);
+                return;
+            }
+            
+            // Get current sort direction from header
             const header = table.querySelector(`th:nth-child(${columnIndex + 1})`);
+            if (!header) {
+                console.error('Header not found for column:', columnIndex);
+                return;
+            }
+            
             const currentDirection = header.getAttribute('data-sort-direction') || 'asc';
             const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
             
@@ -5132,65 +5153,33 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 if (icon) icon.textContent = '↕';
             });
             
-            // Update current header
+            // Update current header with new direction
             header.setAttribute('data-sort-direction', newDirection);
             const icon = header.querySelector('.sort-icon');
             if (icon) icon.textContent = newDirection === 'asc' ? '↑' : '↓';
             
-            console.log(`Sorting ${allGlobalEvents.length} events by column ${columnIndex} (${newDirection})`);
-            
-            // Sort all events based on the column
-            allGlobalEvents.sort((a, b) => {
-                let aValue, bValue;
+            // Sort rows based on column content
+            rows.sort((rowA, rowB) => {
+                // Get cells from both rows
+                const cellA = rowA.cells[columnIndex];
+                const cellB = rowB.cells[columnIndex];
                 
-                // Get the appropriate field value based on column index
-                switch(columnIndex) {
-                    case 0: // Event ID
-                        aValue = a.event_id;
-                        bValue = b.event_id;
-                        break;
-                    case 1: // Sport
-                        aValue = a.sport;
-                        bValue = b.sport;
-                        break;
-                    case 2: // Event Name
-                        aValue = a.event_name;
-                        bValue = b.event_name;
-                        break;
-                    case 3: // Market
-                        aValue = a.market;
-                        bValue = b.market;
-                        break;
-                    case 4: // Total Bets
-                        aValue = a.total_bets;
-                        bValue = b.total_bets;
-                        break;
-                    case 5: // Liability
-                        aValue = Math.abs(a.liability);
-                        bValue = Math.abs(b.liability);
-                        break;
-                    case 6: // Revenue
-                        aValue = Math.abs(a.revenue);
-                        bValue = Math.abs(b.revenue);
-                        break;
-                    case 7: // Status
-                        aValue = a.status;
-                        bValue = b.status;
-                        break;
-                    default:
-                        aValue = '';
-                        bValue = '';
-                }
+                if (!cellA || !cellB) return 0;
                 
-                // Handle numeric values
+                // Get text content, stripping out HTML tags and special chars
+                let aValue = cellA.textContent.trim().replace(/[$,]/g, '');
+                let bValue = cellB.textContent.trim().replace(/[$,]/g, '');
+                
+                // Try to parse as numbers
                 const aNum = parseFloat(aValue);
                 const bNum = parseFloat(bValue);
                 
+                // If both are valid numbers, sort numerically
                 if (!isNaN(aNum) && !isNaN(bNum)) {
                     return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
                 }
                 
-                // Handle string values
+                // Otherwise sort as strings (case-insensitive)
                 const aStr = String(aValue).toLowerCase();
                 const bStr = String(bValue).toLowerCase();
                 
@@ -5201,9 +5190,11 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 }
             });
             
-            // Reset to first page and re-display
-            currentPage = 1;
-            displayPaginatedGlobalEvents();
+            // Clear tbody and append sorted rows
+            tbody.innerHTML = '';
+            rows.forEach(row => tbody.appendChild(row));
+            
+            console.log(`Sorted ${rows.length} rows in ${tableId} by column ${columnIndex} (${newDirection})`);
         }
 
         function displayGlobalEvents(events) {
@@ -5328,6 +5319,11 @@ RICH_SUPERADMIN_TEMPLATE = '''
         // Add event listeners for filters
         document.addEventListener('DOMContentLoaded', function() {
             console.log('DOM loaded, setting up event listeners...');
+            
+            // Initialize all sort icons with default arrow
+            document.querySelectorAll('.sort-icon').forEach(icon => {
+                icon.textContent = '↕';
+            });
             
             // Load initial data for global overview
             loadGlobalOverview();
