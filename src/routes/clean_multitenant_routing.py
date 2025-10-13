@@ -916,6 +916,7 @@ body {{
         try:
             with connection_ctx() as conn:
                 cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
             
             # Get theme customization for this operator
             cursor.execute('''

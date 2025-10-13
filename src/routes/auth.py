@@ -1083,32 +1083,35 @@ def update_username():
         
         # Check if username is already taken by another user in the same operator
         from src.db_compat import get_connection
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id FROM users 
-            WHERE username = %s AND sportsbook_operator_id = %s AND id != %s
-        """, (new_username, operator_id, user_id))
-        
-        if cursor.fetchone():
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT id FROM users 
+                WHERE username = %s AND sportsbook_operator_id = %s AND id != %s
+            """, (new_username, operator_id, user_id))
+            
+            if cursor.fetchone():
+                cursor.close()
+                return jsonify({
+                    'success': False,
+                    'error': 'Username is already taken'
+                }), 400
+            
+            # Update username
+            cursor.execute("""
+                UPDATE users 
+                SET username = %s 
+                WHERE id = %s AND sportsbook_operator_id = %s
+            """, (new_username, user_id, operator_id))
+            
+            conn.commit()
             cursor.close()
-            conn.close()
-            return jsonify({
-                'success': False,
-                'error': 'Username is already taken'
-            }), 400
-        
-        # Update username
-        cursor.execute("""
-            UPDATE users 
-            SET username = %s 
-            WHERE id = %s AND sportsbook_operator_id = %s
-        """, (new_username, user_id, operator_id))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
+        finally:
+            if conn:
+                conn.close()
         
         # Update session
         session['username'] = new_username
@@ -1167,27 +1170,31 @@ def generate_username():
         
         # Check if username is available
         from src.db_compat import get_connection
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id FROM users 
-            WHERE username = %s AND sportsbook_operator_id = %s
-        """, (username, user.sportsbook_operator_id))
-        
-        # If username is taken, try with different number
-        attempts = 0
-        while cursor.fetchone() and attempts < 10:
-            number = random.randint(1, 9999)
-            username = f"{prefix}{suffix}{number}"
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
             cursor.execute("""
                 SELECT id FROM users 
                 WHERE username = %s AND sportsbook_operator_id = %s
             """, (username, user.sportsbook_operator_id))
-            attempts += 1
-        
-        cursor.close()
-        conn.close()
+            
+            # If username is taken, try with different number
+            attempts = 0
+            while cursor.fetchone() and attempts < 10:
+                number = random.randint(1, 9999)
+                username = f"{prefix}{suffix}{number}"
+                cursor.execute("""
+                    SELECT id FROM users 
+                    WHERE username = %s AND sportsbook_operator_id = %s
+                """, (username, user.sportsbook_operator_id))
+                attempts += 1
+            
+            cursor.close()
+        finally:
+            if conn:
+                conn.close()
         
         logger.info(f"Generated username for user {user.id}: {username}")
         

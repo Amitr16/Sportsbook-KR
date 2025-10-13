@@ -316,13 +316,21 @@ def settle_split_hands(split_hands, dealer, deck, stake, ref):
     
     # Credit total winnings
     if total_payout > 0:
-        cursor = get_connection().cursor()
-        cursor.execute("""
-            UPDATE users 
-            SET balance = balance + %s
-            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-        """, (total_payout, session.get('user_id'), session.get('operator_id')))
-        print(f"💰 Split hands total payout credited: +{total_payout}")
+        temp_conn = None
+        try:
+            temp_conn = get_connection()
+            temp_cursor = temp_conn.cursor()
+            temp_cursor.execute("""
+                UPDATE users 
+                SET balance = balance + %s
+                WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+            """, (total_payout, session.get('user_id'), session.get('operator_id')))
+            temp_conn.commit()
+            temp_cursor.close()
+            print(f"💰 Split hands total payout credited: +{total_payout}")
+        finally:
+            if temp_conn:
+                temp_conn.close()
     
     return {
         "deck": deck,
@@ -448,6 +456,7 @@ def get_user_info():
         # Get user info from database
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         cursor.execute("""
             SELECT username, email, balance, created_at, last_login
@@ -515,6 +524,7 @@ def get_balance():
             conn = get_connection()
             print(f"✅ Database connection successful")
             cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         except Exception as e:
             print(f"❌ Database connection failed: {e}")
             return jsonify({"error": f"Database connection failed: {str(e)}"}), 500
@@ -574,6 +584,7 @@ def slots_bet():
         # Check balance
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         cursor.execute("""
             SELECT balance FROM users 
@@ -646,6 +657,7 @@ def slots_result():
         # Store game round
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         cursor.execute("""
             INSERT INTO game_round (game_key, user_id, stake, currency, payout, ref, result_json)
@@ -722,6 +734,7 @@ def roulette_play():
         # Check balance
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         cursor.execute("""
             SELECT balance FROM users 
@@ -829,6 +842,7 @@ def roulette_win():
         
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         # Get the original game round
         cursor.execute("""
@@ -923,6 +937,7 @@ def blackjack_play():
         
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         if action == "deal":
             if stake <= 0:
@@ -1340,6 +1355,7 @@ def baccarat_play():
         # Check balance
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         cursor.execute("""
             SELECT balance FROM users 
@@ -1454,6 +1470,7 @@ def crash_play():
         # Check balance
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         cursor.execute("""
             SELECT balance FROM users 
@@ -1549,6 +1566,7 @@ def crash_cashout():
         
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         # Get the original game round
         cursor.execute("""
@@ -1643,6 +1661,7 @@ def get_game_history():
         
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
         # Get game history from database
         print(f"🔍 Game history - user_id: {user_id} (type: {type(user_id)})")
