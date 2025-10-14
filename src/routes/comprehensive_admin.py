@@ -17,7 +17,13 @@ comprehensive_admin_bp = Blueprint('comprehensive_admin', __name__)
 
 def get_db_connection():
     """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    from src.utils.connection_tracker import track_connection_acquired
+    
+    # Track this connection acquisition
+    context, track_start = track_connection_acquired("comprehensive_admin.py::get_db_connection")
     conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
+    conn._tracking_context = context
+    conn._tracking_start = track_start
     return conn
 
 def admin_required(f):

@@ -14,8 +14,14 @@ rich_admin_bp = Blueprint('rich_admin', __name__)
 
 def get_db_connection():
     """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    from src.utils.connection_tracker import track_connection_acquired
+    
+    # Track this connection acquisition
+    context, track_start = track_connection_acquired("rich_admin_interface.py::get_db_connection")
     conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
     conn.row_factory = sqlite3.Row
+    conn._tracking_context = context
+    conn._tracking_start = track_start
     return conn
 
 def require_admin_auth(f):

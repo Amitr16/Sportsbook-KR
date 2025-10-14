@@ -476,7 +476,10 @@ def db_health():
         }, 500
     finally:
         if db:
-            db.close()
+            try:
+                db.close()
+            except Exception:
+                pass
 
 # Bind the betting models to our database instance
 from src.models.betting import bind_models_to_db
@@ -806,7 +809,7 @@ def db_pool_status():
     try:
         from src.db_compat import pool as get_pool
         
-        # Get pool status
+        # Get pool status (no connection held - just stats)
         pool = get_pool()
         
         # Get SQLAlchemy pool info
