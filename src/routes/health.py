@@ -72,12 +72,23 @@ def detailed_health():
             max_size = 0
             usage_pct = 0
         
+        # Get per-route connection tracking
+        try:
+            from src.utils.connection_tracker import get_top_connection_users, get_connection_stats
+            top_users = get_top_connection_users(limit=10)
+            all_stats = get_connection_stats()
+        except Exception:
+            top_users = []
+            all_stats = {}
+        
         health_data["checks"]["database_pool"] = {
             "status": "healthy",
             "usage_percent": round(usage_pct, 1),
             "active_connections": pool_size,
             "max_connections": max_size,
-            "circuit_breaker_open": is_db_circuit_breaker_open()
+            "circuit_breaker_open": is_db_circuit_breaker_open(),
+            "top_connection_users": top_users,
+            "connection_count": len(all_stats)
         }
     except Exception as e:
         health_data["checks"]["database_pool"] = {

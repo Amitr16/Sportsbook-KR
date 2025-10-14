@@ -426,8 +426,14 @@ def connection_ctx(timeout=10):
     Includes connection leak detection (warns if held > 300ms)
     """
     import time
+    from src.utils.connection_tracker import track_connection_acquired, track_connection_released
+    
     p = pool()  # existing global Pool factory
     start_time = time.time()
+    
+    # Track connection acquisition
+    context, track_start = track_connection_acquired()
+    
     raw = p.getconn(timeout=timeout)
     
     # CRITICAL: Clean aborted transactions BEFORE opening cursor
@@ -499,6 +505,9 @@ def connection_ctx(timeout=10):
     try:
         yield compat_conn
     finally:
+        # Track connection release
+        track_connection_released(context, track_start)
+        
         # Calculate how long connection was held
         hold_time_ms = (time.time() - start_time) * 1000
         
