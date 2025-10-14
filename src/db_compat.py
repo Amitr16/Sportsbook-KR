@@ -242,6 +242,15 @@ class CompatConnection:
     def close(self):
         if self._closed:
             return
+            
+        # Track connection release if tracking info exists
+        if hasattr(self, '_tracking_context') and hasattr(self, '_tracking_start'):
+            try:
+                from src.utils.connection_tracker import track_connection_released
+                track_connection_released(self._tracking_context, self._tracking_start)
+            except Exception:
+                pass  # Don't let tracking errors break connection cleanup
+            
         pool, raw = self._pool, self._conn
         # Detach first so later __del__/__exit__ cannot close a pooled conn
         self._pool = None

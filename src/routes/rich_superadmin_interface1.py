@@ -19,6 +19,12 @@ def get_db_connection():
     New code should use connection_ctx() context manager instead.
     """
     from src.db_compat import pool, CompatConnection
+    from src.utils.connection_tracker import track_connection_acquired
+    import time
+    
+    # Track this connection acquisition
+    context, track_start = track_connection_acquired("rich_superadmin_interface1.py::get_db_connection")
+    
     raw = pool().getconn(timeout=10)
     
     # Clean any aborted transactions before use
@@ -35,6 +41,11 @@ def get_db_connection():
     
     conn = CompatConnection(raw)
     conn._pool = pool()
+    
+    # Store tracking info for cleanup
+    conn._tracking_context = context
+    conn._tracking_start = track_start
+    
     return conn
 
 def calculate_casino_revenue(operator_id, conn):
