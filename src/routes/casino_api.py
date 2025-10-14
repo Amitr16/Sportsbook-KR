@@ -21,6 +21,18 @@ from src.config.env_loader import *  # noqa: F401 - just to execute the loader
 from src.db_compat import get_connection
 import logging
 
+def get_tracked_connection():
+    """Get database connection with tracking - casino API version"""
+    from src.utils.connection_tracker import track_connection_acquired
+    import time
+    
+    # Track this connection acquisition
+    context, track_start = track_connection_acquired("casino_api.py::get_tracked_connection")
+    conn = get_tracked_connection()
+    conn._tracking_context = context
+    conn._tracking_start = track_start
+    return conn
+
 casino_bp = Blueprint('casino', __name__, url_prefix='/api/casino')
 
 # Casino game utilities (simplified versions)
@@ -318,7 +330,7 @@ def settle_split_hands(split_hands, dealer, deck, stake, ref):
     if total_payout > 0:
         temp_conn = None
         try:
-            temp_conn = get_connection()
+            temp_conn = get_tracked_connection()
             temp_cursor = temp_conn.cursor()
             temp_cursor.execute("""
                 UPDATE users 
@@ -454,7 +466,7 @@ def get_user_info():
             }), 401
         
         # Get user info from database
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -521,7 +533,7 @@ def get_balance():
         print(f"✅ Using user_id: {user_id}, operator_id: {operator_id}")
         
         try:
-            conn = get_connection()
+            conn = get_tracked_connection()
             print(f"✅ Database connection successful")
             cursor = conn.cursor()
             cursor.execute("SET LOCAL statement_timeout = '1500ms'")
@@ -582,7 +594,7 @@ def slots_bet():
             return jsonify({"error": "Invalid stake amount"}), 400
         
         # Check balance
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -655,7 +667,7 @@ def slots_result():
         payout, wins = evaluate_slots(reels, stake)
         
         # Store game round
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -732,7 +744,7 @@ def roulette_play():
             return jsonify({"error": "Invalid stake amount"}), 400
         
         # Check balance
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -840,7 +852,7 @@ def roulette_win():
             print(f"❌ No ref provided")
             return jsonify({"error": "Game reference required"}), 400
         
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -935,7 +947,7 @@ def blackjack_play():
         payout = 0.0
         result = {}
         
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -1353,7 +1365,7 @@ def baccarat_play():
             return jsonify({"error": "Invalid stake current_balance"}), 400
         
         # Check balance
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -1468,7 +1480,7 @@ def crash_play():
             return jsonify({"error": "Invalid stake current_balance"}), 400
         
         # Check balance
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -1564,7 +1576,7 @@ def crash_cashout():
             print(f"❌ No ref provided")
             return jsonify({"error": "Game reference required"}), 400
         
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
@@ -1659,7 +1671,7 @@ def get_game_history():
         
         limit = request.args.get('limit', 500, type=int)  # Increased default from 100 to 500
         
-        conn = get_connection()
+        conn = get_tracked_connection()
         cursor = conn.cursor()
         cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
