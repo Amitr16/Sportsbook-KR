@@ -28,7 +28,7 @@ def get_tracked_connection():
     
     # Track this connection acquisition
     context, track_start = track_connection_acquired("casino_api.py::get_tracked_connection")
-    conn = get_tracked_connection()
+    conn = get_connection()  # Call the original function
     conn._tracking_context = context
     conn._tracking_start = track_start
     return conn
