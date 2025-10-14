@@ -594,10 +594,18 @@ def get_global_users():
         # Get pagination parameters
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 20))
+        operator_filter = request.args.get('operator', '')
         offset = (page - 1) * per_page
         
+        # Build WHERE clause for operator filter
+        where_clause = ""
+        params = []
+        if operator_filter:
+            where_clause = "WHERE so.sportsbook_name = ?"
+            params.append(operator_filter)
+        
         # Get all users with operator information and Web3 wallet balance
-        users_query = """
+        users_query = f"""
         SELECT u.id, u.username, u.email, u.balance, u.created_at, u.is_active,
                u.web3_wallet_address, u.web3_wallet_key,
                so.sportsbook_name as operator_name,
@@ -608,14 +616,23 @@ def get_global_users():
                 COALESCE(SUM(CASE WHEN status = 'won' THEN potential_return ELSE 0 END), 0) FROM bets WHERE user_id = u.id) as profit
         FROM users u
         LEFT JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+        {where_clause}
         ORDER BY u.created_at DESC
         LIMIT ? OFFSET ?
         """
         
-        users = conn.execute(users_query, (per_page, offset)).fetchall()
+        params.extend([per_page, offset])
+        users = conn.execute(users_query, params).fetchall()
         
-        # Get total count
-        total_count = conn.execute("SELECT COUNT(*) as count FROM users").fetchone()['count']
+        # Get total count with filter
+        count_query = f"""
+        SELECT COUNT(*) as count 
+        FROM users u
+        LEFT JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+        {where_clause}
+        """
+        count_params = [operator_filter] if operator_filter else []
+        total_count = conn.execute(count_query, count_params).fetchone()['count']
         
         conn.close()
         
@@ -2872,6 +2889,47 @@ RICH_SUPERADMIN_TEMPLATE = '''
             width: 100%;
         }
         
+        /* Specific column widths for global users table - increased widths */
+        #global-users-table th:nth-child(1), #global-users-table td:nth-child(1) { width: 70px; min-width: 70px; }  /* ID */
+        #global-users-table th:nth-child(2), #global-users-table td:nth-child(2) { width: 140px; min-width: 140px; } /* Username */
+        #global-users-table th:nth-child(3), #global-users-table td:nth-child(3) { width: 250px; min-width: 250px; } /* Email */
+        #global-users-table th:nth-child(4), #global-users-table td:nth-child(4) { width: 180px; min-width: 180px; } /* Operator */
+        #global-users-table th:nth-child(5), #global-users-table td:nth-child(5) { width: 100px; min-width: 100px; }  /* Balance */
+        #global-users-table th:nth-child(6), #global-users-table td:nth-child(6) { width: 120px; min-width: 120px; } /* Web3 Balance */
+        #global-users-table th:nth-child(7), #global-users-table td:nth-child(7) { width: 70px; min-width: 70px; }  /* Bets */
+        #global-users-table th:nth-child(8), #global-users-table td:nth-child(8) { width: 100px; min-width: 100px; }  /* Staked */
+        #global-users-table th:nth-child(9), #global-users-table td:nth-child(9) { width: 100px; min-width: 100px; }  /* Payout */
+        #global-users-table th:nth-child(10), #global-users-table td:nth-child(10) { width: 100px; min-width: 100px; } /* Profit */
+        #global-users-table th:nth-child(11), #global-users-table td:nth-child(11) { width: 110px; min-width: 110px; } /* Joined */
+        #global-users-table th:nth-child(12), #global-users-table td:nth-child(12) { width: 90px; min-width: 90px; } /* Status */
+        #global-users-table th:nth-child(13), #global-users-table td:nth-child(13) { width: 130px; min-width: 130px; } /* Actions */
+        
+        /* Text overflow handling */
+        #global-users-table td {
+            padding: 8px 6px;
+            white-space: normal;
+            word-wrap: break-word;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            border-right: 1px solid #e5e7eb;
+            vertical-align: top;
+        }
+        
+        /* Specific wrapping for different columns */
+        #global-users-table td:nth-child(1) { white-space: nowrap; } /* ID - keep compact */
+        #global-users-table td:nth-child(2) { white-space: normal; word-wrap: break-word; } /* Username - allow wrapping */
+        #global-users-table td:nth-child(3) { white-space: normal; word-break: break-all; } /* Email - allow breaking */
+        #global-users-table td:nth-child(4) { white-space: normal; } /* Operator - allow wrapping */
+        #global-users-table td:nth-child(5) { white-space: nowrap; } /* Balance - keep compact */
+        #global-users-table td:nth-child(6) { white-space: nowrap; } /* Web3 Balance - keep compact */
+        #global-users-table td:nth-child(7) { white-space: nowrap; } /* Bets - keep compact */
+        #global-users-table td:nth-child(8) { white-space: nowrap; } /* Staked - keep compact */
+        #global-users-table td:nth-child(9) { white-space: nowrap; } /* Payout - keep compact */
+        #global-users-table td:nth-child(10) { white-space: nowrap; } /* Profit - keep compact */
+        #global-users-table td:nth-child(11) { white-space: nowrap; } /* Joined - keep compact */
+        #global-users-table td:nth-child(12) { white-space: nowrap; } /* Status - keep compact */
+        
+        /* Special handling for last column (Actions) */
         #global-users-table th:last-child,
         #operators-table th:last-child {
             width: 120px;
@@ -2882,6 +2940,7 @@ RICH_SUPERADMIN_TEMPLATE = '''
         #operators-table td:last-child {
             text-align: center;
             padding: 8px 4px;
+            white-space: nowrap;
         }
 
         /* Global Betting Events Management Styles */
@@ -3528,6 +3587,17 @@ RICH_SUPERADMIN_TEMPLATE = '''
             <div id="global-sportsbook-users" class="user-tab-content">
                 <div class="controls">
                     <button onclick="loadGlobalUsers()">🔄 Refresh Global Users</button>
+                    
+                    <!-- Operator Filter -->
+                    <div style="display: inline-block; margin-left: 20px;">
+                        <label for="operator-filter" style="margin-right: 8px; font-weight: 600;">Filter by Operator:</label>
+                        <select id="operator-filter" onchange="filterByOperator()" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; min-width: 200px;">
+                            <option value="">All Operators</option>
+                        </select>
+                        <button onclick="clearOperatorFilter()" style="margin-left: 8px; padding: 8px 12px; background: #6b7280; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                            Clear Filter
+                        </button>
+                    </div>
                 
                     <div class="reset-contest-controls" style="display: inline-block; margin-left: 20px;">
                         <input type="number" id="global-reset-balance-amount" placeholder="Enter balance amount" 
@@ -4037,8 +4107,16 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const perPage = parseInt(document.getElementById('global-users-per-page').value) || 20;
                 globalUsersPerPage = perPage;
                 
+                // Get current filter
+                const selectedOperator = document.getElementById('operator-filter').value;
+                
                 console.log('🌐 Fetching from /superadmin/api/global-users');
-                const response = await fetch(`/superadmin/api/global-users?page=${page}&per_page=${perPage}`);
+                let url = `/superadmin/api/global-users?page=${page}&per_page=${perPage}`;
+                if (selectedOperator) {
+                    url += `&operator=${encodeURIComponent(selectedOperator)}`;
+                }
+                
+                const response = await fetch(url);
                 console.log('📡 Response status:', response.status);
                 
                 const data = await response.json();
@@ -4055,6 +4133,9 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 document.getElementById('global-users-pagination-info').textContent = 
                     `Showing ${((page - 1) * perPage) + 1}-${Math.min(page * perPage, data.total)} of ${data.total} users`;
                 
+                // Populate operator filter dropdown if not already done
+                populateOperatorFilter(data.users);
+                
                 const tbody = document.getElementById('global-users-tbody');
                 if (data.users.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="13" class="loading">No users found</td></tr>';
@@ -4062,21 +4143,22 @@ RICH_SUPERADMIN_TEMPLATE = '''
                     console.log('🎯 Rendering users table with', data.users.length, 'users');
                     const userRows = data.users.map(user => `
                         <tr>
-                            <td>${user.id}</td>
-                            <td>${user.username}</td>
-                            <td>${user.email}</td>
-                            <td><span class="operator-name">${user.operator_name || 'Default Sportsbook'}</span></td>
-                            <td>$${user.balance}</td>
-                            <td>$${user.web3_balance || '0.00'}</td>
-                            <td>${user.total_bets}</td>
-                            <td>$${user.total_staked}</td>
-                            <td>$${user.total_payout}</td>
-                            <td>$${user.profit}</td>
-                            <td>${new Date(user.created_at).toLocaleDateString()}</td>
-                            <td><span class="status-badge status-${user.is_active ? 'active' : 'disabled'}">${user.is_active ? 'Active' : 'Disabled'}</span></td>
+                            <td title="User ID: ${user.id}">${user.id}</td>
+                            <td title="${user.username}">${user.username}</td>
+                            <td title="${user.email}">${user.email}</td>
+                            <td title="${user.operator_name || 'Default Sportsbook'}"><span class="operator-name">${user.operator_name || 'Default Sportsbook'}</span></td>
+                            <td title="$${user.balance}">$${user.balance}</td>
+                            <td title="$${user.web3_balance || '0.00'}">$${user.web3_balance || '0.00'}</td>
+                            <td title="${user.total_bets} bets">${user.total_bets}</td>
+                            <td title="$${user.total_staked} staked">$${user.total_staked}</td>
+                            <td title="$${user.total_payout} payout">$${user.total_payout}</td>
+                            <td title="$${user.profit} profit">$${user.profit}</td>
+                            <td title="${new Date(user.created_at).toLocaleDateString()}">${new Date(user.created_at).toLocaleDateString()}</td>
+                            <td><span class="status-badge status-${user.is_active ? 'active' : 'disabled'}" title="User status: ${user.is_active ? 'Active' : 'Disabled'}">${user.is_active ? 'Active' : 'Disabled'}</span></td>
                             <td>
                                 <button class="action-btn ${user.is_active ? 'btn-disable' : 'btn-enable'}" 
-                                        onclick="toggleGlobalUserStatus(${user.id})">
+                                        onclick="toggleGlobalUserStatus(${user.id})"
+                                        title="${user.is_active ? 'Disable user' : 'Enable user'}">
                                     ${user.is_active ? 'Disable' : 'Enable'}
                                 </button>
                             </td>
@@ -4142,6 +4224,40 @@ RICH_SUPERADMIN_TEMPLATE = '''
         }
         
         function changeGlobalUsersPerPage() {
+            currentGlobalUsersPage = 1;
+            loadGlobalUsers(1);
+        }
+        
+        // Operator filter functions
+        function populateOperatorFilter(users) {
+            const operatorFilter = document.getElementById('operator-filter');
+            
+            // Only populate if not already done (avoid duplicates on page reload)
+            if (operatorFilter.children.length > 1) return;
+            
+            // Get unique operators from users
+            const operators = [...new Set(users.map(user => user.operator_name || 'Default Sportsbook'))]
+                .filter(op => op) // Remove empty values
+                .sort();
+            
+            // Add operator options
+            operators.forEach(operator => {
+                const option = document.createElement('option');
+                option.value = operator;
+                option.textContent = operator;
+                operatorFilter.appendChild(option);
+            });
+        }
+        
+        function filterByOperator() {
+            // Reset to page 1 when filtering
+            currentGlobalUsersPage = 1;
+            loadGlobalUsers(1);
+        }
+        
+        function clearOperatorFilter() {
+            document.getElementById('operator-filter').value = '';
+            // Reset to page 1 and reload all data
             currentGlobalUsersPage = 1;
             loadGlobalUsers(1);
         }
