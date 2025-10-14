@@ -968,18 +968,37 @@ def monitoring_dashboard():
             'critical_matches': live_odds_service.get_critical_matches()
         }
         
-        # Get database stats
-        from src.models.betting import Bet, User, Transaction
-        with app.app_context():
-            db_stats = {
-                'total_users': current_app.db.session.query(User).count(),
-                'total_bets': current_app.db.session.query(Bet).count(),
-                'pending_bets': current_app.db.session.query(Bet).filter_by(status='pending').count(),
-                'won_bets': current_app.db.session.query(Bet).filter_by(status='won').count(),
-                'lost_bets': current_app.db.session.query(Bet).filter_by(status='lost').count(),
-                'void_bets': current_app.db.session.query(Bet).filter_by(status='void').count(),
-                'total_transactions': current_app.db.session.query(Transaction).count()
-            }
+        # Get database stats using tracked connections
+        from src.db_compat import connection_ctx
+        db_stats = {}
+        try:
+            with connection_ctx(timeout=5) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '3000ms'")
+                    
+                    # Get counts using direct SQL (faster and tracked)
+                    cur.execute("SELECT COUNT(*) FROM users")
+                    db_stats['total_users'] = cur.fetchone()['count']
+                    
+                    cur.execute("SELECT COUNT(*) FROM bets")
+                    db_stats['total_bets'] = cur.fetchone()['count']
+                    
+                    cur.execute("SELECT COUNT(*) FROM bets WHERE status = %s", ('pending',))
+                    db_stats['pending_bets'] = cur.fetchone()['count']
+                    
+                    cur.execute("SELECT COUNT(*) FROM bets WHERE status = %s", ('won',))
+                    db_stats['won_bets'] = cur.fetchone()['count']
+                    
+                    cur.execute("SELECT COUNT(*) FROM bets WHERE status = %s", ('lost',))
+                    db_stats['lost_bets'] = cur.fetchone()['count']
+                    
+                    cur.execute("SELECT COUNT(*) FROM bets WHERE status = %s", ('void',))
+                    db_stats['void_bets'] = cur.fetchone()['count']
+                    
+                    cur.execute("SELECT COUNT(*) FROM transactions")
+                    db_stats['total_transactions'] = cur.fetchone()['count']
+        except Exception as e:
+            db_stats = {'error': str(e)}
         
         return {
             'timestamp': datetime.now(timezone.utc).isoformat(),
