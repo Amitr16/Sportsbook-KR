@@ -6,7 +6,7 @@ import os
 import psycopg2
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import NullPool
 from src.db_compat import connect as db_compat_connect, pool
 from contextlib import contextmanager
 
@@ -119,19 +119,13 @@ def get_database_connection():
     return get_raw_database_connection()
 
 def create_database_engine():
-    """Create PostgreSQL engine with PgBouncer-optimized settings"""
+    """Create PostgreSQL engine with NullPool (no connection holding between calls)"""
     database_url = get_database_url()
     
-    # PgBouncer-optimized configuration
+    # Use NullPool to avoid holding connections - app should use db_compat pool instead
     engine = create_engine(
         database_url,
-        poolclass=QueuePool,
-        pool_size=5,  # Conservative for PgBouncer
-        max_overflow=10,  # Conservative overflow
-        pool_pre_ping=True,  # Test connections before use
-        pool_recycle=120,  # Recycle every 2 minutes
-        pool_timeout=30,  # Wait 30 seconds for connection
-        # Connection args are now in the URL
+        poolclass=NullPool,
         echo=os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     )
     
@@ -144,30 +138,39 @@ def get_database_session():
     return Session()
 
 def test_database_connection():
-    """Test database connection and return status"""
+    """Test DB using db_compat pool (no ad-hoc SQLAlchemy pools)"""
     try:
-        engine = create_database_engine()
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT 1"))
-            result.fetchone()
+        from src.db_compat import connection_ctx
+        with connection_ctx(timeout=3) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
         return True, "Database connection successful"
     except Exception as e:
-        return False, f"Database connection failed: {str(e)}"
+        return False, f"Database connection failed: {e}"
 
 def get_connection_pool_status():
-    """Get current connection pool status"""
+    """Report psycopg_pool stats (the real pool your app uses)"""
     try:
-        engine = create_database_engine()
-        pool = engine.pool
-        return {
-            'pool_size': pool.size(),
-            'checked_in': pool.checkedin(),
-            'checked_out': pool.checkedout(),
-            'overflow': pool.overflow(),
-            'invalid': getattr(pool, 'invalid', lambda: 0)()
-        }
+        from src.db_compat import pool
+        p = pool()
+        if hasattr(p, "get_stats"):
+            s = p.get_stats()  # psycopg_pool
+            # Normalize across versions
+            size = s.get("pool_size", 0)
+            avail = s.get("pool_available", s.get("pool_free", 0))
+            checked_out = max(size - avail, 0)
+            return {
+                "pool_size": size,
+                "available": avail,
+                "checked_out": checked_out,
+                "waiting": s.get("requests_waiting", 0),
+                "max_size": getattr(p, "max_size", None),
+                "min_size": getattr(p, "min_size", None),
+            }
+        return {"note": "pool stats unavailable for this pool type"}
     except Exception as e:
-        return {'error': str(e)}
+        return {"error": str(e)}
 
 def get_flask_database_config():
     """Get Flask SQLAlchemy configuration for PostgreSQL"""

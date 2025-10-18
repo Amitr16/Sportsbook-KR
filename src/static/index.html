@@ -184,7 +184,10 @@
         function checkLoadingComplete() {
             if (themeLoaded && authLoaded && !loadingComplete) {
                 loadingComplete = true;
+                console.log('✅ All loading checks passed, hiding loading screen');
                 hideLoadingScreen();
+            } else if (loadingComplete) {
+                console.log('⏭️ Loading already marked complete, skipping hideLoadingScreen');
             }
         }
         
@@ -215,16 +218,9 @@
                     }
                 }, 300);
                 
-                // Trigger initial display of events/markets ONCE after loading completes
-                setTimeout(() => {
-                    console.log('🎯 Triggering initial display after loading complete');
-                    if (typeof displayEvents === 'function') {
-                        displayEvents();
-                    }
-                    if (typeof updateBettingMarkets === 'function') {
-                        updateBettingMarkets();
-                    }
-                }, 600); // Wait for fade + small buffer
+                // DON'T trigger displayEvents() or updateBettingMarkets() here
+                // because loadEvents() already called them - this was causing double rendering!
+                // The loadingComplete flag will be set to allow future updates
             }
         }
         
@@ -1966,10 +1962,17 @@
               await loadSports();
           }
           
-          // Initialize other components
-          if (typeof updateBettingMarkets === 'function') {
-              updateBettingMarkets();
-          }
+          // Mark loading complete AFTER sports data loads to enable display updates
+          loadingComplete = true;
+          console.log('✅ Loading marked complete after sports data loaded');
+          
+          // Hide loading screen now that data is loaded
+          hideLoadingScreen();
+          
+          // Initialize other components (skip this since loadEvents already called updateBettingMarkets)
+          // if (typeof updateBettingMarkets === 'function') {
+          //     updateBettingMarkets();
+          // }
           if (typeof updateBetModeDisplay === 'function') {
               updateBetModeDisplay();
           }
@@ -2034,10 +2037,17 @@
               await loadSports();
           }
           
-          // Initialize other components (view-only)
-          if (typeof updateBettingMarkets === 'function') {
-              updateBettingMarkets();
-          }
+          // Mark loading complete AFTER sports data loads to enable display updates
+          loadingComplete = true;
+          console.log('✅ Loading marked complete (public mode) after sports data loaded');
+          
+          // Hide loading screen now that data is loaded
+          hideLoadingScreen();
+          
+          // Initialize other components (view-only) - skip this since loadEvents already called updateBettingMarkets
+          // if (typeof updateBettingMarkets === 'function') {
+          //     updateBettingMarkets();
+          // }
           if (typeof updateBetModeDisplay === 'function') {
               updateBetModeDisplay();
           }
@@ -3170,7 +3180,7 @@
         function updateBettingMarkets() {
             // CRITICAL: Skip during initial load to prevent flickering
             if (!loadingComplete) {
-                console.log('⏭️ Skipping betting markets update - initial load in progress');
+                console.log('⏭️ Skipping betting markets update - initial load in progress (loadingComplete:', loadingComplete, ')');
                 return;
             }
             
@@ -3460,19 +3470,15 @@
                         updateSportsActiveState(currentSport);
                     }
                     
-                    // Then load events for the default sport immediately
+                    // Then load events for the default sport immediately (ONCE)
                     if (currentSport) {
                         loadEvents(currentSport);
                     }
                     
-                    // Also warm up cache for the default sport immediately for instant loading
-                    if (currentSport) {
-                        loadEventsForCache(currentSport).catch(error => {
-                            console.error('Default sport cache warming failed:', error);
-                        });
-                    }
+                    // Skip redundant cache warming - preloadAllSportsEvents will handle it
+                    // Removed: loadEventsForCache(currentSport) to prevent duplicate loading
                     
-                    // Finally, cache events for ALL sports and THEN start the periodic checker
+                    // Finally, cache events for OTHER sports (skip current sport to avoid flickering)
                     preloadAllSportsEvents().then(() => {
                         console.log('🚀 Preloading completed, now starting periodic odds checker...');
                         console.log('🔍 DEBUG: Inside .then() callback, about to call startOddsUpdateChecker...');
@@ -3536,7 +3542,7 @@
             }
         }
 
-        // PROACTIVE CACHING: Preload events for all sports
+        // PROACTIVE CACHING: Preload events for all sports (EXCEPT current sport to avoid flickering)
         let preloadAllSportsEventsInProgress = false;
         
         async function preloadAllSportsEvents() {
@@ -3564,15 +3570,17 @@
                     console.log(`🔍 DEBUG: sportsData is object, keys:`, sportsList);
                 }
                 
-                console.log(`📦 Caching events for ${sportsList.length} sports:`, sportsList);
+                // CRITICAL FIX: Skip current sport to prevent flickering on initial load
+                const sportsToPreload = sportsList.filter(sport => sport !== currentSport);
+                console.log(`📦 Caching events for ${sportsToPreload.length} sports (skipping current: ${currentSport}):`, sportsToPreload);
                 
-                // Load events for all sports in parallel (but limit concurrent requests)
+                // Load events for OTHER sports in parallel (but limit concurrent requests)
                 const batchSize = 3; // Process 3 sports at a time to avoid overwhelming the server
-                console.log(`🔍 DEBUG: sportsList before processing:`, sportsList);
-                console.log(`🔍 DEBUG: sportsList length:`, sportsList.length);
+                console.log(`🔍 DEBUG: sportsToPreload before processing:`, sportsToPreload);
+                console.log(`🔍 DEBUG: sportsToPreload length:`, sportsToPreload.length);
                 
-                for (let i = 0; i < sportsList.length; i += batchSize) {
-                    const batch = sportsList.slice(i, i + batchSize);
+                for (let i = 0; i < sportsToPreload.length; i += batchSize) {
+                    const batch = sportsToPreload.slice(i, i + batchSize);
                     console.log(`📦 Processing batch ${Math.floor(i/batchSize) + 1}: ${batch.join(', ')}`);
                     console.log(`🔍 DEBUG: About to call loadEventsForCache for batch:`, batch);
                     const promises = batch.map(sport => loadEventsForCache(sport));
@@ -3582,7 +3590,7 @@
                     console.log(`🔍 DEBUG: Completed batch ${Math.floor(i/batchSize) + 1}`);
                     
                     // Small delay between batches to be server-friendly
-                    if (i + batchSize < sportsList.length) {
+                    if (i + batchSize < sportsToPreload.length) {
                         await new Promise(resolve => setTimeout(resolve, 200));
                     }
                 }
@@ -4180,7 +4188,7 @@
         function displayEvents() {
             // CRITICAL: Skip during initial load to prevent flickering
             if (!loadingComplete) {
-                console.log('⏭️ Skipping display events - initial load in progress');
+                console.log('⏭️ Skipping display events - initial load in progress (loadingComplete:', loadingComplete, ')');
                 return;
             }
             
@@ -8121,18 +8129,21 @@
                     sportsData.map(sport => sport.name) : 
                     Object.keys(sportsData);
                 
-                console.log(`📦 Preloading events for ${sportsList.length} sports for immediate odds display...`);
+                // CRITICAL FIX: Skip current sport to prevent flickering on initial load
+                const sportsToPreload = sportsList.filter(sport => sport !== currentSport);
                 
-                // Load events for all sports in parallel (limited concurrency)
+                console.log(`📦 Preloading events for ${sportsToPreload.length} sports (skipping current: ${currentSport})...`);
+                
+                // Load events for OTHER sports in parallel (limited concurrency)
                 const batchSize = 2; // Reduced from 3 to 2 for better server performance
-                for (let i = 0; i < sportsList.length; i += batchSize) {
-                    const batch = sportsList.slice(i, i + batchSize);
+                for (let i = 0; i < sportsToPreload.length; i += batchSize) {
+                    const batch = sportsToPreload.slice(i, i + batchSize);
                     const promises = batch.map(sport => loadEvents(sport, false));
                     
                     await Promise.allSettled(promises);
                     
                     // Increased delay between batches for server-friendliness
-                    if (i + batchSize < sportsList.length) {
+                    if (i + batchSize < sportsToPreload.length) {
                         await new Promise(resolve => setTimeout(resolve, 500));
                     }
                 }

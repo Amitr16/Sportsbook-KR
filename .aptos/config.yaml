@@ -1,0 +1,8 @@
+---
+profiles:
+  admin:
+    network: Testnet
+    private_key: "0x84f14b1958948b403d5ef5cbbeeb5ff02cd1ce213ba59ebcaae3e520941ff7b0"
+    public_key: "0x8eeac2541c85e352768440a578c725122e88c3393282dda03e618be287a56276"
+    account: fc26c5948f1865f748fe43751cd2973fc0fd5b14126104122ca50483386c4085
+    rest_url: "https://fullnode.testnet.aptoslabs.com"

@@ -14,12 +14,13 @@ rich_admin_bp = Blueprint('rich_admin', __name__)
 
 def get_db_connection():
     """Get database connection - now uses PostgreSQL via sqlite3_shim"""
+    from src.db_compat import connect
     from src.utils.connection_tracker import track_connection_acquired
+    from pathlib import Path
     
     # Track this connection acquisition
-    context, track_start = track_connection_acquired("rich_admin_interface.py::get_db_connection")
-    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
-    conn.row_factory = sqlite3.Row
+    context, track_start = track_connection_acquired(f"{Path(__file__).name}::get_db_connection")
+    conn = connect(use_pool=True)
     conn._tracking_context = context
     conn._tracking_start = track_start
     return conn
@@ -122,25 +123,24 @@ def update_operator_revenue(operator_id, conn):
 def get_default_user_balance(operator_id):
     """Get the default balance for new users under this operator"""
     try:
-        conn = get_db_connection()
+        from src.db_compat import connection_ctx
         
-        # Get operator settings
-        operator_row = conn.execute(
-            "SELECT settings FROM sportsbook_operators WHERE id = ?",
-            (operator_id,)
-        ).fetchone()
-        
-        conn.close()
-        
-        if operator_row and operator_row['settings']:
-            import json
-            settings = json.loads(operator_row['settings'])
-            default_balance = settings.get('default_user_balance')
-            if default_balance is not None:
-                return float(default_balance)
-        
-        # Fall back to default $1000 if no setting found
-        return 1000.0
+        with connection_ctx(timeout=5) as conn:
+            # Get operator settings
+            operator_row = conn.execute(
+                "SELECT settings FROM sportsbook_operators WHERE id = %s",
+                (operator_id,)
+            ).fetchone()
+            
+            if operator_row and operator_row['settings']:
+                import json
+                settings = json.loads(operator_row['settings'])
+                default_balance = settings.get('default_user_balance')
+                if default_balance is not None:
+                    return float(default_balance)
+            
+            # Fall back to default $1000 if no setting found
+            return 1000.0
         
     except Exception as e:
         print(f"⚠️ Warning: Could not get default user balance for operator {operator_id}: {e}")
@@ -149,19 +149,19 @@ def get_default_user_balance(operator_id):
 def calculate_event_financials(event_id, market_id, sport_name, operator_id):
     """Calculate max liability and max possible gain for a specific event+market combination for a specific operator"""
     try:
-        conn = get_db_connection()
+        from src.db_compat import connection_ctx
         
-        # Get all pending bets for this specific event+market combination from this operator's users
-        query = """
-        SELECT b.bet_selection, b.stake, b.potential_return, b.odds
-        FROM bets b
-        JOIN users u ON b.user_id = u.id
-        WHERE b.match_id = ? AND b.market = ? AND b.sport_name = ? AND b.status = 'pending'
-        AND u.sportsbook_operator_id = ?
-        """
-        
-        bets = conn.execute(query, (event_id, market_id, sport_name, operator_id)).fetchall()
-        conn.close()
+        with connection_ctx(timeout=5) as conn:
+            # Get all pending bets for this specific event+market combination from this operator's users
+            query = """
+            SELECT b.bet_selection, b.stake, b.potential_return, b.odds
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            WHERE b.match_id = %s AND b.market = %s AND b.sport_name = %s AND b.status = 'pending'
+            AND u.sportsbook_operator_id = %s
+            """
+            
+            bets = conn.execute(query, (event_id, market_id, sport_name, operator_id)).fetchall()
         
         if not bets:
             return 0.0, 0.0  # No bets = no liability or gain

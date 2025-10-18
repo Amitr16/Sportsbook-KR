@@ -56,14 +56,12 @@ def track_connection_released(context, start_time):
     
     with _tracking_lock:
         if context in _connection_tracking:
-            _connection_tracking[context]['active'] -= 1
+            _connection_tracking[context]['active'] = max(0, _connection_tracking[context]['active'] - 1)
             _connection_tracking[context]['total_time'] += duration
             
-            # Remove from active requests
-            _connection_tracking[context]['requests'] = [
-                r for r in _connection_tracking[context]['requests']
-                if r['acquired_at'] != start_time
-            ]
+            # Remove the oldest active request (FIFO)
+            if _connection_tracking[context]['requests']:
+                _connection_tracking[context]['requests'].pop(0)
 
 def get_connection_stats() -> Dict:
     """Get connection usage statistics by route/function"""

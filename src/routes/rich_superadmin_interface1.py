@@ -18,31 +18,14 @@ def get_db_connection():
     IMPORTANT: Caller MUST call conn.close() when done!
     New code should use connection_ctx() context manager instead.
     """
-    from src.db_compat import pool, CompatConnection
+    from src.db_compat import connect
     from src.utils.connection_tracker import track_connection_acquired
-    import time
+    from pathlib import Path
     
     # Track this connection acquisition
-    context, track_start = track_connection_acquired("rich_superadmin_interface1.py::get_db_connection")
+    context, track_start = track_connection_acquired(f"{Path(__file__).name}::get_db_connection")
     
-    raw = pool().getconn(timeout=10)
-    
-    # Clean any aborted transactions before use
-    try:
-        from psycopg import pq
-        ts = getattr(raw.info, "transaction_status", None)
-        if ts in (pq.TransactionStatus.INERROR, pq.TransactionStatus.INTRANS):
-            raw.rollback()
-    except Exception:
-        try:
-            raw.rollback()
-        except Exception:
-            pass
-    
-    conn = CompatConnection(raw)
-    conn._pool = pool()
-    
-    # Store tracking info for cleanup
+    conn = connect(use_pool=True)
     conn._tracking_context = context
     conn._tracking_start = track_start
     
@@ -1516,61 +1499,66 @@ def toggle_operator_status(operator_id):
 @check_superadmin_auth
 def get_global_stats():
     """Get global statistics for the super admin dashboard (adapted from admin interface)"""
-    db = None
+    from src.db_compat import connection_ctx
     try:
-        from src.db import SessionLocal, close_db
-        db = SessionLocal()
-        
-        # Get total operators count
-        operator_count = db.execute(
-            text("SELECT COUNT(*) FROM sportsbook_operators WHERE is_active = TRUE")
-        ).scalar_one()
-        
-        # Get total users count across all operators
-        user_count = db.execute(text("""
-            SELECT COUNT(*) 
-            FROM users u 
-            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
-            WHERE op.is_active = TRUE
-        """)).scalar_one()
-        
-        # Get total bets count across all operators
-        bet_count = db.execute(text("""
-            SELECT COUNT(*) 
-            FROM bets b 
-            JOIN users u ON b.user_id = u.id 
-            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = TRUE
-        """)).scalar_one()
-        
-        # Get total revenue across all operators (from won bets)
-        total_revenue = db.execute(text("""
-            SELECT COALESCE(SUM(b.actual_return - b.stake), 0)
-            FROM bets b 
-            JOIN users u ON b.user_id = u.id 
-            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = TRUE AND b.status = 'won'
-        """)).scalar_one()
-        total_revenue = float(total_revenue or 0)
-        
-        # Get active events count across all operators (events with pending bets)
-        active_events = db.execute(text("""
-            SELECT COUNT(DISTINCT b.match_id)
-            FROM bets b 
-            JOIN users u ON b.user_id = u.id 
-            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = TRUE AND b.status = 'pending'
-        """)).scalar_one()
-        
-        # Get total liability across all operators (sum of all pending bet potential returns - just add them up)
-        total_liability = db.execute(text("""
-            SELECT COALESCE(SUM(b.potential_return), 0)
-            FROM bets b 
-            JOIN users u ON b.user_id = u.id 
-            JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
-            WHERE op.is_active = TRUE AND b.status = 'pending'
-        """)).scalar_one()
-        total_liability = float(total_liability or 0)
+        with connection_ctx(timeout=10) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+                
+                # Get total operators count
+                cursor.execute("SELECT COUNT(*) FROM sportsbook_operators WHERE is_active = TRUE")
+                operator_count = cursor.fetchone()['count']
+                
+                # Get total users count across all operators
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM users u 
+                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id 
+                    WHERE op.is_active = TRUE
+                """)
+                user_count = cursor.fetchone()['count']
+                
+                # Get total bets count across all operators
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM bets b 
+                    JOIN users u ON b.user_id = u.id 
+                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+                    WHERE op.is_active = TRUE
+                """)
+                bet_count = cursor.fetchone()['count']
+                
+                # Get total revenue across all operators (from won bets)
+                cursor.execute("""
+                    SELECT COALESCE(SUM(b.actual_return - b.stake), 0)
+                    FROM bets b 
+                    JOIN users u ON b.user_id = u.id 
+                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+                    WHERE op.is_active = TRUE AND b.status = 'won'
+                """)
+                total_revenue = cursor.fetchone()['coalesce'] or 0
+                total_revenue = float(total_revenue)
+                
+                # Get active events count across all operators (events with pending bets)
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT b.match_id)
+                    FROM bets b 
+                    JOIN users u ON b.user_id = u.id 
+                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+                    WHERE op.is_active = TRUE AND b.status = 'pending'
+                """)
+                active_events = cursor.fetchone()['count']
+                
+                # Get total liability across all operators (sum of all pending bet potential returns)
+                cursor.execute("""
+                    SELECT COALESCE(SUM(b.potential_return), 0)
+                    FROM bets b 
+                    JOIN users u ON b.user_id = u.id 
+                    JOIN sportsbook_operators op ON u.sportsbook_operator_id = op.id
+                    WHERE op.is_active = TRUE AND b.status = 'pending'
+                """)
+                total_liability = cursor.fetchone()['coalesce'] or 0
+                total_liability = float(total_liability)
         
         return jsonify({
             'total_operators': operator_count,
@@ -1584,9 +1572,6 @@ def get_global_stats():
     except Exception as e:
         print(f"Error getting global stats: {e}")
         return jsonify({'error': str(e)}), 500
-    finally:
-        if db:
-            close_db(db)
 
 @rich_superadmin_bp.route('/superadmin/api/global-reports/overview')
 @check_superadmin_auth

@@ -4,9 +4,26 @@ from __future__ import annotations
 print("db_compat loaded from:", __file__)
 import os, re, weakref, time, traceback
 import logging
+import threading
 from contextlib import contextmanager
 from typing import Any, Iterable, Mapping, Sequence, Optional
 from functools import lru_cache
+
+# Track connections recovered by GC finalizer (indicates leaks)
+_leaked_recovery_count = 0
+_leaked_recovery_lock = threading.Lock()
+
+def get_leaked_recovery_count():
+    """Get count of connections recovered by GC finalizer"""
+    global _leaked_recovery_count
+    with _leaked_recovery_lock:
+        return _leaked_recovery_count
+
+def reset_leaked_recovery_count():
+    """Reset the leaked recovery counter (for testing/monitoring)"""
+    global _leaked_recovery_count
+    with _leaked_recovery_lock:
+        _leaked_recovery_count = 0
 
 import psycopg
 from psycopg.rows import dict_row
@@ -315,6 +332,7 @@ class CompatConnection:
             return
         raw = self._conn
         def _return_to_pool(raw_ref=raw, pool_ref=pool_obj):
+            global _leaked_recovery_count
             try:
                 # Best-effort cleanup
                 try:
@@ -325,13 +343,17 @@ class CompatConnection:
                 except Exception:
                     pass
                 pool_ref.putconn(raw_ref)
-                logging.warning("🔁 GC finalizer returned leaked DB connection to pool")
+                with _leaked_recovery_lock:
+                    _leaked_recovery_count += 1
+                logging.warning("🔁 GC finalizer returned leaked DB connection to pool (count: %d)", _leaked_recovery_count)
             except Exception as e:
                 try:
                     raw_ref.close()
                 except Exception:
                     pass
-                logging.warning(f"💥 GC finalizer closed leaked DB connection (pool put failed): {e}")
+                with _leaked_recovery_lock:
+                    _leaked_recovery_count += 1
+                logging.warning(f"💥 GC finalizer closed leaked DB connection (pool put failed, count: {_leaked_recovery_count}): {e}")
         self._finalizer = weakref.finalize(self, _return_to_pool)
         self._finalizer.atexit = False  # Don't duplicate atexit logs
     

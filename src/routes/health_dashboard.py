@@ -275,6 +275,18 @@ HEALTH_DASHBOARD_HTML = """
                         <span class="metric-label">Circuit Breaker</span>
                         <span class="metric-value" id="dbCircuit">-</span>
                     </div>
+                    <div class="metric" style="margin-top: 8px;">
+                        <span class="metric-label">SQLAlchemy Sessions</span>
+                        <span class="metric-value" id="dbSqlAlchemy">-</span>
+                    </div>
+                    <div class="metric" style="margin-top: 8px;">
+                        <span class="metric-label">Pool Sockets (Open)</span>
+                        <span class="metric-value" id="dbPoolSize">-</span>
+                    </div>
+                    <div class="metric" style="margin-top: 8px;">
+                        <span class="metric-label">Leaked & Recovered</span>
+                        <span class="metric-value" id="dbLeakedRecovered">-</span>
+                    </div>
                 </div>
                 
                 <!-- Redis Cache Card -->
@@ -394,13 +406,18 @@ HEALTH_DASHBOARD_HTML = """
                 const db = data.checks.database_pool;
                 document.getElementById('dbStatus').textContent = db.status;
                 document.getElementById('dbStatus').className = 'status-badge ' + getStatusClass(db.status);
-                document.getElementById('dbActive').textContent = db.active_connections;
+                document.getElementById('dbActive').textContent = db.checked_out;
                 document.getElementById('dbMax').textContent = db.max_connections;
                 document.getElementById('dbUsage').textContent = db.usage_percent.toFixed(1) + '%';
                 document.getElementById('dbProgress').style.width = db.usage_percent + '%';
                 document.getElementById('dbProgress').className = 'progress-fill ' + getProgressClass(db.usage_percent);
                 document.getElementById('dbCircuit').textContent = db.circuit_breaker_open ? '🔴 OPEN' : '🟢 CLOSED';
                 document.getElementById('dbCircuit').style.color = db.circuit_breaker_open ? '#e53e3e' : '#38a169';
+                document.getElementById('dbSqlAlchemy').textContent = `${db.sqlalchemy_sessions || 0} active`;
+                document.getElementById('dbPoolSize').textContent = `${db.pool_size || 0} sockets`;
+                const leakedCount = db.leaked_recovered || 0;
+                document.getElementById('dbLeakedRecovered').textContent = leakedCount;
+                document.getElementById('dbLeakedRecovered').style.color = leakedCount > 0 ? '#e53e3e' : '#38a169';
                 
                 // Connection Tracking Table
                 if (db.top_connection_users && db.top_connection_users.length > 0) {

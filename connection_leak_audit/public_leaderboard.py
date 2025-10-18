@@ -13,7 +13,14 @@ public_leaderboard_bp = Blueprint('public_leaderboard', __name__)
 def get_db_connection():
     """Get database connection from pool - caller MUST call conn.close()"""
     from src.db_compat import connect
-    return connect(use_pool=True)
+    from src.utils.connection_tracker import track_connection_acquired
+    
+    # Track this connection acquisition
+    context, track_start = track_connection_acquired("public_leaderboard.py::get_db_connection")
+    conn = connect(use_pool=True)
+    conn._tracking_context = context
+    conn._tracking_start = track_start
+    return conn
 
 def get_latest_contest_end_date():
     """Get the latest contest end date from contest_dates table"""
