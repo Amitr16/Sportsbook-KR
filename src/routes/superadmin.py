@@ -20,7 +20,8 @@ def get_db_connection():
     
     # Track this connection acquisition
     context, track_start = track_connection_acquired("superadmin.py::get_db_connection")
-    conn = sqlite3.connect(DATABASE_PATH)  # Uses sqlite3_shim for PostgreSQL
+    from src.db_compat import connect
+    conn = connect(use_pool=True, _skip_tracking=True)  # Skip tracking since we track manually
     conn.row_factory = sqlite3.Row
     conn._tracking_context = context
     conn._tracking_start = track_start

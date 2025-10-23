@@ -80,12 +80,14 @@ def detailed_health():
         
         # Get per-route connection tracking
         try:
-            from src.utils.connection_tracker import get_top_connection_users, get_connection_stats
+            from src.utils.connection_tracker import get_top_connection_users, get_connection_stats, get_global_connection_stats
             top_users = get_top_connection_users(limit=10)
             all_stats = get_connection_stats()
+            global_tracking_stats = get_global_connection_stats()
         except Exception:
             top_users = []
             all_stats = {}
+            global_tracking_stats = {}
             
         # Get SQLAlchemy session tracking
         try:
@@ -113,7 +115,10 @@ def detailed_health():
             "connection_count": len(all_stats),
             "sqlalchemy_sessions": sqlalchemy_stats['active_sessions'],
             "sqlalchemy_total": sqlalchemy_stats['total_sessions'],
-            "leaked_recovered": leaked_recovered  # connections recovered by GC finalizer
+            "leaked_recovered": leaked_recovered,  # connections recovered by GC finalizer
+            # Enhanced tracking data
+            "tracking_stats": global_tracking_stats,
+            "tracking_discrepancy": checked_out - global_tracking_stats.get('total_active', 0)
         }
     except Exception as e:
         health_data["checks"]["database_pool"] = {

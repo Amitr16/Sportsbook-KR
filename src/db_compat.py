@@ -707,16 +707,45 @@ def _close_pool_on_exit():
         except Exception as e:
             print(f"Error closing pool on exit: {e}")
 
-def connect(dsn: Optional[str] = None, *, autocommit: bool = False, use_pool: bool = True) -> CompatConnection:
+def connect(dsn: Optional[str] = None, *, autocommit: bool = False, use_pool: bool = True, _skip_tracking: bool = False) -> CompatConnection:
     """
     Legacy helper - AVOID in new code. Use connection_ctx() instead.
     Only use if caller will putconn() correctly.
+    
+    _skip_tracking: Internal flag - if True, caller will handle tracking
     """
     if use_pool:
+        from src.utils.connection_tracker import track_connection_acquired
+        import inspect
+        
         p = pool()
         raw = p.getconn()
         conn = CompatConnection(raw)
         conn._pool = p
+        
+        # Only add automatic tracking if caller doesn't plan to track
+        if not _skip_tracking:
+            # Add fallback tracking with caller details
+            try:
+                frame = inspect.currentframe()
+                caller_frame = frame.f_back
+                
+                # Get caller details
+                filename = caller_frame.f_code.co_filename.split('\\')[-1].split('/')[-1]
+                function_name = caller_frame.f_code.co_name
+                line_number = caller_frame.f_lineno
+                
+                context = f"UNTRACKED:{filename}::{function_name}:L{line_number}"
+            except:
+                context = "UNTRACKED:connect(use_pool=True)"
+            finally:
+                if 'frame' in locals():
+                    del frame
+            
+            context, track_start = track_connection_acquired(context)
+            conn._tracking_context = context
+            conn._tracking_start = track_start
+        
         conn._attach_pool_finalizer(p)  # Ensure GC will putconn if caller forgets
         if autocommit:
             # Ensure no aborted transaction before toggling autocommit

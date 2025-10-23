@@ -297,6 +297,17 @@ if not database_url:
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Configure SQLAlchemy to use NullPool (no pooling) since we use db_compat pool
+# This prevents double-pooling and untracked connections
+from sqlalchemy.pool import NullPool
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'poolclass': NullPool,
+    'pool_pre_ping': True,
+    'connect_args': {
+        'connect_timeout': 10,
+    }
+}
+
 # Import the new database configuration
 from src.db import ENGINE, SessionLocal
 

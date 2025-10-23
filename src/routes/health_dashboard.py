@@ -287,6 +287,14 @@ HEALTH_DASHBOARD_HTML = """
                         <span class="metric-label">Leaked & Recovered</span>
                         <span class="metric-value" id="dbLeakedRecovered">-</span>
                     </div>
+                    <div class="metric" style="margin-top: 8px;">
+                        <span class="metric-label">Tracking Active</span>
+                        <span class="metric-value" id="dbTrackingActive">-</span>
+                    </div>
+                    <div class="metric" style="margin-top: 8px;">
+                        <span class="metric-label">Tracking Discrepancy</span>
+                        <span class="metric-value" id="dbTrackingDiscrepancy">-</span>
+                    </div>
                 </div>
                 
                 <!-- Redis Cache Card -->
@@ -335,20 +343,24 @@ HEALTH_DASHBOARD_HTML = """
                                 <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0;">
                                     <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748; font-size: 0.9rem;">Route/Function</th>
                                     <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748; font-size: 0.9rem;">Active Now</th>
-                                    <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748; font-size: 0.9rem;">Total Acquired</th>
+                                    <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748; font-size: 0.9rem;">Acquired</th>
+                                    <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748; font-size: 0.9rem;">Released</th>
+                                    <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748; font-size: 0.9rem;">Leaks</th>
                                     <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748; font-size: 0.9rem;">Avg Duration (ms)</th>
                                 </tr>
                             </thead>
                             <tbody id="connectionTrackingBody">
-                                <tr><td colspan="4" style="text-align: center; padding: 20px; color: #a0aec0;">Loading...</td></tr>
+                                <tr><td colspan="6" style="text-align: center; padding: 20px; color: #a0aec0;">Loading...</td></tr>
                             </tbody>
                         </table>
                     </div>
                     <div style="margin-top: 16px; padding: 12px; background: #edf2f7; border-radius: 8px; font-size: 0.85rem; color: #2d3748; border-left: 4px solid #667eea;">
                         <strong style="color: #667eea;">💡 Debugging Guide:</strong><br>
                         • <strong style="color: #c53030;">Active Now > 0</strong> = Route is currently holding connections (potential leak!)<br>
+                        • <strong style="color: #c53030;">Leaks > 0</strong> = Route has acquired more connections than released (definite leak!)<br>
                         • <strong style="color: #d69e2e;">Avg Duration > 300ms</strong> = Slow queries or missing statement_timeout<br>
-                        • <strong style="color: #3182ce;">High Total count</strong> = Frequently called route (optimize if needed)
+                        • <strong style="color: #3182ce;">High Acquired count</strong> = Frequently called route (optimize if needed)<br>
+                        • <strong style="color: #e53e3e;">Tracking Discrepancy > 0</strong> = Pool shows more checked-out than tracking system knows about
                     </div>
                 </div>
             </div>
@@ -419,6 +431,17 @@ HEALTH_DASHBOARD_HTML = """
                 document.getElementById('dbLeakedRecovered').textContent = leakedCount;
                 document.getElementById('dbLeakedRecovered').style.color = leakedCount > 0 ? '#e53e3e' : '#38a169';
                 
+                // Enhanced tracking metrics
+                const trackingStats = db.tracking_stats || {};
+                const trackingActive = trackingStats.total_active || 0;
+                const trackingDiscrepancy = db.tracking_discrepancy || 0;
+                
+                document.getElementById('dbTrackingActive').textContent = trackingActive;
+                document.getElementById('dbTrackingActive').style.color = trackingActive > 0 ? '#e53e3e' : '#38a169';
+                
+                document.getElementById('dbTrackingDiscrepancy').textContent = trackingDiscrepancy;
+                document.getElementById('dbTrackingDiscrepancy').style.color = trackingDiscrepancy > 0 ? '#e53e3e' : '#38a169';
+                
                 // Connection Tracking Table
                 if (db.top_connection_users && db.top_connection_users.length > 0) {
                     const tbody = document.getElementById('connectionTrackingBody');
@@ -430,7 +453,13 @@ HEALTH_DASHBOARD_HTML = """
                                     ${user.active}
                                 </span>
                             </td>
-                            <td style="padding: 12px; text-align: center; color: #4a5568;">${user.total}</td>
+                            <td style="padding: 12px; text-align: center; color: #4a5568;">${user.acquired || 0}</td>
+                            <td style="padding: 12px; text-align: center; color: #4a5568;">${user.released || 0}</td>
+                            <td style="padding: 12px; text-align: center;">
+                                <span style="display: inline-block; padding: 4px 8px; background: ${user.leaks > 0 ? '#fed7d7' : '#c6f6d5'}; color: ${user.leaks > 0 ? '#c53030' : '#22543d'}; border-radius: 4px; font-weight: 600;">
+                                    ${user.leaks || 0}
+                                </span>
+                            </td>
                             <td style="padding: 12px; text-align: center;">
                                 <span style="color: ${user.avg_ms > 300 ? '#c53030' : '#2d3748'}; font-weight: ${user.avg_ms > 300 ? '600' : '400'};">
                                     ${user.avg_ms.toFixed(1)}
@@ -440,7 +469,7 @@ HEALTH_DASHBOARD_HTML = """
                     `).join('');
                 } else {
                     document.getElementById('connectionTrackingBody').innerHTML = 
-                        '<tr><td colspan="4" style="text-align: center; padding: 20px; color: #a0aec0;">No connection activity tracked yet</td></tr>';
+                        '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #a0aec0;">No connection activity tracked yet</td></tr>';
                 }
                 
                 // Redis Cache

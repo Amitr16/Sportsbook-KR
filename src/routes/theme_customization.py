@@ -15,9 +15,10 @@ def get_db_connection():
     from src.db_compat import connect
     from src.utils.connection_tracker import track_connection_acquired
     from pathlib import Path
+    
     # Track this connection acquisition
     context, track_start = track_connection_acquired(f"{Path(__file__).name}::get_db_connection")
-    conn = connect(use_pool=True)
+    conn = connect(use_pool=True, _skip_tracking=True)
     conn._tracking_context = context
     conn._tracking_start = track_start
     return conn

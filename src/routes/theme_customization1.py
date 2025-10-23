@@ -28,7 +28,8 @@ def get_db_connection():
     for db_path in possible_paths:
         if os.path.exists(db_path):
             print(f"✅ Using database at: {db_path}")
-            conn = sqlite3.connect(db_path)  # Uses sqlite3_shim for PostgreSQL
+            from src.db_compat import connect
+            conn = connect(use_pool=True, _skip_tracking=True)  # Skip tracking since we track manually
             conn.row_factory = sqlite3.Row
             conn._tracking_context = context
             conn._tracking_start = track_start

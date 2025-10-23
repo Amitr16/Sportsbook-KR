@@ -22,7 +22,8 @@ def get_db_connection():
     
     # Track this connection acquisition
     context, track_start = track_connection_acquired("comprehensive_superadmin.py::get_db_connection")
-    conn = sqlite3.connect()  # No path needed - shim uses DATABASE_URL
+    from src.db_compat import connect
+    conn = connect(use_pool=True, _skip_tracking=True)  # Skip tracking since we track manually
     conn._tracking_context = context
     conn._tracking_start = track_start
     return conn

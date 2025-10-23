@@ -20,7 +20,7 @@ def get_db_connection():
     
     # Track this connection acquisition
     context, track_start = track_connection_acquired(f"{Path(__file__).name}::get_db_connection")
-    conn = connect(use_pool=True)
+    conn = connect(use_pool=True, _skip_tracking=True)
     conn._tracking_context = context
     conn._tracking_start = track_start
     return conn

@@ -14,10 +14,11 @@ def get_db_connection():
     """Get database connection from pool - caller MUST call conn.close()"""
     from src.db_compat import connect
     from src.utils.connection_tracker import track_connection_acquired
+    from pathlib import Path
     
     # Track this connection acquisition
-    context, track_start = track_connection_acquired("public_leaderboard.py::get_db_connection")
-    conn = connect(use_pool=True)
+    context, track_start = track_connection_acquired(f"{Path(__file__).name}::get_db_connection")
+    conn = connect(use_pool=True, _skip_tracking=True)
     conn._tracking_context = context
     conn._tracking_start = track_start
     return conn
@@ -246,8 +247,6 @@ def get_user_leaderboard():
         # Calculate pagination
         total_pages = (total_users + per_page - 1) // per_page
         
-        conn.close()
-        
         # Get contest end date
         contest_end_date = get_latest_contest_end_date()
         
@@ -453,8 +452,6 @@ def get_partner_leaderboard():
         
         # Calculate pagination
         total_pages = (total_partners + per_page - 1) // per_page
-        
-        conn.close()
         
         # Get contest end date
         contest_end_date = get_latest_contest_end_date()

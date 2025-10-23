@@ -24,11 +24,9 @@ def get_db_connection():
     
     # Track this connection acquisition
     context, track_start = track_connection_acquired(f"{Path(__file__).name}::get_db_connection")
-    
-    conn = connect(use_pool=True)
+    conn = connect(use_pool=True, _skip_tracking=True)
     conn._tracking_context = context
     conn._tracking_start = track_start
-    
     return conn
 
 def calculate_casino_revenue(operator_id, conn):
@@ -671,10 +669,18 @@ def get_global_casino_users():
         # Get pagination parameters
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 20))
+        operator_filter = request.args.get('operator', '')
         offset = (page - 1) * per_page
         
+        # Build WHERE clause for operator filter
+        where_clause = ""
+        params = []
+        if operator_filter:
+            where_clause = "WHERE so.sportsbook_name = ?"
+            params.append(operator_filter)
+        
         # Get all users with casino-specific stats
-        users_query = """
+        users_query = f"""
         SELECT u.id, u.username, u.email, u.balance, u.created_at, u.is_active,
                so.sportsbook_name as operator_name,
                (SELECT COUNT(*) FROM game_round WHERE user_id = u.id::text) as total_games,
@@ -683,14 +689,23 @@ def get_global_casino_users():
                (SELECT COALESCE(SUM(stake - payout), 0) FROM game_round WHERE user_id = u.id::text) as profit
         FROM users u
         LEFT JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+        {where_clause}
         ORDER BY u.created_at DESC
         LIMIT ? OFFSET ?
         """
         
-        users = conn.execute(users_query, (per_page, offset)).fetchall()
+        params.extend([per_page, offset])
+        users = conn.execute(users_query, params).fetchall()
         
-        # Get total count
-        total_count = conn.execute("SELECT COUNT(*) as count FROM users").fetchone()['count']
+        # Get total count with filter
+        count_query = f"""
+        SELECT COUNT(*) as count 
+        FROM users u
+        LEFT JOIN sportsbook_operators so ON u.sportsbook_operator_id = so.id
+        {where_clause}
+        """
+        count_params = [operator_filter] if operator_filter else []
+        total_count = conn.execute(count_query, count_params).fetchone()['count']
         
         conn.close()
         
@@ -4237,14 +4252,18 @@ RICH_SUPERADMIN_TEMPLATE = '''
         function filterByOperator() {
             // Reset to page 1 when filtering
             currentGlobalUsersPage = 1;
+            currentGlobalCasinoUsersPage = 1;
             loadGlobalUsers(1);
+            loadGlobalCasinoUsers(1);
         }
         
         function clearOperatorFilter() {
             document.getElementById('operator-filter').value = '';
             // Reset to page 1 and reload all data
             currentGlobalUsersPage = 1;
+            currentGlobalCasinoUsersPage = 1;
             loadGlobalUsers(1);
+            loadGlobalCasinoUsers(1);
         }
         
         // Async load Web3 balances for users
@@ -4429,8 +4448,16 @@ RICH_SUPERADMIN_TEMPLATE = '''
                 const perPage = parseInt(document.getElementById('global-casino-users-per-page').value) || 20;
                 globalCasinoUsersPerPage = perPage;
                 
+                // Get current filter
+                const selectedOperator = document.getElementById('operator-filter').value;
+                
                 console.log('🌐 Fetching from /superadmin/api/global-casino-users');
-                const response = await fetch(`/superadmin/api/global-casino-users?page=${page}&per_page=${perPage}`);
+                let url = `/superadmin/api/global-casino-users?page=${page}&per_page=${perPage}`;
+                if (selectedOperator) {
+                    url += `&operator=${encodeURIComponent(selectedOperator)}`;
+                }
+                
+                const response = await fetch(url);
                 console.log('📡 Response status:', response.status);
                 
                 const data = await response.json();

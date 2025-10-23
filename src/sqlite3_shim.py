@@ -24,7 +24,7 @@ def connect(dsn=None, *args, **kwargs):
         raise RuntimeError(
             "DATABASE_URL is not set. Refusing to fall back to sqlite file paths in production."
         )
-    return db_compat.connect(url, *args, **kwargs)
+    return db_compat.connect(url, *args, **kwargs, _skip_tracking=True)
 
 # Add other common sqlite3 functions that might be imported
 def connect_db(database=None, *args, **kwargs):
@@ -48,8 +48,7 @@ def _patch_connection(conn):
     return conn
 
 # Update connect function to patch connections
-_original_connect = connect
 def connect(dsn=None, *args, **kwargs):
     """Connect and patch for compatibility"""
-    conn = _original_connect(dsn, *args, **kwargs)
+    conn = db_compat.connect(dsn, *args, **kwargs, _skip_tracking=True)
     return _patch_connection(conn)

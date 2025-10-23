@@ -58,15 +58,13 @@ def get_db_connection():
     LEGACY FUNCTION - Returns pooled connection that MUST be closed by caller.
     Prefer using connection_ctx() context manager in new code.
     """
-    from src.utils.connection_tracker import track_connection_acquired
-    import time
     from src.db_compat import connect
+    from src.utils.connection_tracker import track_connection_acquired
     from pathlib import Path
-    # Use connect() which returns a connection with _pool attached
-    # Caller must call conn.close() to return to pool
+    
     # Track this connection acquisition
     context, track_start = track_connection_acquired(f"{Path(__file__).name}::get_db_connection")
-    conn = connect(use_pool=True)
+    conn = connect(use_pool=True, _skip_tracking=True)
     conn._tracking_context = context
     conn._tracking_start = track_start
     return conn
