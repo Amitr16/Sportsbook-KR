@@ -798,42 +798,78 @@ def roulette_play():
         spin = roulette_spin(european=True)
         payout = 0.0
         
+        print(f"🎰 DEBUG: Checking {len(bets)} bets against winning number {spin['pocket']} (color: {spin['color']})")
+        
         for b in bets:
             bet_type = b.get('type')
             stake = b.get('stake', b.get('amount', 0))
+            bet_value = b.get('value')
+            
+            print(f"🎰 DEBUG: Bet - type: {bet_type}, value: {bet_value}, stake: {stake}")
+            
+            # Normalize bet types from frontend
+            if bet_type == "straight":
+                bet_type = "single"
+            elif bet_type in ["even", "odd"]:
+                bet_type = "even_odd"
+            elif bet_type == "range":
+                bet_type = "low_high"
             
             if bet_type == "single":
-                if str(b.get('value')) == spin["pocket"]:
+                print(f"🎰 DEBUG: Single bet check - bet value: {bet_value} (type: {type(bet_value)}), spin: {spin['pocket']} (type: {type(spin['pocket'])})")
+                if str(bet_value) == str(spin["pocket"]):
                     payout += stake * 36
+                    print(f"🎰 DEBUG: ✅ WIN! Single number match: +{stake * 36}")
             elif bet_type == "color":
-                if b.get('value') == spin["color"]:
+                if bet_value == spin["color"]:
                     payout += stake * 2
+                    print(f"🎰 DEBUG: ✅ WIN! Color match: +{stake * 2}")
             elif bet_type == "even_odd":
                 if spin["pocket"] != "0":
                     val = "even" if int(spin["pocket"]) % 2 == 0 else "odd"
-                    if b.get('value') == val:
+                    if bet_value == val:
                         payout += stake * 2
+                        print(f"🎰 DEBUG: ✅ WIN! Even/Odd match: +{stake * 2}")
+            elif bet_type == "low_high":
+                if spin["pocket"] != "0":
+                    val = "low" if int(spin["pocket"]) <= 18 else "high"
+                    if bet_value == val:
+                        payout += stake * 2
+                        print(f"🎰 DEBUG: ✅ WIN! Low/High match: +{stake * 2}")
+            elif bet_type == "dozen":
+                # Handle dozen bets (1st12, 2nd12, 3rd12)
+                if spin["pocket"] != "0":
+                    num = int(spin["pocket"])
+                    if bet_value == '1st12' and 1 <= num <= 12:
+                        payout += stake * 3
+                        print(f"🎰 DEBUG: ✅ WIN! Dozen match: +{stake * 3}")
+                    elif bet_value == '2nd12' and 13 <= num <= 24:
+                        payout += stake * 3
+                        print(f"🎰 DEBUG: ✅ WIN! Dozen match: +{stake * 3}")
+                    elif bet_value == '3rd12' and 25 <= num <= 36:
+                        payout += stake * 3
+                        print(f"🎰 DEBUG: ✅ WIN! Dozen match: +{stake * 3}")
+        
+        print(f"🎰 DEBUG: Total calculated payout: ${payout}")
         
         payout = round(payout, 2)
         
-        # Store game round with 0 payout initially (winnings credited separately)
+        # Store game round with calculated payout (but don't credit yet - frontend calls /roulette/win to credit)
         cursor.execute("""
             INSERT INTO game_round (game_key, user_id, stake, currency, payout, ref, result_json)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, ("roulette", user_id, total_stake, currency, 0.0, ref, json.dumps({
+        """, ("roulette", user_id, total_stake, currency, payout, ref, json.dumps({
             "spin": spin,
             "bets": bets,
-            "status": "active"  # Game is active, winnings not credited yet
+            "status": "active"  # Will be completed when /roulette/win is called
         })))
-        
-        # NO wallet credit here - winnings will be credited when player actually wins
         
         conn.commit()
         
         return jsonify({
             "ref": ref,
             "stake": total_stake,
-            "payout": 0.0,  # No payout until player actually wins
+            "payout": payout,  # Return calculated payout for frontend to display
             "result": {
                 "spin": spin,
                 "bets": bets
