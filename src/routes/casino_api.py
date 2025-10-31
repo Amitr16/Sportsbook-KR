@@ -477,16 +477,20 @@ def get_user_info():
             cursor.execute("SET LOCAL statement_timeout = '1500ms'")
             
             cursor.execute("""
-                SELECT username, email, balance, created_at, last_login
+                SELECT username, email, balance, created_at, last_login, is_active
                 FROM users 
-                WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                WHERE id = %s AND sportsbook_operator_id = %s
             """, (user_id, operator_id))
             
             result = cursor.fetchone()
             if not result:
                 return jsonify({"error": "User not found"}), 404
             
-            username, email, balance, created_at, last_login = result
+            username, email, balance, created_at, last_login, is_active = result
+            
+            # Check if user is disabled
+            if not is_active:
+                return jsonify({"error": "Account has been disabled by administrator", "is_active": False}), 403
             
             cursor.close()
             conn.close()
@@ -963,6 +967,7 @@ def blackjack_play():
         ref = data.get('params', {}).get('ref') or new_ref("blackjack")
         payout = 0.0
         result = {}
+        additional_stake_for_double = 0  # Track additional stake for double (used in wallet update)
         
         conn = None
         conn = get_tracked_connection()
@@ -1217,11 +1222,16 @@ def blackjack_play():
                     result_balance = cursor.fetchone()
                     current_balance = result_balance[0] if result_balance else 1000.0
                     
-                    if current_balance < stake:
+                    # Save the additional stake needed before doubling (original stake amount)
+                    additional_stake_for_double = stake
+                    print(f"🃏 DEBUG: Double - Original stake: ${stake}, Additional stake to debit: ${additional_stake_for_double}")
+                    
+                    if current_balance < additional_stake_for_double:
                         return jsonify({"error": f"Insufficient funds for double. Available: ${current_balance:.2f}"}), 400
                     
                     player.append(deck.pop())
-                    stake *= 2
+                    stake *= 2  # Double the stake for payout calculation only
+                    print(f"🃏 DEBUG: Double - Stake doubled for payout calc: ${stake}, But will debit: ${additional_stake_for_double}")
                 
                 pv = bj_value(player)
                 
@@ -1309,19 +1319,23 @@ def blackjack_play():
                 logging.warning(f"Web3 sync failed for blackjack bet: {web3_error}")
                 
         elif action == "double":
-            # Debit additional stake for double down
-            print(f"💰 Blackjack wallet update: debiting additional stake={stake}")
+            # Debit additional stake for double down (original stake amount, not doubled)
+            print(f"💰 DEBUG: Double wallet debit - additional_stake_for_double={additional_stake_for_double}, stake={stake}")
+            if additional_stake_for_double == 0:
+                print(f"⚠️ WARNING: additional_stake_for_double is 0! This should not happen. Using stake/2 instead.")
+                additional_stake_for_double = stake / 2
+            print(f"💰 Blackjack wallet update: debiting additional stake={additional_stake_for_double}")
             cursor.execute("""
                 UPDATE users 
                 SET balance = balance - %s
                 WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-            """, (stake, user_id, operator_id))
-            print(f"💰 Wallet updated: -{stake}")
+            """, (additional_stake_for_double, user_id, operator_id))
+            print(f"💰 Wallet updated: -{additional_stake_for_double}")
             
             # Sync Web3 wallet debit for double down (non-blocking)
             try:
                 from src.services.web3_sync_service import sync_web3_debit
-                sync_web3_debit(user_id, stake, "Blackjack double down")
+                sync_web3_debit(user_id, additional_stake_for_double, "Blackjack double down")
             except Exception as web3_error:
                 logging.warning(f"Web3 sync failed for blackjack double down: {web3_error}")
         
