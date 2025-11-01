@@ -19,12 +19,8 @@
         window.__TENANT__ = tenant();
         
         // CRITICAL: API routes are GLOBAL (/api/*), not tenant-prefixed
-        // Initialize API_BASE from server injection, meta tag, or default to same-origin
-        const fromServer = window.__API_BASE__;
-        const fromMeta = document.querySelector('meta[name="api-base"]')?.content;
-        const guess = location.origin;  // Default to same origin
-        
-        window.API_BASE = (fromServer || fromMeta || guess || '').replace(/\/+$/, '');
+        // Always use same origin for API calls (like casino does)
+        window.API_BASE = location.origin;
         window.TENANT_BASE = window.__TENANT__ ? `/${window.__TENANT__}` : "";  // For tenant-specific routes
         
         console.log("[CONFIG] API_BASE:", window.API_BASE);
@@ -172,16 +168,17 @@
         let themeLoaded = false;
         let authLoaded = false;
         
-        // MASTER FAILSAFE: Force hide loading screen after 15 seconds no matter what
+        // MASTER FAILSAFE: Force hide loading screen after 30 seconds no matter what
         setTimeout(() => {
             if (!loadingComplete) {
                 console.warn('⚠️ FAILSAFE: Loading took too long, forcing completion');
                 loadingComplete = true;
                 hideLoadingScreen();
             }
-        }, 15000);
+        }, 30000);
         
         function checkLoadingComplete() {
+            console.log(`🔍 Loading status: themeLoaded=${themeLoaded}, authLoaded=${authLoaded}, loadingComplete=${loadingComplete}`);
             if (themeLoaded && authLoaded && !loadingComplete) {
                 loadingComplete = true;
                 console.log('✅ All loading checks passed, hiding loading screen');
@@ -6184,13 +6181,19 @@
                         headers: {
                             'Content-Type': 'application/json'
                         },
+                        credentials: 'include', // Include session cookies
                         body: JSON.stringify(comboBetData)
                     });
                     
                     const data = await response.json();
                     
                     if (!response.ok) {
-                        alert(data.message || 'Failed to place combo bet');
+                        // Check if user is disabled
+                        if (response.status === 403 && (data.error || data.message || '').toLowerCase().includes('disabled')) {
+                            showErrorAlert('Account Blocked', 'Your account has been blocked by administrator. Please contact support.', 0);
+                        } else {
+                            showErrorAlert('Betting Failed', data.message || data.error || 'Failed to place combo bet', 0);
+                        }
                         return;
                     }
                     
@@ -6208,6 +6211,7 @@
                             headers: {
                                 'Content-Type': 'application/json'
                             },
+                            credentials: 'include', // Include session cookies
                             body: JSON.stringify({
                                 match_id: bet.matchId || bet.eventId,
                                 match_name: bet.matchName,
@@ -6225,7 +6229,12 @@
                         const data = await response.json();
                         
                         if (!response.ok) {
-                            alert(data.message || 'Failed to place bet');
+                            // Check if user is disabled
+                            if (response.status === 403 && (data.error || data.message || '').toLowerCase().includes('disabled')) {
+                                showErrorAlert('Account Blocked', 'Your account has been blocked by administrator. Please contact support.', 0);
+                            } else {
+                                showErrorAlert('Betting Failed', data.message || data.error || 'Failed to place bet', 0);
+                            }
                             return;
                         }
                         
@@ -6245,7 +6254,7 @@
                 
             } catch (error) {
                 console.error('Error placing bets:', error);
-                alert('Error placing bets. Please try again.');
+                showErrorAlert('Error', 'Error placing bets. Please try again.', 0);
             }
         }
 

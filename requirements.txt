@@ -17,6 +17,7 @@ eventlet==0.35.2
 dnspython==2.6.1  # Required by eventlet
 pyopenssl==24.1.0  # Compatible with eventlet 0.35.2
 cryptography==42.0.5  # Compatible with pyopenssl
+kombu==5.3.4  # Required for SocketIO message queue
 
 # Database & ORM
 psycopg[binary,pool]==3.1.19

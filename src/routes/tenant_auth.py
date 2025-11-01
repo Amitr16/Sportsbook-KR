@@ -801,8 +801,13 @@ def session_required(f):
     
     @wraps(f)
     def decorated(*args, **kwargs):
+        # Debug logging for session validation
+        logger.info(f"🔍 SESSION DEBUG: user_id={session.get('user_id')}, operator_id={session.get('operator_id')}")
+        logger.info(f"🔍 SESSION DEBUG: session keys={list(session.keys())}")
+        
         # Check if user is authenticated via session
         if not session.get('user_id') or not session.get('operator_id'):
+            logger.warning(f"❌ SESSION FAILED: Missing user_id or operator_id")
             return jsonify({
                 'success': False,
                 'error': 'Authentication required'
@@ -811,6 +816,38 @@ def session_required(f):
         # Check if we already have user data cached in session
         if 'user_data' in session:
             user_data = session['user_data']
+            
+            # Check if user is disabled from cached data
+            if not user_data.get('is_active', True):
+                logger.warning(f"❌ CACHED USER DISABLED: user_id={session.get('user_id')}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Account has been disabled by administrator'
+                }), 403
+            
+            # Re-validate is_active status from database to prevent stale cache issues
+            # This ensures disabled users can't continue using cached data
+            try:
+                from flask import current_app
+                from src.db_compat import connection_ctx
+                with connection_ctx(timeout=2) as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("SET LOCAL statement_timeout = '1000ms'")
+                        cursor.execute("SELECT is_active FROM users WHERE id = %s LIMIT 1", (session['user_id'],))
+                        result = cursor.fetchone()
+                        if result:
+                            db_is_active = result[0] if isinstance(result, tuple) else result['is_active']
+                            if not db_is_active:
+                                logger.warning(f"❌ DB VALIDATION FAILED - USER DISABLED: user_id={session.get('user_id')}")
+                                # Clear the stale cache
+                                session.pop('user_data', None)
+                                return jsonify({
+                                    'success': False,
+                                    'error': 'Account has been disabled by administrator'
+                                }), 403
+            except Exception as validation_error:
+                logger.warning(f"Could not validate is_active status: {validation_error}")
+                # Continue with cached data if validation fails
             
             # Fix: Ensure sportsbook_operator_id is present
             if 'sportsbook_operator_id' not in user_data and session.get('operator_id'):
