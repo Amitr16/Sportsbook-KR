@@ -72,6 +72,15 @@
             font-weight: 700;
             color: #4ade80;
             margin-bottom: 8px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            word-break: break-word;
+            line-height: 1.2;
+        }
+
+        /* Adjust font size for long numbers */
+        .stat-value[style*="font-size"] {
+            /* Already has inline style, don't override */
         }
 
         .stat-label {
@@ -534,11 +543,29 @@
                 return `$${value.toFixed(2)}`;
             };
             
-            document.getElementById('totalStaked').textContent = formatStaked(totalStaked);
-            document.getElementById('totalPayout').textContent = formatDelta(totalPayout);
+            // Format and set values with dynamic font sizing
+            const setStatValue = (elementId, text) => {
+                const element = document.getElementById(elementId);
+                element.textContent = text;
+                
+                // Adjust font size based on text length
+                const textLength = text.length;
+                if (textLength > 15) {
+                    element.style.fontSize = '1.5rem';
+                } else if (textLength > 12) {
+                    element.style.fontSize = '1.8rem';
+                } else if (textLength > 9) {
+                    element.style.fontSize = '2rem';
+                } else {
+                    element.style.fontSize = '2.5rem';
+                }
+            };
+            
+            setStatValue('totalStaked', formatStaked(totalStaked));
+            setStatValue('totalPayout', formatDelta(totalPayout));
             
             const profitElement = document.getElementById('totalProfit');
-            profitElement.textContent = formatDelta(totalProfit);
+            setStatValue('totalProfit', formatDelta(totalProfit));
             profitElement.className = `stat-value ${totalProfit >= 0 ? 'positive' : 'negative'}`;
         }
 
