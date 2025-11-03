@@ -5,22 +5,13 @@ Multi-tenant routing system for sportsbook operators
 from flask import Blueprint, request, jsonify, session, render_template_string, redirect, send_from_directory
 from src import sqlite3_shim as sqlite3
 from src.auth.session_utils import clear_operator_session
+from src.db_compat import connection_ctx
 import os
 from functools import wraps
 
 multitenant_bp = Blueprint('multitenant', __name__)
 
-def get_db_connection():
-    """Get database connection - now uses PostgreSQL via sqlite3_shim"""
-    from src.utils.connection_tracker import track_connection_acquired
-    
-    # Track this connection acquisition
-    context, track_start = track_connection_acquired("multitenant_routing.py::get_db_connection")
-    from src.db_compat import connect
-    conn = connect(use_pool=True, _skip_tracking=True)  # Skip tracking since we track manually
-    conn._tracking_context = context
-    conn._tracking_start = track_start
-    return conn
+# get_db_connection() removed - use connection_ctx() instead
 
 def require_admin_auth(f):
     """Decorator to require admin authentication"""
@@ -44,15 +35,14 @@ def get_current_operator():
     if 'operator_id' not in session:
         return None
     
-    conn = get_db_connection()
-    operator = conn.execute("""
-        SELECT id, login, sportsbook_name, subdomain, email, is_active, total_revenue, commission_rate
-        FROM sportsbook_operators 
-        WHERE id = ?
-    """, (session['operator_id'],)).fetchone()
-    conn.close()
-    
-    return dict(operator) if operator else None
+    with connection_ctx(timeout=5) as conn:
+        operator = conn.execute("""
+            SELECT id, login, sportsbook_name, subdomain, email, is_active, total_revenue, commission_rate
+            FROM sportsbook_operators 
+            WHERE id = ?
+        """, (session['operator_id'],)).fetchone()
+        
+        return dict(operator) if operator else None
 
 def validate_subdomain(subdomain):
     """Validate if subdomain exists and is active"""
@@ -464,9 +454,9 @@ def get_admin_stats(subdomain):
         if not operator or operator['subdomain'] != subdomain:
             return jsonify({'success': False, 'error': 'Invalid operator'}), 403
         
-        operator_id = operator['id']
-        conn = get_db_connection()
-        
+    operator_id = operator['id']
+    
+    with connection_ctx(timeout=5) as conn:
         # Get user count
         user_count = conn.execute(
             "SELECT COUNT(*) as count FROM users WHERE sportsbook_operator_id = ?", 
@@ -519,8 +509,6 @@ def get_admin_stats(subdomain):
         today_payouts = today_revenue['payouts'] or 0
         today_net_revenue = today_stakes_lost - today_payouts
         
-        conn.close()
-        
         return jsonify({
             'success': True,
             'stats': {
@@ -553,31 +541,28 @@ def get_users(subdomain):
         per_page = int(request.args.get('per_page', 20))
         search = request.args.get('search', '').strip()
         
-        conn = get_db_connection()
-        
-        # Build query with search
-        base_query = "FROM users WHERE sportsbook_operator_id = ?"
-        params = [operator_id]
-        
-        if search:
-            base_query += " AND (username LIKE ? OR email LIKE ?)"
-            params.extend([f'%{search}%', f'%{search}%'])
-        
-        # Get total count
-        total_count = conn.execute(f"SELECT COUNT(*) as count {base_query}", params).fetchone()['count']
-        
-        # Get paginated results
-        offset = (page - 1) * per_page
-        users = conn.execute(f"""
-            SELECT id, username, email, balance, created_at, last_login, is_active
-            {base_query}
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        """, params + [per_page, offset]).fetchall()
-        
-        conn.close()
-        
-        return jsonify({
+        with connection_ctx(timeout=5) as conn:
+            # Build query with search
+            base_query = "FROM users WHERE sportsbook_operator_id = ?"
+            params = [operator_id]
+            
+            if search:
+                base_query += " AND (username LIKE ? OR email LIKE ?)"
+                params.extend([f'%{search}%', f'%{search}%'])
+            
+            # Get total count
+            total_count = conn.execute(f"SELECT COUNT(*) as count {base_query}", params).fetchone()['count']
+            
+            # Get paginated results
+            offset = (page - 1) * per_page
+            users = conn.execute(f"""
+                SELECT id, username, email, balance, created_at, last_login, is_active
+                {base_query}
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+            """, params + [per_page, offset]).fetchall()
+            
+            return jsonify({
             'success': True,
             'users': [dict(user) for user in users],
             'pagination': {
@@ -602,23 +587,20 @@ def get_casino_enabled(subdomain):
         if not operator:
             return jsonify({'error': error}), 404
         
-        conn = get_db_connection()
-        
-        # Get casino setting for this operator
-        casino_setting = conn.execute("""
-            SELECT casino_enabled FROM sportsbook_operators 
-            WHERE id = ?
-        """, (operator['id'],)).fetchone()
-        
-        conn.close()
-        
-        if casino_setting:
-            return jsonify({
-                'success': True,
-                'casino_enabled': casino_setting['casino_enabled']
-            })
-        else:
-            return jsonify({'error': 'Operator not found'}), 404
+        with connection_ctx(timeout=5) as conn:
+            # Get casino setting for this operator
+            casino_setting = conn.execute("""
+                SELECT casino_enabled FROM sportsbook_operators 
+                WHERE id = ?
+            """, (operator['id'],)).fetchone()
+            
+            if casino_setting:
+                return jsonify({
+                    'success': True,
+                    'casino_enabled': casino_setting['casino_enabled']
+                })
+            else:
+                return jsonify({'error': 'Operator not found'}), 404
         
     except Exception as e:
         return jsonify({'error': 'Failed to get casino setting'}), 500
@@ -637,38 +619,35 @@ def get_bets(subdomain):
         per_page = int(request.args.get('per_page', 20))
         status = request.args.get('status', '').strip()
         
-        conn = get_db_connection()
-        
-        # Build query with filters
-        base_query = """
-        FROM bets b
-        JOIN users u ON b.user_id = u.id
-        WHERE b.sportsbook_operator_id = ?
-        """
-        params = [operator_id]
-        
-        if status:
-            base_query += " AND b.status = ?"
-            params.append(status)
-        
-        # Get total count
-        total_count = conn.execute(f"SELECT COUNT(*) as count {base_query}", params).fetchone()['count']
-        
-        # Get paginated results
-        offset = (page - 1) * per_page
-        bets = conn.execute(f"""
-            SELECT 
-                b.id, b.match_name, b.selection, b.stake, b.odds, 
-                b.potential_return, b.status, b.created_at, b.settled_at,
-                u.username
-            {base_query}
-            ORDER BY b.created_at DESC
-            LIMIT ? OFFSET ?
-        """, params + [per_page, offset]).fetchall()
-        
-        conn.close()
-        
-        return jsonify({
+        with connection_ctx(timeout=5) as conn:
+            # Build query with filters
+            base_query = """
+            FROM bets b
+            JOIN users u ON b.user_id = u.id
+            WHERE b.sportsbook_operator_id = ?
+            """
+            params = [operator_id]
+            
+            if status:
+                base_query += " AND b.status = ?"
+                params.append(status)
+            
+            # Get total count
+            total_count = conn.execute(f"SELECT COUNT(*) as count {base_query}", params).fetchone()['count']
+            
+            # Get paginated results
+            offset = (page - 1) * per_page
+            bets = conn.execute(f"""
+                SELECT 
+                    b.id, b.match_name, b.selection, b.stake, b.odds, 
+                    b.potential_return, b.status, b.created_at, b.settled_at,
+                    u.username
+                {base_query}
+                ORDER BY b.created_at DESC
+                LIMIT ? OFFSET ?
+            """, params + [per_page, offset]).fetchall()
+            
+            return jsonify({
             'success': True,
             'bets': [dict(bet) for bet in bets],
             'pagination': {

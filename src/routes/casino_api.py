@@ -817,6 +817,7 @@ def roulette_play():
             
             if bet_type == "single":
                 print(f"🎰 DEBUG: Single bet check - bet value: {bet_value} (type: {type(bet_value)}), spin: {spin['pocket']} (type: {type(spin['pocket'])})")
+                print(f"🎰 DEBUG: Comparison - str(bet_value)='{str(bet_value)}' == str(spin['pocket'])='{str(spin['pocket'])}'? {str(bet_value) == str(spin['pocket'])}")
                 if str(bet_value) == str(spin["pocket"]):
                     payout += stake * 36
                     print(f"🎰 DEBUG: ✅ WIN! Single number match: +{stake * 36}")
@@ -978,7 +979,8 @@ def roulette_win():
 @casino_bp.route('/blackjack/play', methods=['POST'])
 def blackjack_play():
     """Play blackjack game"""
-    conn = None
+    from src.db_compat import connection_ctx
+    
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -1005,110 +1007,15 @@ def blackjack_play():
         result = {}
         additional_stake_for_double = 0  # Track additional stake for double (used in wallet update)
         
-        conn = None
-        conn = get_tracked_connection()
-        cursor = conn.cursor()
-        cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+        with connection_ctx(timeout=5) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
         
-        if action == "deal":
-            if stake <= 0:
-                return jsonify({"error": "Invalid stake current_balance"}), 400
-            
-            # Check balance
-            cursor.execute("""
-                SELECT balance FROM users 
-                WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-            """, (user_id, operator_id))
-            
-            result_balance = cursor.fetchone()
-            current_balance = result_balance[0] if result_balance else 1000.0
-            
-            if current_balance < stake:
-                return jsonify({"error": f"Insufficient funds. Available: ${current_balance:.2f}"}), 400
-            
-            # Use frontend's game state if provided, otherwise generate new cards
-            if data.get("state") and data["state"].get("deck") and data["state"].get("player") and data["state"].get("dealer_real"):
-                # Use frontend's cards
-                deck = data["state"]["deck"]
-                player = data["state"]["player"]
-                dealer = data["state"]["dealer_real"]
-                print(f"🃏 DEBUG: Using frontend cards - player: {player}, dealer: {dealer}")
-            else:
-                # Fallback: generate new cards
-                deck = fresh_shoe(6)
-                player = [deck.pop(), deck.pop()]
-                dealer = [deck.pop(), deck.pop()]
-                print(f"🃏 DEBUG: Generated new cards - player: {player}, dealer: {dealer}")
-            
-            pv, dv = bj_value(player), bj_value(dealer)
-            print(f"🃏 DEBUG: Player value: {pv}, Dealer value: {dv}")
-            
-            result = {
-                "deck": deck,
-                "player": player,
-                "dealer": [dealer[0], "🂠"],
-                "dealer_real": dealer,
-                "pv": pv,
-                "dv": dv,
-                "ref": ref
-            }
-            
-            # Check for blackjack on deal
-            if pv == 21:
-                # Check if dealer also has blackjack
-                if dv == 21:
-                    outcome = "Push"
-                    multiplier = "+0x"
-                    payout = round(stake, 2)
-                    result["final"] = True
-                    print(f"💰 BOTH BLACKJACK! Push - returning stake: {payout}")
-                else:
-                    outcome = "Blackjack"
-                    multiplier = "+1.5x"
-                    payout = round(stake * 2.5, 2)
-                    result["final"] = True
-                    # Credit Blackjack winnings immediately
-                    print(f"💰 PLAYER BLACKJACK! Crediting winnings={payout}")
-                    cursor.execute("""
-                        UPDATE users 
-                        SET balance = balance + %s
-                        WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-                    """, (payout, user_id, operator_id))
-                    print(f"💰 Blackjack wallet updated: +{payout}")
+            if action == "deal":
+                if stake <= 0:
+                    return jsonify({"error": "Invalid stake current_balance"}), 400
                 
-                result["outcome"] = outcome
-                result["multiplier"] = multiplier
-                result["payout"] = payout
-            else:
-                print(f"💰 No Blackjack. Player value: {pv}, Payout: 0")
-        else:
-            # Hit, stand, double
-            deck = state.get('deck', fresh_shoe(6))
-            player = state.get('player', [])
-            dealer = state.get('dealer_real', [])
-            
-            if action == "hit":
-                player.append(deck.pop())
-                pv, dv = bj_value(player), bj_value(dealer)
-                result = {
-                    "deck": deck,
-                    "player": player,
-                    "dealer": [dealer[0], "🂠"],
-                    "dealer_real": dealer,
-                    "pv": pv,
-                    "dv": dv,
-                    "ref": ref,
-                    "final": pv > 21
-                }
-            elif action == "split":
-                # Handle split action
-                print(f"🃏 SPLIT ACTION - Player cards: {player}")
-                
-                # Check if we can split (same rank cards)
-                if len(player) != 2 or player[0]['r'] != player[1]['r']:
-                    return jsonify({"error": "Cannot split - cards must be same rank"}), 400
-                
-                # Check balance for additional bet
+                # Check balance
                 cursor.execute("""
                     SELECT balance FROM users 
                     WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
@@ -1118,74 +1025,91 @@ def blackjack_play():
                 current_balance = result_balance[0] if result_balance else 1000.0
                 
                 if current_balance < stake:
-                    return jsonify({"error": f"Insufficient funds for split. Need additional ${stake:.2f}"}), 400
+                    return jsonify({"error": f"Insufficient funds. Available: ${current_balance:.2f}"}), 400
                 
-                # Debit additional stake for split
-                cursor.execute("""
-                    UPDATE users 
-                    SET balance = balance - %s
-                    WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-                """, (stake, user_id, operator_id))
-                print(f"💰 Split additional bet debited: -{stake}")
+                # Use frontend's game state if provided, otherwise generate new cards
+                if data.get("state") and data["state"].get("deck") and data["state"].get("player") and data["state"].get("dealer_real"):
+                    # Use frontend's cards
+                    deck = data["state"]["deck"]
+                    player = data["state"]["player"]
+                    dealer = data["state"]["dealer_real"]
+                    print(f"🃏 DEBUG: Using frontend cards - player: {player}, dealer: {dealer}")
+                else:
+                    # Fallback: generate new cards
+                    deck = fresh_shoe(6)
+                    player = [deck.pop(), deck.pop()]
+                    dealer = [deck.pop(), deck.pop()]
+                    print(f"🃏 DEBUG: Generated new cards - player: {player}, dealer: {dealer}")
                 
-                # Create split hands
-                card1, card2 = player[0], player[1]
-                split_hand1 = [card1, deck.pop()]
-                split_hand2 = [card2, deck.pop()]
-                
-                # Calculate values for both hands
-                pv1, pv2 = bj_value(split_hand1), bj_value(split_hand2)
-                dv = bj_value(dealer)
+                pv, dv = bj_value(player), bj_value(dealer)
+                print(f"🃏 DEBUG: Player value: {pv}, Dealer value: {dv}")
                 
                 result = {
                     "deck": deck,
-                    "player": [],  # Clear original player hand
-                    "split_hands": [
-                        {"cards": split_hand1, "value": pv1},
-                        {"cards": split_hand2, "value": pv2}
-                    ],
-                    "current_hand": 0,  # Start with first split hand
+                    "player": player,
                     "dealer": [dealer[0], "🂠"],
                     "dealer_real": dealer,
-                    "pv": pv1,  # Current hand value
+                    "pv": pv,
                     "dv": dv,
-                    "ref": ref,
-                    "can_split_hand1": split_hand1[0]['r'] == split_hand1[1]['r'] if len(split_hand1) == 2 else False,
-                    "can_split_hand2": split_hand2[0]['r'] == split_hand2[1]['r'] if len(split_hand2) == 2 else False
+                    "ref": ref
                 }
                 
-                print(f"🃏 SPLIT RESULT - Hand 1: {split_hand1} (value: {pv1}), Hand 2: {split_hand2} (value: {pv2})")
-            elif action in ["hit_split", "stand_split", "double_split"]:
-                # Handle split hand actions
-                split_hands = state.get('split_hands', [])
-                current_hand = state.get('current_hand', 0)
-                
-                if not split_hands or current_hand >= len(split_hands):
-                    return jsonify({"error": "Invalid split hand"}), 400
-                
-                current_split_hand = split_hands[current_hand]
-                current_cards = current_split_hand.get('cards', [])
-                
-                if action == "hit_split":
-                    current_cards.append(deck.pop())
-                    current_split_hand['cards'] = current_cards
-                    current_split_hand['value'] = bj_value(current_cards)
-                    split_hands[current_hand] = current_split_hand
+                # Check for blackjack on deal
+                if pv == 21:
+                    # Check if dealer also has blackjack
+                    if dv == 21:
+                        outcome = "Push"
+                        multiplier = "+0x"
+                        payout = round(stake, 2)
+                        result["final"] = True
+                        print(f"💰 BOTH BLACKJACK! Push - returning stake: {payout}")
+                    else:
+                        outcome = "Blackjack"
+                        multiplier = "+1.5x"
+                        payout = round(stake * 2.5, 2)
+                        result["final"] = True
+                        # Credit Blackjack winnings immediately
+                        print(f"💰 PLAYER BLACKJACK! Crediting winnings={payout}")
+                        cursor.execute("""
+                            UPDATE users 
+                            SET balance = balance + %s
+                            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                        """, (payout, user_id, operator_id))
+                        print(f"💰 Blackjack wallet updated: +{payout}")
                     
+                    result["outcome"] = outcome
+                    result["multiplier"] = multiplier
+                    result["payout"] = payout
+                else:
+                    print(f"💰 No Blackjack. Player value: {pv}, Payout: 0")
+            else:
+                # Hit, stand, double
+                deck = state.get('deck', fresh_shoe(6))
+                player = state.get('player', [])
+                dealer = state.get('dealer_real', [])
+                
+                if action == "hit":
+                    player.append(deck.pop())
+                    pv, dv = bj_value(player), bj_value(dealer)
                     result = {
                         "deck": deck,
-                        "player": [],
-                        "split_hands": split_hands,
-                        "current_hand": current_hand,
+                        "player": player,
                         "dealer": [dealer[0], "🂠"],
                         "dealer_real": dealer,
-                        "pv": bj_value(current_cards),
-                        "dv": bj_value(dealer),
+                        "pv": pv,
+                        "dv": dv,
                         "ref": ref,
-                        "final": bj_value(current_cards) > 21
+                        "final": pv > 21
                     }
-                elif action == "double_split":
-                    # Check balance for double on split hand
+                elif action == "split":
+                    # Handle split action
+                    print(f"🃏 SPLIT ACTION - Player cards: {player}")
+                    
+                    # Check if we can split (same rank cards)
+                    if len(player) != 2 or player[0]['r'] != player[1]['r']:
+                        return jsonify({"error": "Cannot split - cards must be same rank"}), 400
+                    
+                    # Check balance for additional bet
                     cursor.execute("""
                         SELECT balance FROM users 
                         WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
@@ -1195,27 +1119,60 @@ def blackjack_play():
                     current_balance = result_balance[0] if result_balance else 1000.0
                     
                     if current_balance < stake:
-                        return jsonify({"error": f"Insufficient funds for double on split hand"}), 400
+                        return jsonify({"error": f"Insufficient funds for split. Need additional ${stake:.2f}"}), 400
                     
-                    # Debit additional stake for double
+                    # Debit additional stake for split
                     cursor.execute("""
                         UPDATE users 
                         SET balance = balance - %s
                         WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
                     """, (stake, user_id, operator_id))
-                    print(f"💰 Split hand double bet debited: -{stake}")
+                    print(f"💰 Split additional bet debited: -{stake}")
                     
-                    current_cards.append(deck.pop())
-                    current_split_hand['cards'] = current_cards
-                    current_split_hand['value'] = bj_value(current_cards)
-                    split_hands[current_hand] = current_split_hand
+                    # Create split hands
+                    card1, card2 = player[0], player[1]
+                    split_hand1 = [card1, deck.pop()]
+                    split_hand2 = [card2, deck.pop()]
                     
-                    # Move to next split hand or settle
-                    current_hand += 1
-                    if current_hand >= len(split_hands):
-                        # All split hands played, settle all hands
-                        result = settle_split_hands(split_hands, dealer, deck, stake, ref)
-                    else:
+                    # Calculate values for both hands
+                    pv1, pv2 = bj_value(split_hand1), bj_value(split_hand2)
+                    dv = bj_value(dealer)
+                    
+                    result = {
+                        "deck": deck,
+                        "player": [],  # Clear original player hand
+                        "split_hands": [
+                            {"cards": split_hand1, "value": pv1},
+                            {"cards": split_hand2, "value": pv2}
+                        ],
+                        "current_hand": 0,  # Start with first split hand
+                        "dealer": [dealer[0], "🂠"],
+                        "dealer_real": dealer,
+                        "pv": pv1,  # Current hand value
+                        "dv": dv,
+                        "ref": ref,
+                        "can_split_hand1": split_hand1[0]['r'] == split_hand1[1]['r'] if len(split_hand1) == 2 else False,
+                        "can_split_hand2": split_hand2[0]['r'] == split_hand2[1]['r'] if len(split_hand2) == 2 else False
+                    }
+                    
+                    print(f"🃏 SPLIT RESULT - Hand 1: {split_hand1} (value: {pv1}), Hand 2: {split_hand2} (value: {pv2})")
+                elif action in ["hit_split", "stand_split", "double_split"]:
+                    # Handle split hand actions
+                    split_hands = state.get('split_hands', [])
+                    current_hand = state.get('current_hand', 0)
+                    
+                    if not split_hands or current_hand >= len(split_hands):
+                        return jsonify({"error": "Invalid split hand"}), 400
+                    
+                    current_split_hand = split_hands[current_hand]
+                    current_cards = current_split_hand.get('cards', [])
+                    
+                    if action == "hit_split":
+                        current_cards.append(deck.pop())
+                        current_split_hand['cards'] = current_cards
+                        current_split_hand['value'] = bj_value(current_cards)
+                        split_hands[current_hand] = current_split_hand
+                        
                         result = {
                             "deck": deck,
                             "player": [],
@@ -1223,192 +1180,233 @@ def blackjack_play():
                             "current_hand": current_hand,
                             "dealer": [dealer[0], "🂠"],
                             "dealer_real": dealer,
-                            "pv": bj_value(split_hands[current_hand]['cards']),
+                            "pv": bj_value(current_cards),
                             "dv": bj_value(dealer),
                             "ref": ref,
-                            "final": False
+                            "final": bj_value(current_cards) > 21
                         }
-                else:  # stand_split
-                    # Move to next split hand or settle
-                    current_hand += 1
-                    if current_hand >= len(split_hands):
-                        # All split hands played, settle all hands
-                        result = settle_split_hands(split_hands, dealer, deck, stake, ref)
-                    else:
-                        result = {
-                            "deck": deck,
-                            "player": [],
-                            "split_hands": split_hands,
-                            "current_hand": current_hand,
-                            "dealer": [dealer[0], "🂠"],
-                            "dealer_real": dealer,
-                            "pv": bj_value(split_hands[current_hand]['cards']),
-                            "dv": bj_value(dealer),
-                            "ref": ref,
-                            "final": False
-                        }
-            else:  # stand or double
-                if action == "double":
-                    # Check balance for double
-                    cursor.execute("""
-                        SELECT balance FROM users 
-                        WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-                    """, (user_id, operator_id))
+                    elif action == "double_split":
+                        # Check balance for double on split hand
+                        cursor.execute("""
+                            SELECT balance FROM users 
+                            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                        """, (user_id, operator_id))
+                        
+                        result_balance = cursor.fetchone()
+                        current_balance = result_balance[0] if result_balance else 1000.0
+                        
+                        if current_balance < stake:
+                            return jsonify({"error": f"Insufficient funds for double on split hand"}), 400
+                        
+                        # Debit additional stake for double
+                        cursor.execute("""
+                            UPDATE users 
+                            SET balance = balance - %s
+                            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                        """, (stake, user_id, operator_id))
+                        print(f"💰 Split hand double bet debited: -{stake}")
+                        
+                        current_cards.append(deck.pop())
+                        current_split_hand['cards'] = current_cards
+                        current_split_hand['value'] = bj_value(current_cards)
+                        split_hands[current_hand] = current_split_hand
+                        
+                        # Move to next split hand or settle
+                        current_hand += 1
+                        if current_hand >= len(split_hands):
+                            # All split hands played, settle all hands
+                            result = settle_split_hands(split_hands, dealer, deck, stake, ref)
+                        else:
+                            result = {
+                                "deck": deck,
+                                "player": [],
+                                "split_hands": split_hands,
+                                "current_hand": current_hand,
+                                "dealer": [dealer[0], "🂠"],
+                                "dealer_real": dealer,
+                                "pv": bj_value(split_hands[current_hand]['cards']),
+                                "dv": bj_value(dealer),
+                                "ref": ref,
+                                "final": False
+                            }
+                    else:  # stand_split
+                        # Move to next split hand or settle
+                        current_hand += 1
+                        if current_hand >= len(split_hands):
+                            # All split hands played, settle all hands
+                            result = settle_split_hands(split_hands, dealer, deck, stake, ref)
+                        else:
+                            result = {
+                                "deck": deck,
+                                "player": [],
+                                "split_hands": split_hands,
+                                "current_hand": current_hand,
+                                "dealer": [dealer[0], "🂠"],
+                                "dealer_real": dealer,
+                                "pv": bj_value(split_hands[current_hand]['cards']),
+                                "dv": bj_value(dealer),
+                                "ref": ref,
+                                "final": False
+                            }
+                else:  # stand or double
+                    if action == "double":
+                        # Check balance for double
+                        cursor.execute("""
+                            SELECT balance FROM users 
+                            WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                        """, (user_id, operator_id))
+                        
+                        result_balance = cursor.fetchone()
+                        current_balance = result_balance[0] if result_balance else 1000.0
+                        
+                        # Save the additional stake needed before doubling (original stake amount)
+                        additional_stake_for_double = stake
+                        print(f"🃏 DEBUG: Double - Original stake: ${stake}, Additional stake to debit: ${additional_stake_for_double}")
+                        
+                        if current_balance < additional_stake_for_double:
+                            return jsonify({"error": f"Insufficient funds for double. Available: ${current_balance:.2f}"}), 400
+                        
+                        player.append(deck.pop())
+                        stake *= 2  # Double the stake for payout calculation only
+                        print(f"🃏 DEBUG: Double - Stake doubled for payout calc: ${stake}, But will debit: ${additional_stake_for_double}")
                     
-                    result_balance = cursor.fetchone()
-                    current_balance = result_balance[0] if result_balance else 1000.0
+                    pv = bj_value(player)
                     
-                    # Save the additional stake needed before doubling (original stake amount)
-                    additional_stake_for_double = stake
-                    print(f"🃏 DEBUG: Double - Original stake: ${stake}, Additional stake to debit: ${additional_stake_for_double}")
+                    print(f"🃏 Before dealer hits - Dealer cards: {dealer}")
+                    print(f"🃏 Dealer value before hits: {bj_value(dealer)}")
                     
-                    if current_balance < additional_stake_for_double:
-                        return jsonify({"error": f"Insufficient funds for double. Available: ${current_balance:.2f}"}), 400
+                    while bj_value(dealer) < 17:
+                        new_card = deck.pop()
+                        dealer.append(new_card)
+                        print(f"🃏 Dealer hit: {new_card}, new total: {bj_value(dealer)}")
                     
-                    player.append(deck.pop())
-                    stake *= 2  # Double the stake for payout calculation only
-                    print(f"🃏 DEBUG: Double - Stake doubled for payout calc: ${stake}, But will debit: ${additional_stake_for_double}")
-                
-                pv = bj_value(player)
-                
-                print(f"🃏 Before dealer hits - Dealer cards: {dealer}")
-                print(f"🃏 Dealer value before hits: {bj_value(dealer)}")
-                
-                while bj_value(dealer) < 17:
-                    new_card = deck.pop()
-                    dealer.append(new_card)
-                    print(f"🃏 Dealer hit: {new_card}, new total: {bj_value(dealer)}")
-                
-                dv = bj_value(dealer)
-                
-                print(f"🃏 Final blackjack values - Player: {pv}, Dealer: {dv}")
-                print(f"🃏 Dealer cards: {dealer}")
-                print(f"🃏 Player cards: {player}")
-                
-                # Determine outcome and payout
-                if pv > 21:
-                    outcome = "Bust"
-                    multiplier = "-1x"
-                    payout = 0.0
-                elif dv > 21:
-                    outcome = "Win"
-                    multiplier = "+1x"
-                    payout = round(stake * 2, 2)
-                elif pv > dv:
-                    # Check for blackjack (21 with exactly 2 cards)
-                    if pv == 21 and len(player) == 2:
-                        outcome = "Blackjack"
-                        multiplier = "+1.5x"
-                        payout = round(stake * 2.5, 2)
-                    else:
+                    dv = bj_value(dealer)
+                    
+                    print(f"🃏 Final blackjack values - Player: {pv}, Dealer: {dv}")
+                    print(f"🃏 Dealer cards: {dealer}")
+                    print(f"🃏 Player cards: {player}")
+                    
+                    # Determine outcome and payout
+                    if pv > 21:
+                        outcome = "Bust"
+                        multiplier = "-1x"
+                        payout = 0.0
+                    elif dv > 21:
                         outcome = "Win"
                         multiplier = "+1x"
                         payout = round(stake * 2, 2)
-                elif pv == dv:
-                    outcome = "Push"
-                    multiplier = "+0x"
-                    payout = round(stake, 2)
-                else:
-                    outcome = "Lose"
-                    multiplier = "-1x"
-                    payout = 0.0
-                
-                print(f"🃏 Game result - Outcome: {outcome}, Multiplier: {multiplier}, Payout: {payout}")
-                
-                result = {
-                    "deck": deck,
-                    "player": player,
-                    "dealer": dealer,
-                    "dealer_real": dealer,
-                    "pv": pv,
-                    "dv": dv,
-                    "outcome": outcome,
-                    "multiplier": multiplier,
-                    "payout": payout,
-                    "ref": ref,
-                    "final": True
-                }
+                    elif pv > dv:
+                        # Check for blackjack (21 with exactly 2 cards)
+                        if pv == 21 and len(player) == 2:
+                            outcome = "Blackjack"
+                            multiplier = "+1.5x"
+                            payout = round(stake * 2.5, 2)
+                        else:
+                            outcome = "Win"
+                            multiplier = "+1x"
+                            payout = round(stake * 2, 2)
+                    elif pv == dv:
+                        outcome = "Push"
+                        multiplier = "+0x"
+                        payout = round(stake, 2)
+                    else:
+                        outcome = "Lose"
+                        multiplier = "-1x"
+                        payout = 0.0
+                    
+                    print(f"🃏 Game result - Outcome: {outcome}, Multiplier: {multiplier}, Payout: {payout}")
+                    
+                    result = {
+                        "deck": deck,
+                        "player": player,
+                        "dealer": dealer,
+                        "dealer_real": dealer,
+                        "pv": pv,
+                        "dv": dv,
+                        "outcome": outcome,
+                        "multiplier": multiplier,
+                        "payout": payout,
+                        "ref": ref,
+                        "final": True
+                    }
         
-        # Store game round (only for final actions or when there's a payout)
-        if action in ["stand", "double"] or payout > 0:
-            cursor.execute("""
-                INSERT INTO game_round (game_key, user_id, stake, currency, payout, ref, result_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, ("blackjack", user_id, stake, currency, payout, ref, json.dumps(result)))
-        
-        # Update wallet - proper flow: debit on bet, credit on win
-        if action == "deal":
-            # Debit wallet immediately when placing initial bet
-            print(f"💰 Blackjack wallet update: debiting stake={stake}")
-            cursor.execute("""
-                UPDATE users 
-                SET balance = balance - %s
-                WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-            """, (stake, user_id, operator_id))
-            print(f"💰 Wallet updated: -{stake}")
+            # Store game round (only for final actions or when there's a payout)
+            if action in ["stand", "double"] or payout > 0:
+                cursor.execute("""
+                    INSERT INTO game_round (game_key, user_id, stake, currency, payout, ref, result_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, ("blackjack", user_id, stake, currency, payout, ref, json.dumps(result)))
             
-            # Sync Web3 wallet debit (non-blocking)
-            try:
-                from src.services.web3_sync_service import sync_web3_debit
-                sync_web3_debit(user_id, stake, "Blackjack bet")
-            except Exception as web3_error:
-                logging.warning(f"Web3 sync failed for blackjack bet: {web3_error}")
+            # Update wallet - proper flow: debit on bet, credit on win
+            if action == "deal":
+                # Debit wallet immediately when placing initial bet
+                print(f"💰 Blackjack wallet update: debiting stake={stake}")
+                cursor.execute("""
+                    UPDATE users 
+                    SET balance = balance - %s
+                    WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                """, (stake, user_id, operator_id))
+                print(f"💰 Wallet updated: -{stake}")
                 
-        elif action == "double":
-            # Debit additional stake for double down (original stake amount, not doubled)
-            print(f"💰 DEBUG: Double wallet debit - additional_stake_for_double={additional_stake_for_double}, stake={stake}")
-            if additional_stake_for_double == 0:
-                print(f"⚠️ WARNING: additional_stake_for_double is 0! This should not happen. Using stake/2 instead.")
-                additional_stake_for_double = stake / 2
-            print(f"💰 Blackjack wallet update: debiting additional stake={additional_stake_for_double}")
-            cursor.execute("""
-                UPDATE users 
-                SET balance = balance - %s
-                WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-            """, (additional_stake_for_double, user_id, operator_id))
-            print(f"💰 Wallet updated: -{additional_stake_for_double}")
+                # Sync Web3 wallet debit (non-blocking)
+                try:
+                    from src.services.web3_sync_service import sync_web3_debit
+                    sync_web3_debit(user_id, stake, "Blackjack bet")
+                except Exception as web3_error:
+                    logging.warning(f"Web3 sync failed for blackjack bet: {web3_error}")
+                    
+            elif action == "double":
+                # Debit additional stake for double down (original stake amount, not doubled)
+                print(f"💰 DEBUG: Double wallet debit - additional_stake_for_double={additional_stake_for_double}, stake={stake}")
+                if additional_stake_for_double == 0:
+                    print(f"⚠️ WARNING: additional_stake_for_double is 0! This should not happen. Using stake/2 instead.")
+                    additional_stake_for_double = stake / 2
+                print(f"💰 Blackjack wallet update: debiting additional stake={additional_stake_for_double}")
+                cursor.execute("""
+                    UPDATE users 
+                    SET balance = balance - %s
+                    WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                """, (additional_stake_for_double, user_id, operator_id))
+                print(f"💰 Wallet updated: -{additional_stake_for_double}")
+                
+                # Sync Web3 wallet debit for double down (non-blocking)
+                try:
+                    from src.services.web3_sync_service import sync_web3_debit
+                    sync_web3_debit(user_id, additional_stake_for_double, "Blackjack double down")
+                except Exception as web3_error:
+                    logging.warning(f"Web3 sync failed for blackjack double down: {web3_error}")
             
-            # Sync Web3 wallet debit for double down (non-blocking)
-            try:
-                from src.services.web3_sync_service import sync_web3_debit
-                sync_web3_debit(user_id, additional_stake_for_double, "Blackjack double down")
-            except Exception as web3_error:
-                logging.warning(f"Web3 sync failed for blackjack double down: {web3_error}")
-        
-        # Credit winnings only if player won (and game is final)
-        if payout > 0 and result.get("final"):
-            print(f"💰 Blackjack wallet update: crediting winnings={payout}")
-            cursor.execute("""
-                UPDATE users 
-                SET balance = balance + %s
-                WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
-            """, (payout, user_id, operator_id))
-            print(f"💰 Wallet updated: +{payout}")
+            # Credit winnings only if player won (and game is final)
+            if payout > 0 and result.get("final"):
+                print(f"💰 Blackjack wallet update: crediting winnings={payout}")
+                cursor.execute("""
+                    UPDATE users 
+                    SET balance = balance + %s
+                    WHERE id = %s AND sportsbook_operator_id = %s AND is_active = true
+                """, (payout, user_id, operator_id))
+                print(f"💰 Wallet updated: +{payout}")
+                
+                # Sync Web3 wallet credit (non-blocking)
+                try:
+                    from src.services.web3_sync_service import sync_web3_credit
+                    sync_web3_credit(user_id, payout, "Blackjack win")
+                except Exception as web3_error:
+                    logging.warning(f"Web3 sync failed for blackjack win: {web3_error}")
+            else:
+                print(f"💰 Blackjack wallet update: no payout to credit (payout={payout}, final={result.get('final')})")
             
-            # Sync Web3 wallet credit (non-blocking)
-            try:
-                from src.services.web3_sync_service import sync_web3_credit
-                sync_web3_credit(user_id, payout, "Blackjack win")
-            except Exception as web3_error:
-                logging.warning(f"Web3 sync failed for blackjack win: {web3_error}")
-        else:
-            print(f"💰 Blackjack wallet update: no payout to credit (payout={payout}, final={result.get('final')})")
-        
-        conn.commit()
-        
-        return jsonify({
-            "ref": ref,
-            "stake": stake,
-            "payout": payout,
-            "result": result
-        })
+            conn.commit()
+            
+            return jsonify({
+                "ref": ref,
+                "stake": stake,
+                "payout": payout,
+                "result": result
+            })
         
     except Exception as e:
         logging.error(f"Error in blackjack play: {e}")
         return jsonify({"error": "Game error"}), 500
-    finally:
-        if conn:
-            conn.close()
 
 @casino_bp.route('/baccarat/play', methods=['POST'])
 def baccarat_play():
